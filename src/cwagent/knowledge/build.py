@@ -276,7 +276,8 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
         data = {"id": cid, "name": comp.get("name", ""), "type": comp.get("type", ""), "desc": desc,
                 "flow_effects": flow_notes, "screens": comp.get("screens") or [], "effects": effects,
                 "flow": bool(flow_notes) or bool(FLOW_EFFECTS & set(effects)),
-                "verified": bool(comp.get("verified")), "source": comp.get("source", "人工整理")}
+                "verified": bool(comp.get("verified")), "source": comp.get("source", "人工整理"),
+                "origin": comp.get("origin", ""), "seen_count": int(comp.get("seen_count") or 0)}
         companion_entries.append(Entry(cid, data["name"], data,
                                        summary={"type": data["type"], "desc": desc or "；".join(flow_notes),
                                                 "effects": effects, "flow": data["flow"],

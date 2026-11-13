@@ -9,7 +9,8 @@
 #   verified      是否已对照游戏内核实
 #   source        信息来源
 #
-# 目前只有维护者告知的两条,完整列表待从游戏内采集(见设计文档第 18 节)。
+# 伙伴很多、维护者也没有全部解锁,所以不事先采集完整列表:对局中遇到一个就自动记进本机档案
+# data/companions.local.yaml,核对后用 `cwagent companions export <名称>` 导出到这里。目前只有维护者告知的两条。
 
 - name: 三月兔
   type: ""

@@ -22,6 +22,8 @@ regions_app = typer.Typer(help="界面区域坐标(config/regions.yaml)", no_arg
 app.add_typer(regions_app, name="regions")
 memory_app = typer.Typer(help="记忆(积累的游戏经验)", no_args_is_help=True)
 app.add_typer(memory_app, name="memory")
+companions_app = typer.Typer(help="奇遇伙伴档案(边玩边完善)", no_args_is_help=True)
+app.add_typer(companions_app, name="companions")
 
 
 def _fail(message: str) -> None:
@@ -432,3 +434,53 @@ def memory_preview(
     for r in hits:
         typer.echo(f"{r.score:5.2f}  {r.memory.id}  {r.memory.title}  ← {', '.join(r.reasons)}")
     typer.echo("\n" + (format_for_prompt(hits) or "(没有相关记忆)"))
+
+
+# ---------------------------------------------------------------- 奇遇伙伴
+
+@companions_app.command("list")
+def companions_list() -> None:
+    """列出已知的奇遇伙伴(公共档案 + 本机遇到的)。"""
+    from .knowledge.companions import CompanionBook
+
+    items = CompanionBook().all()
+    if not items:
+        typer.echo("(还没有记录任何奇遇伙伴)")
+    for c in items:
+        flags = [c.get("origin", ""), "已核实" if c.get("verified") else "未核实"]
+        if c.get("seen_count"):
+            flags.append(f"遇到 {c['seen_count']} 次")
+        typer.echo(f"- {c['name']}  [{' | '.join(f for f in flags if f)}]  {c.get('type') or ''}")
+        if c.get("desc"):
+            typer.echo(f"    描述: {c['desc']}")
+        for note in c.get("flow_effects") or []:
+            typer.echo(f"    流程影响: {note}")
+
+
+@companions_app.command("record")
+def companions_record(
+    name: Annotated[str, typer.Argument(help="伙伴名称")],
+    desc: Annotated[str, typer.Option(help="游戏内的效果描述")] = "",
+    flow: Annotated[list[str] | None, typer.Option(help="对流程的影响,可多次")] = None,
+    screen: Annotated[list[str] | None, typer.Option(help="带来的专属界面名,可多次")] = None,
+) -> None:
+    """手动记一个奇遇伙伴到本机档案(对局中由 agent 自动记录)。"""
+    from .knowledge.companions import CompanionBook
+
+    try:
+        entry, first = CompanionBook().record(name, desc=desc, flow_effects=flow, screens=screen)
+    except ValueError as e:
+        _fail(str(e))
+    typer.echo(("新记录" if first else "已更新") + f":{entry['name']}(遇到 {entry['seen_count']} 次)")
+
+
+@companions_app.command("export")
+def companions_export(name: Annotated[str, typer.Argument(help="伙伴名称")]) -> None:
+    """把一个伙伴写进公共档案 knowledge/companions.yaml,之后可以提交到仓库。"""
+    from .knowledge.companions import CompanionBook
+
+    try:
+        path = CompanionBook().export(name)
+    except KeyError:
+        _fail(f"没有记录过 {name}")
+    typer.echo(f"已写入 {path}")

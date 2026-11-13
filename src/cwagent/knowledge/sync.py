@@ -32,12 +32,11 @@ class SyncResult:
     template_errors: list[str] = field(default_factory=list)
 
 
-def load_companions(path: Path | None = None) -> list[dict]:
-    path = path or paths.companions_file()
-    if not path.exists():
-        return []
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
-    return data if isinstance(data, list) else data.get("companions", [])
+def load_companions() -> list[dict]:
+    """公共档案 + 本机遇到的奇遇伙伴。"""
+    from .companions import CompanionBook
+
+    return CompanionBook().all()
 
 
 def export_yaml(knowledge: Knowledge, out_dir: Path) -> None:
