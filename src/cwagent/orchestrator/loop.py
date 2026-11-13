@@ -71,6 +71,7 @@ class Runner:
         self._last_sig: set[str] = set()
         self._waits = 0
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
+        self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
 
     # ---------------------------------------------------------------- 执行
 
@@ -141,6 +142,9 @@ class Runner:
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
             if screen == "difficulty":
                 hints = DIFFICULTY_HINT.format(target=self.difficulty)
+            if self._same >= 3:
+                hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
+                          "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
             decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history,
                                          hints=hints)
             record["decision"] = to_jsonable(decision)
@@ -158,6 +162,8 @@ class Runner:
             record["actions"] = [action_text(a) for a in actions]
             self.trace.write(record)
             return "pause"
+        waiting = bool(actions) and all(a.type == "wait" for a in actions)
+        self._same = self._same + 1 if (not waiting and similar(sig, self._last_sig) > 0.85) else 0
         results = self.execute(actions, boxes) if actions else []
         record["actions"] = results
         self.history.append(f"[{screen}] " + ";".join(results))
