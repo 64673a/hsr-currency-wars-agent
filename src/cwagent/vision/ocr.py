@@ -49,7 +49,7 @@ class Ocr:
         out: list[TextBox] = []
         if res.boxes is None:
             return out
-        for pts, text, score in zip(res.boxes, res.txts, res.scores):
+        for pts, text, score in zip(res.boxes, res.txts, res.scores, strict=False):
             if score < self.min_score or not text.strip():
                 continue
             xs = [p[0] for p in pts]

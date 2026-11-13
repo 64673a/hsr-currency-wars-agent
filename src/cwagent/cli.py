@@ -508,3 +508,22 @@ def serve(
         typer.secho(f"注意:监听 {host},局域网内的其他设备可以访问并控制 agent(没有登录机制)", fg="yellow")
     typer.echo(f"打开 http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}")
     uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+
+
+# ---------------------------------------------------------------- 对局
+
+@app.command("play")
+def play_cmd(
+    model: Annotated[str | None, typer.Option(help="模型档案名,默认用备战环节的设置")] = None,
+    max_steps: Annotated[int, typer.Option(help="最多执行多少步")] = 600,
+) -> None:
+    """在本机直接操作游戏,自动打一局(需在 Windows 上以管理员身份运行,游戏处于货币战争界面)。"""
+    import sys
+
+    if sys.platform != "win32":
+        _fail("play 只能在 Windows 上运行")
+    from .device.windows import WindowsDevice
+    from .orchestrator.session import play
+
+    play(ConfigStore().load(), WindowsDevice(), model=model, max_steps=max_steps,
+         log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
