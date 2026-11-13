@@ -14,6 +14,8 @@ providers_app = typer.Typer(help="厂商(接口地址 + key)", no_args_is_help=T
 models_app = typer.Typer(help="模型档案(厂商 + 模型 id + 参数)", no_args_is_help=True)
 app.add_typer(providers_app, name="providers")
 app.add_typer(models_app, name="models")
+knowledge_app = typer.Typer(help="知识库(官方数据)", no_args_is_help=True)
+app.add_typer(knowledge_app, name="knowledge")
 
 
 def _fail(message: str) -> None:
@@ -187,3 +189,53 @@ def models_test(names: Annotated[list[str] | None, typer.Argument(help="档案�
             if result.get("body"):
                 typer.echo(f"    {result['body'][:300]}")
     raise typer.Exit(1 if failed else 0)
+
+
+# ---------------------------------------------------------------- 知识库
+
+@knowledge_app.command("sync")
+def knowledge_sync(
+    max_lineups: Annotated[int | None, typer.Option(help="最多抓取的官方阵容数,默认取 config.yaml")] = None,
+    templates: Annotated[bool, typer.Option(help="是否下载模板图标")] = True,
+) -> None:
+    """从米游社官方接口同步角色、羁绊、装备、投资策略、投资环境、主角光环和阵容。"""
+    from .knowledge.official_api import OfficialApiError
+    from .knowledge.sync import sync
+
+    settings = ConfigStore().load().knowledge
+    try:
+        result = sync(max_lineups=settings.max_lineups if max_lineups is None else max_lineups,
+                      interval=settings.request_interval, templates=templates,
+                      progress=lambda stage, msg: typer.echo(f"[{stage}] {msg}"))
+    except OfficialApiError as e:
+        _fail(f"同步失败:{e}")
+    m = result.meta
+    typer.secho(f"同步完成:赛季 {m['season_id']}-{m['sub_season_id']},版本 {m['game_version']},"
+                f"抓取阵容 {result.lineups_fetched} 条", fg="green")
+    from .knowledge.build import KIND_NAMES
+    typer.echo("  " + "  ".join(f"{KIND_NAMES[k]} {v}" for k, v in result.counts.items()))
+    if templates:
+        typer.echo(f"  新下载图标 {sum(result.templates.values())} 个" +
+                   (f",失败 {len(result.template_errors)} 个" if result.template_errors else ""))
+        for err in result.template_errors[:5]:
+            typer.echo(f"    {err}")
+    if result.warnings:
+        typer.secho(f"  提示 {len(result.warnings)} 条:", fg="yellow")
+        for w in result.warnings:
+            typer.echo(f"    - {w}")
+
+
+@knowledge_app.command("stats")
+def knowledge_stats() -> None:
+    """查看本地知识库的版本和条目数。"""
+    from . import paths
+    from .knowledge import KIND_NAMES, KnowledgeDB
+
+    meta = KnowledgeDB(paths.knowledge_db()).meta()
+    if not meta:
+        _fail("知识库不存在,请先运行 cwagent knowledge sync")
+    typer.echo(f"赛季 {meta['season_id']}-{meta['sub_season_id']},版本 {meta['game_version']},"
+               f"同步于 {meta['synced_at']}")
+    typer.echo("  " + "  ".join(f"{KIND_NAMES[k]} {v}" for k, v in meta["counts"].items()))
+    for w in meta.get("warnings", []):
+        typer.echo(f"  - {w}")

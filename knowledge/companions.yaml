@@ -1,0 +1,30 @@
+# 奇遇伙伴(S2「入画奇航」)。官方接口没有奇遇数据,这里人工整理,`cwagent knowledge sync` 时读入知识库。
+#
+# 字段:
+#   name          名称
+#   type          类型(装备 / 资源 / 节点,待核实)
+#   desc          效果描述原文(从游戏内抄录)
+#   flow_effects  对流程的影响:新节点、新界面、节点替换等,一条一句
+#   screens       带来的专属界面,对应 docs/TECH_DESIGN.md 6.2 的界面名(如 tea_break、commission)
+#   verified      是否已对照游戏内核实
+#   source        信息来源
+#
+# 目前只有维护者告知的两条,完整列表待从游戏内采集(见设计文档第 18 节)。
+
+- name: 三月兔
+  type: ""
+  desc: ""
+  flow_effects:
+    - 奖励节点变为「幕后茶歇」
+  screens: [tea_break]
+  verified: false
+  source: 维护者告知(2026-11-14),待游戏内核实
+
+- name: 不死狼
+  type: ""
+  desc: ""
+  flow_effects:
+    - 局内出现「委托」
+  screens: [commission]
+  verified: false
+  source: 维护者告知(2026-11-14),待游戏内核实
