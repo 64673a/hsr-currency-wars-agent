@@ -4,7 +4,7 @@
 
 - 让 LLM 自主游玩《崩坏:星穹铁道》货币战争 S2「入画奇航」的 agent。
 - 权威设计文档:`docs/TECH_DESIGN.md`。开始任何工作前先读它;第 1.6 节是已确定的设计决策,不要擅自改。
-- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)、截图采集(`cwagent collect`,已在 Windows 实测)、区域校对(`cwagent regions check`)、记忆系统的存储与检索(`cwagent memory`)。待做:后端、前端。
+- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)、截图采集(`cwagent collect`,已在 Windows 实测)、区域校对(`cwagent regions check`)、记忆系统的存储与检索(`cwagent memory`)、后端接口(`cwagent serve`)、前端(`web/`,设置页和知识库页)。M0 完成,下一步 M1 感知。
 - 流程不能写死:投资环境、投资策略、奇遇伙伴都会改变节点结构和出现的界面(设计文档 2.3)。奇遇伙伴数据官方接口没有,也无法事先采集全:对局中遇到一个记一个(本机 `data/companions.local.yaml`),核对后导出到 `knowledge/companions.yaml`(`cwagent companions`)。
 - 记忆系统(设计文档 5.4):公共记忆在 `knowledge/memories.yaml`(随仓库发布),本机学到的在 `data/memory.sqlite`。维护者口头告诉你的游戏经验,整理成记忆写进 `knowledge/memories.yaml`,并注明来源和是否已核实。
 - 运行形态:agent 作为一个服务运行在装有游戏的 Windows 上,像 March7thAssistant 一样直接定位游戏窗口截图、发送键鼠。
@@ -17,6 +17,7 @@
 | `src/cwagent/` | agent 本体(按设计文档第 15 节的结构逐步实现) |
 | `pyproject.toml`、`uv.lock`、`.python-version` | uv 项目配置 |
 | `config.example.yaml` | 配置示例,复制为 `config.yaml`(不入库)后使用 |
+| `web/` | 前端:React + Vite + TypeScript + ARC UI(`@arclux/arc-ui-react`),`npm run build` 产出 `web/dist/` 由后端托管 |
 | `local/` | 维护者的个人开发辅助工具,不入库。存在时先读 `local/AGENTS.md` |
 
 ## Python 环境(uv)
@@ -40,3 +41,10 @@
 - 设计文档区分"已实测"和"待核实";待核实的游戏规则数值不要写进代码或规则卡。
 - 汇报进度时区分"已在非 Windows 平台验证"和"已在 Windows 实机验证"。
 - 不要在游戏里做不可逆的操作(消耗资源、抽卡、购买等),除非明确要求。
+
+## 前端约定
+
+- 组件用 ARC UI 的 React 封装 `@arclux/arc-ui-react`,写之前查组件的属性和事件:`web/node_modules/@arclux/arc-ui/custom-elements.json`(或 `npx ctx7@latest docs /arclight-digital/arc-ui "<问题>"`),不要凭记忆。
+- 事件以 `onArc*` 形式提供,数据在 `e.detail` 上(如 `onArcInput={(e) => e.detail.value}`、`Toggle` 的 `e.detail.checked`、`Tabs` 的 `e.detail.value` 是下标)。
+- 提示条用 `toast()`(`web/src/ui.ts`,基于 arc-toast 的文档级事件)。`ListItem` 的 `actions` 插槽只在鼠标悬停时显示。
+- 开发:`uv run cwagent serve` 起后端,`cd web && npm run dev` 起 Vite(代理 `/api`、`/templates` 到 8770)。

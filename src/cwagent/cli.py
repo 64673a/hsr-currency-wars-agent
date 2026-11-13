@@ -484,3 +484,27 @@ def companions_export(name: Annotated[str, typer.Argument(help="伙伴名称")])
     except KeyError:
         _fail(f"没有记录过 {name}")
     typer.echo(f"已写入 {path}")
+
+
+# ---------------------------------------------------------------- 网页服务
+
+@app.command("serve")
+def serve(
+    host: Annotated[str | None, typer.Option(help="监听地址,默认取 config.yaml 的 server.host")] = None,
+    port: Annotated[int | None, typer.Option(help="端口,默认取 config.yaml 的 server.port")] = None,
+) -> None:
+    """启动后端和网页界面。"""
+    import uvicorn
+
+    from . import paths
+    from .server import create_app
+
+    settings = ConfigStore().load().server
+    host = host or settings.host
+    port = port or settings.port
+    if not (paths.web_dist() / "index.html").exists():
+        typer.secho("前端还没有构建,只有接口可用。构建:cd web && npm install && npm run build", fg="yellow")
+    if host not in ("127.0.0.1", "localhost"):
+        typer.secho(f"注意:监听 {host},局域网内的其他设备可以访问并控制 agent(没有登录机制)", fg="yellow")
+    typer.echo(f"打开 http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")

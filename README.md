@@ -2,7 +2,7 @@
 
 让 LLM 自主游玩《崩坏:星穹铁道》常驻玩法「货币战争」S2「入画奇航」的 agent:看屏幕截图理解局面,由模型决定买卖、站位、装备和各种三选一,再操作键鼠执行。目标是能看到模型每一步怎么想、尽量提高胜率,并能对比不同模型(兼容 OpenAI 和 Anthropic 两种接口格式)。
 
-> **状态:开发中。** 目前只完成了模型接入,还不能玩游戏。
+> **状态:开发中。** 已完成模型接入、知识库、记忆系统和网页界面,还不能玩游戏。
 
 ## 风险声明
 
@@ -35,6 +35,16 @@ uv run cwagent models test                      # 连通性测试
 ```
 
 配置保存在 `config.yaml`(不入库),格式见 [config.example.yaml](config.example.yaml)。
+
+## 网页界面
+
+```bash
+cd web && npm install && npm run build && cd ..   # 需要 Node.js 20+
+uv run cwagent knowledge sync                     # 从米游社官方接口同步角色、羁绊、装备、阵容等(约 1 分钟)
+uv run cwagent serve                              # 打开 http://127.0.0.1:8770
+```
+
+目前有「知识库」(浏览官方数据、指引卡、记忆)和「设置」(厂商、模型档案、决策层、运行参数)两个页面。
 
 ## 许可证
 

@@ -38,3 +38,5 @@ packages = ["src/cwagent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# fastapi 的 TestClient 仍依赖 httpx,与本项目无关的弃用提示
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
