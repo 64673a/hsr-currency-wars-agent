@@ -57,3 +57,17 @@ def test_runner_reflexes_and_llm(tmp_path):
     assert "环境:追击概念股" in runner.run_notes
     lines = (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 4 and (tmp_path / "run" / "shots" / "0001.jpg").exists()
+
+
+def test_action_requires_fields():
+    import pytest
+    from pydantic import ValidationError
+
+    from cwagent.brain.screen_agent import Action, action_text
+
+    with pytest.raises(ValidationError):
+        Action(type="click", y=0.5)
+    with pytest.raises(ValidationError):
+        Action(type="click_text")
+    assert action_text(Action(type="scroll", notches=-6)).startswith("滚轮 -6")
+    assert Action(type="wait").type == "wait"

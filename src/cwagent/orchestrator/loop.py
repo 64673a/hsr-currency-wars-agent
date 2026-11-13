@@ -172,7 +172,13 @@ class Runner:
                 return "stopped"
             if time.monotonic() - started > opts.max_minutes * 60:
                 return "timeout"
-            screen = self.step(n)
+            try:
+                screen = self.step(n)
+            except Exception as e:  # noqa: BLE001 - 单步出错不终止整局,记录后稍等重试
+                self.log(f"[{n}] 出错:{type(e).__name__}: {e}")
+                self.trace.write({"step": n, "error": f"{type(e).__name__}: {e}"})
+                time.sleep(3)
+                continue
             if opts.on_step:
                 opts.on_step({"step": n, "screen": screen})
             if screen == "pause" or (screen == "settlement" and self.in_run):

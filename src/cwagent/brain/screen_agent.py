@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ..config import ModelEndpoint
 from ..knowledge.index import NameIndex, format_entities
@@ -33,6 +33,14 @@ class Action(BaseModel):
     seconds: float | None = Field(default=None, ge=0, le=60)
     notches: int | None = Field(default=None, ge=-30, le=30)  # scroll:正数向上,负数向下
     reason: str = ""
+
+    @model_validator(mode="after")
+    def _required(self) -> "Action":
+        need = {"click_text": ["text"], "click": ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"]}
+        missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "")]
+        if missing:
+            raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
+        return self
 
 
 class Note(BaseModel):
@@ -157,14 +165,18 @@ class ScreenAgent:
         return Decision("", [], None, [], self.system, user, resp, recalled, error=last_error)
 
 
+def _f(v: float | None) -> str:
+    return "?" if v is None else f"{v:.3f}"
+
+
 def action_text(a: Action) -> str:
     match a.type:
         case "click_text":
             return f"点击「{a.text}」" + (f"(第{a.nth + 1}个)" if a.nth else "")
         case "click":
-            return f"点击 ({a.x:.3f},{a.y:.3f})"
+            return f"点击 ({_f(a.x)},{_f(a.y)})"
         case "drag":
-            return f"拖拽 ({a.x:.3f},{a.y:.3f})→({a.x2:.3f},{a.y2:.3f})"
+            return f"拖拽 ({_f(a.x)},{_f(a.y)})→({_f(a.x2)},{_f(a.y2)})"
         case "scroll":
             return f"滚轮 {a.notches or -3:+d} 格 @({a.x or 0.5:.3f},{a.y or 0.5:.3f})"
         case "key":
