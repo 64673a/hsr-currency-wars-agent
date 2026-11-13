@@ -49,3 +49,16 @@
   status: approved
   confidence: medium
   source: 维护者(2026-11-14),待实战验证
+
+- id: m-20261114-energy-escape
+  kind: 机制
+  title: 怪物词条「能量逃逸」让靠能量开大的主 C 很难打
+  content: |-
+    A8 起每局有 4 个怪物词条,会显著影响阵容选择。「能量逃逸」会让依靠能量施放终结技的主 C 很难打出输出,特殊能量不受影响。
+    遇到这个词条时,优先选择不依赖普通能量开大的主 C(例如靠特殊能量、普攻、战技、追加攻击或持续伤害输出的角色),或者准备能量相关的装备与羁绊来弥补。
+  triggers:
+    entities: [能量逃逸]
+  scope: [战略, 战术, 选择]
+  status: approved
+  confidence: medium
+  source: 维护者(2026-11-14)
