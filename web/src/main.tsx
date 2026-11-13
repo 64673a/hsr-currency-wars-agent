@@ -1,10 +1,12 @@
-import '@arclux/arc-ui/base.css';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/inter';
+import '@/components/arc/foundation.css';
 import './styles.css';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import App from './App';
+import App from '@/app/App';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

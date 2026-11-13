@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
@@ -6,6 +8,7 @@ const backend = process.env.CWAGENT_BACKEND ?? 'http://127.0.0.1:8770';
 
 export default defineConfig({
   plugins: [react()],
+  resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   server: { proxy: { '/api': backend, '/templates': backend } },
-  build: { outDir: 'dist', emptyOutDir: true, chunkSizeWarningLimit: 2000 },
+  build: { outDir: 'dist', emptyOutDir: true },
 });

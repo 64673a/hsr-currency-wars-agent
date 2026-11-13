@@ -17,7 +17,7 @@
 | `src/cwagent/` | agent 本体(按设计文档第 15 节的结构逐步实现) |
 | `pyproject.toml`、`uv.lock`、`.python-version` | uv 项目配置 |
 | `config.example.yaml` | 配置示例,复制为 `config.yaml`(不入库)后使用 |
-| `web/` | 前端:React + Vite + TypeScript + ARC UI(`@arclux/arc-ui-react`),`npm run build` 产出 `web/dist/` 由后端托管 |
+| `web/` | 前端:React 19 + Vite + TypeScript + Arc(uiarc.dev,shadcn 注册表,组件源码在 `web/src/components/arc/`),`npm run build` 产出 `web/dist/` 由后端托管 |
 | `local/` | 维护者的个人开发辅助工具,不入库。存在时先读 `local/AGENTS.md` |
 
 ## Python 环境(uv)
@@ -44,7 +44,12 @@
 
 ## 前端约定
 
-- 组件用 ARC UI 的 React 封装 `@arclux/arc-ui-react`,写之前查组件的属性和事件:`web/node_modules/@arclux/arc-ui/custom-elements.json`(或 `npx ctx7@latest docs /arclight-digital/arc-ui "<问题>"`),不要凭记忆。
-- 事件以 `onArc*` 形式提供,数据在 `e.detail` 上(如 `onArcInput={(e) => e.detail.value}`、`Toggle` 的 `e.detail.checked`、`Tabs` 的 `e.detail.value` 是下标)。
-- 提示条用 `toast()`(`web/src/ui.ts`,基于 arc-toast 的文档级事件)。`ListItem` 的 `actions` 插槽只在鼠标悬停时显示。
+- 组件库是 Arc(https://uiarc.dev,不是 arcui.dev):组件源码通过 shadcn 注册表复制进 `web/src/components/arc/`,
+  新增组件用 `cd web && npx shadcn@latest add @uiarc/<名称>`(注册表配置在 `web/components.json`)。
+  组件目录:https://uiarc.dev/llms.txt;写法规范:https://uiarc.dev/r/skills/arc/SKILL.md 及同目录的 design.md、composition.md、checklist.md。
+- 用法以组件源码里导出的 Props 类型为准;不要改 `components/arc/` 里的组件内部,布局写在各页面的 CSS Modules 里。
+- 规范要点:只用语义 CSS 变量(`--surface`、`--border`、`--text-secondary`、`--accent` 等);字重只用 400/500;不用全大写、眉标、渐变和发光;
+  每个页面只有一个主按钮(`Button` 默认是 primary,其他按钮显式写 `variant`);前台操作在原地确认,提示条只用于后台任务。
+- 深色主题、紫色强调色:`index.html` 的 `<html data-theme="dark" data-accent="violet">`。只考虑电脑端,不做手机适配。
+- 共用布局在 `web/src/lib/page.module.css`(页面容器、区块、成组的行)。
 - 开发:`uv run cwagent serve` 起后端,`cd web && npm run dev` 起 Vite(代理 `/api`、`/templates` 到 8770)。

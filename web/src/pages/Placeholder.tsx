@@ -1,14 +1,15 @@
-import { EmptyState } from '@arclux/arc-ui-react';
+import { Hourglass } from 'lucide-react';
 
-export default function Placeholder({ title, text }: { title: string; text: string }) {
+import EmptyState from '@/components/arc/empty-state/empty-state';
+import page from '@/lib/page.module.css';
+
+export default function Placeholder({ title, description }: { title: string; description: string }) {
   return (
-    <div className="page">
-      <div className="page-title">
-        <h1>{title}</h1>
-      </div>
-      <div className="placeholder">
-        <EmptyState heading="还没有实现" description={text} />
-      </div>
+    <div className={page.page}>
+      <header className={page.header}>
+        <h1 className={page.title}>{title}</h1>
+      </header>
+      <EmptyState title="还没有开放" description={description} icon={<Hourglass size={20} strokeWidth={1.75} aria-hidden="true" />} />
     </div>
   );
 }

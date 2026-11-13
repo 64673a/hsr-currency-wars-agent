@@ -9,10 +9,7 @@ export class ApiError extends Error {
 function detailText(detail: unknown): string {
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
-    // FastAPI 的校验错误:[{loc, msg}]
-    return detail
-      .map((d) => `${(d.loc ?? []).filter((x: unknown) => x !== 'body').join('.')}: ${d.msg}`)
-      .join(';');
+    return detail.map((d) => `${(d.loc ?? []).filter((x: unknown) => x !== 'body').join('.')}: ${d.msg}`).join(';');
   }
   return JSON.stringify(detail);
 }
@@ -28,6 +25,33 @@ export async function api<T = unknown>(path: string, init?: { method?: string; b
   const data = text ? JSON.parse(text) : undefined;
   if (!resp.ok) throw new ApiError(resp.status, data?.detail !== undefined ? detailText(data.detail) : resp.statusText);
   return data as T;
+}
+
+export const enc = encodeURIComponent;
+
+export function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+export function parseJsonObject(text: string, what: string): Record<string, any> {
+  if (!text.trim()) return {};
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`${what}不是合法 JSON:${errorText(e)}`);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${what}必须是 JSON 对象`);
+  return value as Record<string, any>;
+}
+
+export function pretty(value: unknown): string {
+  if (!value || (typeof value === 'object' && Object.keys(value as object).length === 0)) return '';
+  return JSON.stringify(value, null, 2);
+}
+
+export function splitList(text: string): string[] {
+  return text.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 export interface Provider {
@@ -55,33 +79,23 @@ export interface ModelProfile {
 export interface ModelInfo {
   id: string;
   display_name: string;
-  owned_by: string;
   context_window: number | null;
 }
 
 export interface TestResult {
   ok: boolean;
   error?: string;
-  status?: number;
   tool_call?: boolean;
-  tool_arguments?: Record<string, unknown> | null;
   reasoning?: boolean;
-  reasoning_preview?: string;
-  text_preview?: string;
   model?: string;
   latency_s?: number;
-  usage?: { input_tokens: number; output_tokens: number; cache_read_tokens: number; reasoning_tokens?: number };
+  usage?: { input_tokens: number; output_tokens: number };
 }
 
-export interface Roles {
-  tactical: string | null;
-  strategic: string | null;
-  chooser: string | null;
-  review: string | null;
-}
+export type RoleKey = 'strategic' | 'tactical' | 'chooser' | 'review';
 
 export interface Settings {
-  roles: Roles;
+  roles: Record<RoleKey, string | null>;
   agent: { use_guides: boolean; max_tactical_calls_per_stage: number; max_run_minutes: number };
   server: { host: string; port: number };
   knowledge: { max_lineups: number; request_interval: number };
@@ -100,7 +114,6 @@ export interface SyncState {
   running: boolean;
   stage: string;
   message: string;
-  log: string[];
   result: Record<string, unknown> | null;
   error: string | null;
 }
@@ -124,10 +137,5 @@ export interface Memory {
   origin?: string;
 }
 
-export const MEMORY_STATUS: Record<Memory['status'], string> = {
-  draft: '待审核',
-  approved: '已采纳',
-  rejected: '驳回',
-  archived: '已归档',
-};
+export const MEMORY_STATUS: Record<Memory['status'], string> = { draft: '待审核', approved: '已采纳', rejected: '已驳回', archived: '已归档' };
 export const CONFIDENCE: Record<Memory['confidence'], string> = { high: '已核实', medium: '有依据未核实', low: '推测' };

@@ -822,17 +822,12 @@ SSE 事件类型:`run_status`(开始 / 暂停 / 结束 / 报错)、`step`(一条
 
 React + Vite + TypeScript,放在仓库 `web/` 目录;`npm run build` 产出 `web/dist/`,由后端作为静态文件托管,所以运行时只有一个服务。开发时用 Vite 开发服务器并把 `/api` 代理到后端。
 
-组件库:**ARC UI**(GitHub `arclight-digital/arc-ui`,基于 Lit 的 Web Components,暗色优先)。安装:
+组件库:**Arc**(https://uiarc.dev)。shadcn 风格,组件源码通过注册表复制进项目(`web/src/components/arc/`),样式是 CSS Modules + 语义 CSS 变量,不依赖 Tailwind;依赖 Radix、motion、lucide-react。
 
-```bash
-npm install @arclux/arc-ui-react @arclux/arc-ui lit
-```
-
-```tsx
-import { Button, Card } from '@arclux/arc-ui-react';
-```
-
-React 封装里,自定义事件以 `onArc…` 形式暴露,数据在 `event.detail` 上(如 `onArcInput={(e) => e.detail.value}`)。组件的具体属性和用法**不要凭记忆写**,用 Context7 查文档:库 id 为 `/arclight-digital/arc-ui`(`npx ctx7@latest docs /arclight-digital/arc-ui "<要查的内容>"`)。该库有 App Shell、Split Pane、Tabs、Sidebar、Card、Stat、Timeline、Chart、Data Grid、Table、Drawer、Dialog、Toast、Markdown、Code Block 等组件,优先用库里已有的,不要自己重写同类组件。
+- 安装:`web/components.json` 里登记 `"registries": {"@uiarc": "https://uiarc.dev/r/{name}.json"}`,再 `npx shadcn@latest add @uiarc/<名称>`;设计变量 `components/arc/foundation.css` 在入口导入一次;
+- 主题:深色(`data-theme="dark"`)+ 紫色强调色(`data-accent="violet"`),字体 Geist(大标题)和 Inter(正文),中文回退到系统字体;
+- 写法遵循 Arc 的规范(https://uiarc.dev/r/skills/arc/SKILL.md):中性底色、强调色只用于选中和重点数据、层级靠字号与间距、每页一个主按钮、每种状态(加载、空、出错)都有设计;
+- 只考虑电脑端。
 
 ### 14.2 页面
 
