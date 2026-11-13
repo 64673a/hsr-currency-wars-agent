@@ -21,7 +21,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print)
     run_dir = paths.root() / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}_{endpoint.name}"
     trace = Trace(run_dir)
     book = CompanionBook()
-    runner = Runner(device, brain, trace, log=log,
+    runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty,
                     on_companion=lambda name: book.record(name, screenshot=str(run_dir / "shots")))
     return runner, run_dir
 

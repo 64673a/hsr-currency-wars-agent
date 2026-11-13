@@ -22,7 +22,7 @@ MAX_ACTIONS = 6
 
 
 class Action(BaseModel):
-    type: str = Field(pattern="^(click_text|click|drag|key|wait|pause)$")
+    type: str = Field(pattern="^(click_text|click|drag|scroll|key|wait|pause)$")
     text: str | None = None
     nth: int = 0
     x: float | None = Field(default=None, ge=0, le=1)
@@ -31,6 +31,7 @@ class Action(BaseModel):
     y2: float | None = Field(default=None, ge=0, le=1)
     key: str | None = None
     seconds: float | None = Field(default=None, ge=0, le=60)
+    notches: int | None = Field(default=None, ge=-30, le=30)  # scroll:正数向上,负数向下
     reason: str = ""
 
 
@@ -164,6 +165,8 @@ def action_text(a: Action) -> str:
             return f"点击 ({a.x:.3f},{a.y:.3f})"
         case "drag":
             return f"拖拽 ({a.x:.3f},{a.y:.3f})→({a.x2:.3f},{a.y2:.3f})"
+        case "scroll":
+            return f"滚轮 {a.notches or -3:+d} 格 @({a.x or 0.5:.3f},{a.y or 0.5:.3f})"
         case "key":
             return f"按键 {a.key}"
         case "wait":

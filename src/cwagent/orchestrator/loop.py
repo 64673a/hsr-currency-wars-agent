@@ -12,8 +12,15 @@ from pathlib import Path
 from PIL import Image
 
 from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
-from ..vision.ocr import Ocr, TextBox
-from .screens import PREPARE_LAYOUT, classify, companion_name, similar, text_signature
+from ..vision.ocr import Ocr, TextBox, find
+from .screens import (
+    DIFFICULTY_HINT,
+    PREPARE_LAYOUT,
+    classify,
+    companion_name,
+    similar,
+    text_signature,
+)
 
 ACTION_GAP = 0.7  # 每个操作之后等画面响应
 
@@ -50,8 +57,10 @@ class Trace:
 
 class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
-                 on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print):
+                 on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
+                 difficulty: str = "A8-1"):
         self.device = device
+        self.difficulty = difficulty
         self.brain = brain
         self.trace = trace
         self.ocr = ocr or Ocr()
@@ -61,6 +70,7 @@ class Runner:
         self.history: list[str] = []
         self._last_sig: set[str] = set()
         self._waits = 0
+        self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
 
     # ---------------------------------------------------------------- 执行
 
@@ -79,6 +89,8 @@ class Runner:
                     self.device.click(a.x, a.y)
                 elif a.type == "drag":
                     self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
+                elif a.type == "scroll":
+                    self.device.scroll(a.x if a.x is not None else 0.5, a.y if a.y is not None else 0.5, a.notches or -3)
                 elif a.type == "key":
                     self.device.key(a.key)
                 elif a.type == "wait":
@@ -98,6 +110,8 @@ class Runner:
         record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen,
                         "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
         sig = text_signature(boxes)
+        if screen in ("run_intro", "environment_choice", "prepare", "battle"):
+            self.in_run = True
         actions: list[Action] = []
         decision: Decision | None = None
 
@@ -116,6 +130,8 @@ class Runner:
             actions = [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
         elif screen == "settlement":
             record["note"] = "对局结束"
+            if find(boxes, "^下一步$"):
+                actions = [Action(type="click_text", text="下一步", reason="离开结算界面")]
         elif screen == "battle":
             actions = [Action(type="wait", seconds=5, reason="战斗进行中")]
         elif screen == "other" and self._waits and similar(sig, self._last_sig) > 0.6 and self._waits < 30:
@@ -123,6 +139,8 @@ class Runner:
             self._waits += 1
         else:
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
+            if screen == "difficulty":
+                hints = DIFFICULTY_HINT.format(target=self.difficulty)
             decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history,
                                          hints=hints)
             record["decision"] = to_jsonable(decision)
@@ -157,6 +175,6 @@ class Runner:
             screen = self.step(n)
             if opts.on_step:
                 opts.on_step({"step": n, "screen": screen})
-            if screen in ("settlement", "pause"):
+            if screen == "pause" or (screen == "settlement" and self.in_run):
                 return screen
         return "max_steps"

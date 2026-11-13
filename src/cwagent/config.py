@@ -106,6 +106,7 @@ class Roles(BaseModel):
 
 
 class AgentSettings(BaseModel):
+    difficulty: str = "A8-1"   # 标准博弈的目标难度(职级分组-等级)
     use_guides: bool = True
     max_tactical_calls_per_stage: int = Field(default=3, ge=1, le=20)
     max_run_minutes: int = Field(default=120, ge=1)
