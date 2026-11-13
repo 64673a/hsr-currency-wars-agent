@@ -212,3 +212,61 @@ class GameWindowSource:
         shot = self._mss.grab({"left": info.left, "top": info.top, "width": info.width, "height": info.height})
         image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         return Frame(image=image, timestamp=time.time(), foreground=info.foreground, source=info.title)
+
+
+# ---------------------------------------------------------------- 全局热键
+
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x0001, 0x0002, 0x0004, 0x4000
+WM_HOTKEY = 0x0312
+_VK = {"f11": 0x7A, "f12": 0x7B, "pause": 0x13}
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint32), ("wParam", ctypes.c_size_t),
+                ("lParam", ctypes.c_ssize_t), ("time", ctypes.c_uint32), ("pt", _POINT)]
+
+
+def _parse_hotkey(spec: str) -> tuple[int, int]:
+    mods, vk = 0, None
+    for part in spec.lower().split("+"):
+        if part == "ctrl":
+            mods |= MOD_CONTROL
+        elif part == "alt":
+            mods |= MOD_ALT
+        elif part == "shift":
+            mods |= MOD_SHIFT
+        elif part in _VK:
+            vk = _VK[part]
+        elif len(part) == 1 and part.isalnum():
+            vk = ord(part.upper())
+        else:
+            raise ValueError(f"不认识的按键:{part}")
+    if vk is None:
+        raise ValueError(f"热键缺少主键:{spec}")
+    return mods, vk
+
+
+def register_hotkey(candidates: list[str], callback) -> str | None:
+    """在后台线程注册第一个没被占用的全局热键,按下时调用 callback;都被占用时返回 None。"""
+    register = _proto(_user32, "RegisterHotKey", wt.BOOL, wt.HWND, ctypes.c_int, wt.UINT, wt.UINT)
+    get_message = _proto(_user32, "GetMessageW", wt.BOOL, ctypes.POINTER(_MSG), wt.HWND, wt.UINT, wt.UINT)
+    result: dict[str, str] = {}
+    ready = __import__("threading").Event()
+
+    def run():
+        for spec in candidates:
+            mods, vk = _parse_hotkey(spec)
+            if register(None, 1, mods | MOD_NOREPEAT, vk):
+                result["name"] = spec
+                break
+        ready.set()
+        if "name" not in result:
+            return
+        msg = _MSG()  # RegisterHotKey(NULL, ...) 把 WM_HOTKEY 投递到注册它的线程
+        while get_message(ctypes.byref(msg), None, 0, 0) > 0:
+            if msg.message == WM_HOTKEY:
+                callback()
+
+    __import__("threading").Thread(target=run, name="hotkey", daemon=True).start()
+    ready.wait(2)
+    return result.get("name")

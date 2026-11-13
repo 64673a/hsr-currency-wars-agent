@@ -1,0 +1,28 @@
+# 界面区域坐标,以 1920x1080 客户区为基准的像素值 [x, y, 宽, 高];运行时按实际客户区尺寸等比换算。
+# calibrated: false 表示还没对照 S2 截图校准。校对:uv run cwagent regions check <截图>
+#
+# 目前只有从 March7thAssistant(S1 时期)借来的几个区域,S2 界面需要用采集到的截图重新标定。
+
+base: [1920, 1080]
+
+regions:
+  stage:
+    box: [414, 56, 117, 44]
+    desc: 阶段号(如 1-1)
+    calibrated: false
+    source: March7thAssistant(S1)
+  gold:
+    box: [1559, 880, 127, 82]
+    desc: 金币数
+    calibrated: false
+    source: March7thAssistant(S1)
+  front_0:
+    box: [684, 324, 123, 145]
+    desc: 前台第 1 格
+    calibrated: false
+    source: March7thAssistant(S1)
+  bench_0:
+    box: [382, 846, 115, 134]
+    desc: 备战席第 1 格
+    calibrated: false
+    source: March7thAssistant(S1)

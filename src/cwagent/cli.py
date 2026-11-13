@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -16,6 +18,8 @@ app.add_typer(providers_app, name="providers")
 app.add_typer(models_app, name="models")
 knowledge_app = typer.Typer(help="知识库(官方数据)", no_args_is_help=True)
 app.add_typer(knowledge_app, name="knowledge")
+regions_app = typer.Typer(help="界面区域坐标(config/regions.yaml)", no_args_is_help=True)
+app.add_typer(regions_app, name="regions")
 
 
 def _fail(message: str) -> None:
@@ -239,3 +243,78 @@ def knowledge_stats() -> None:
     typer.echo("  " + "  ".join(f"{KIND_NAMES[k]} {v}" for k, v in meta["counts"].items()))
     for w in meta.get("warnings", []):
         typer.echo(f"  - {w}")
+
+
+# ---------------------------------------------------------------- 截图采集与区域校对
+
+COLLECT_HOTKEYS = ["ctrl+alt+s", "ctrl+alt+f11", "ctrl+shift+f11"]
+
+
+@app.command("collect")
+def collect(
+    interval: Annotated[float, typer.Option(help="每隔多少秒自动截一张,0 表示只用热键")] = 2.0,
+    seconds: Annotated[float, typer.Option(help="运行多少秒后自动停止,0 表示一直运行(Ctrl+C 停止)")] = 0,
+    min_change: Annotated[float, typer.Option(help="画面变化小于该值(0~255 的平均像素差)时不保存")] = 2.0,
+    focus: Annotated[bool, typer.Option(help="开始前把游戏窗口切到前台")] = False,
+    hotkey: Annotated[bool, typer.Option(help="注册全局热键,按下时立即截一张(不去重)")] = True,
+    keep_background: Annotated[bool, typer.Option(help="游戏不在前台时也保存")] = False,
+) -> None:
+    """手动游玩时采集游戏截图,保存到 data/fixtures/<日期>/。只能在 Windows 上运行。"""
+    import sys
+    import threading
+
+    from . import paths
+    from .replay.collector import Collector
+
+    if sys.platform != "win32":
+        _fail("collect 只能在 Windows 上运行")
+    from .capture import windows as win
+
+    source = win.GameWindowSource()
+    try:
+        info = source.window()
+    except Exception as e:  # noqa: BLE001
+        _fail(str(e))
+    if not win.is_admin():
+        typer.secho("提示:当前不是管理员权限。截图不受影响,但以后的键鼠操作需要管理员权限。", fg="yellow")
+    if focus and not info.foreground:
+        win.focus(info.hwnd)
+    collector = Collector(source, paths.fixtures_dir(), min_change=min_change, keep_background=keep_background,
+                          log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
+    name = win.register_hotkey(COLLECT_HOTKEYS, lambda: collector.capture(force=True)) if hotkey else None
+    typer.echo(f"游戏窗口 {info.width}x{info.height},保存到 {paths.fixtures_dir()}")
+    typer.echo(("自动截图:每 %g 秒" % interval) if interval > 0 else "自动截图:关闭")
+    typer.echo(f"热键截图:{name}" if name else "热键截图:未启用" + ("(候选热键都被占用)" if hotkey else ""))
+    stop = threading.Event()
+    try:
+        stats = collector.run(interval=interval, seconds=seconds, stop=stop)
+    except KeyboardInterrupt:
+        stats = collector.stats
+    finally:
+        source.close()
+    typer.echo(f"结束:保存 {stats.saved} 张,画面无变化跳过 {stats.skipped_same} 张,"
+               f"不在前台跳过 {stats.skipped_background} 次,失败 {stats.errors} 次")
+
+
+@regions_app.command("check")
+def regions_check(
+    image: Annotated[Path, typer.Argument(help="截图文件", exists=True, dir_okay=False)],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="输出路径,默认 <截图名>.regions.png")] = None,
+) -> None:
+    """把 config/regions.yaml 里的区域框画到截图上(绿色已校准、橙色未校准),用于校对坐标。"""
+    from PIL import Image
+
+    from .vision import regions
+
+    region_set = regions.load()
+    with Image.open(image) as img:
+        out = regions.draw(img, region_set)
+        size = img.size
+    target = output or image.with_name(image.stem + ".regions.png")
+    out.save(target)
+    ratio = size[0] / size[1]
+    if abs(ratio - region_set.base[0] / region_set.base[1]) > 0.01:
+        typer.secho(f"注意:截图比例 {size[0]}x{size[1]} 与基准 {region_set.base[0]}x{region_set.base[1]} 不同,"
+                    "区域可能对不上", fg="yellow")
+    calibrated = sum(r.calibrated for r in region_set.regions.values())
+    typer.echo(f"已输出 {target}({len(region_set.regions)} 个区域,已校准 {calibrated} 个)")
