@@ -14,12 +14,14 @@ def classify(boxes: list[TextBox]) -> str:
         return "run_intro"
     if has(boxes, "是否中断挑战"):
         return "quit_dialog"
+    if find(boxes, "对局评价|对局总结"):
+        return "settlement"
+    if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中"):
+        return "battle"
     if has(boxes, "备战阶段"):
         return "prepare"
     if has(boxes, "^投资环境$") and find(boxes, "^确认$"):
         return "environment_choice"
-    if find(boxes, "挑战失败|挑战成功|对局总结|通关"):
-        return "settlement"
     if has(boxes, "开始「货币战争」"):
         return "home"
     if find(boxes, "^进入(标准|超频)博弈$"):
@@ -44,3 +46,14 @@ def text_signature(boxes: list[TextBox]) -> set[str]:
 
 def similar(a: set[str], b: set[str]) -> float:
     return len(a & b) / max(1, len(a | b))
+
+
+# 备战阶段的布局(归一化坐标,1920x1080 客户区实测,商店收起时)
+PREPARE_LAYOUT = """备战界面布局(坐标为格子中心,可直接用于 click / drag):
+- 前台格(从左到右):(0.410,0.400) (0.475,0.400) (0.550,0.400) (0.625,0.400);格数随等级增加,上场总人数上限 = 等级。
+- 后台格(从左到右):(0.330,0.610) (0.405,0.610) (0.480,0.610) (0.555,0.610) (0.630,0.610) (0.700,0.610)。
+- 备战席 9 格(从左到右):x = 0.228, 0.293, 0.358, 0.423, 0.488, 0.553, 0.618, 0.683, 0.748,y = 0.845。
+- 上场:从备战席 drag 到前台或后台的空格;下场:从格子 drag 回备战席空位;同名角色不能同时上场两个。
+- 商店:点右下「商店」打开、「收起」关闭。打开后顶部 5 张卡,中心 (0.25,0.15) (0.39,0.15) (0.53,0.15) (0.67,0.15) (0.81,0.15),点击卡片即购买,角色进入备战席第一个空位;卡片左下是名字、右下是价格。
+- 刷新商店按 d,购买经验按 f;点角色会在右侧弹出详情(含「出售」按钮)。
+- 「出战」(0.946,0.694):先收起商店再点,开始本节点战斗。"""

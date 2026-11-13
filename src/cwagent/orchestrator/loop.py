@@ -13,7 +13,7 @@ from PIL import Image
 
 from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
 from ..vision.ocr import Ocr, TextBox
-from .screens import classify, companion_name, similar, text_signature
+from .screens import PREPARE_LAYOUT, classify, companion_name, similar, text_signature
 
 ACTION_GAP = 0.7  # 每个操作之后等画面响应
 
@@ -116,11 +116,15 @@ class Runner:
             actions = [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
         elif screen == "settlement":
             record["note"] = "对局结束"
+        elif screen == "battle":
+            actions = [Action(type="wait", seconds=5, reason="战斗进行中")]
         elif screen == "other" and self._waits and similar(sig, self._last_sig) > 0.6 and self._waits < 30:
             actions = [Action(type="wait", seconds=4, reason="画面与上一步相似,继续等待")]
             self._waits += 1
         else:
-            decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history)
+            hints = PREPARE_LAYOUT if screen == "prepare" else ""
+            decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history,
+                                         hints=hints)
             record["decision"] = to_jsonable(decision)
             if decision.error:
                 self.log(f"[{n}] 决策失败:{decision.error}")
