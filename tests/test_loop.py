@@ -71,3 +71,16 @@ def test_action_requires_fields():
         Action(type="click_text")
     assert action_text(Action(type="scroll", notches=-6)).startswith("滚轮 -6")
     assert Action(type="wait").type == "wait"
+
+
+def test_battle_screens_recognized():
+    from cwagent.orchestrator.screens import classify
+    from cwagent.vision.ocr import TextBox
+
+    def boxes(*texts):
+        return [TextBox(t, 0.5, 0.1 * i, 0.1, 0.03, 0.9) for i, t in enumerate(texts)]
+
+    assert classify(boxes("1-6 0%", "29551")) == "battle"
+    assert classify(boxes("敌方行动中", "UID:1")) == "battle"
+    assert classify(boxes("总伤害", "19066")) == "battle"
+    assert classify(boxes("备战阶段 1-6", "出战")) == "prepare"

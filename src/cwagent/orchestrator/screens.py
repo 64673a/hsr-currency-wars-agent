@@ -16,7 +16,8 @@ def classify(boxes: list[TextBox]) -> str:
         return "quit_dialog"
     if find(boxes, "对局评价|对局总结"):
         return "settlement"
-    if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中"):
+    if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中|^(我方|敌方)行动中$|^总伤害$") or find(
+            boxes, r"^[1-3]-\d{1,2}\s*\d{1,3}%$"):
         return "battle"
     if has(boxes, "备战阶段"):
         return "prepare"
