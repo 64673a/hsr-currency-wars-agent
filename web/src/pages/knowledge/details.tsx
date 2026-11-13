@@ -73,10 +73,7 @@ function Head({ d, sub }: { d: Item; sub: ReactNode }) {
   return (
     <div className={styles.detailHead}>
       {d.icon && <img className={styles.detailIcon} src={d.icon} alt="" />}
-      <div>
-        <h3 className={styles.detailName}>{d.name ?? d.title}</h3>
-        <p className={styles.detailSub}>{sub}</p>
-      </div>
+      <p className={styles.detailSub}>{sub}</p>
     </div>
   );
 }
@@ -98,11 +95,7 @@ function Flow({ d }: { d: Item }) {
   if (!d.flow && !d.effects?.length) return null;
   return (
     <>
-      {d.flow && (
-        <Alert tone="warning" title="会改变对局流程">
-          拿到它之后节点结构、商店概率或阵容规划可能失效,agent 会据此重新规划。
-        </Alert>
-      )}
+      {d.flow && <Alert tone="warning" title="会改变对局流程" />}
       {d.effects?.length > 0 && (
         <Block title="效果标签">
           <Chips items={d.effects} />
@@ -243,7 +236,7 @@ function Companion({ d }: { d: Item }) {
   return (
     <>
       <Head d={d} sub={sub} />
-      {d.desc ? <Text>{d.desc}</Text> : <Text>还没有记录游戏内的描述,下次在对局中遇到时会自动补上。</Text>}
+      {d.desc && <Text>{d.desc}</Text>}
       {d.flow_effects?.length > 0 && (
         <Block title="对流程的影响">
           {d.flow_effects.map((f: string) => (

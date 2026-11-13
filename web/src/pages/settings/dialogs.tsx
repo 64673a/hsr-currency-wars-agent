@@ -69,10 +69,10 @@ export function ProviderDialog({ provider, onClose, onSaved }: { provider: Provi
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title={provider ? `编辑 ${provider.name}` : '添加厂商'} description="保存后可以从这个厂商的模型列表里选择模型。">
+      <DialogContent title={provider ? `编辑 ${provider.name}` : '添加厂商'}>
         <div className={styles.form}>
           <SegmentedControl label="接口格式" options={FORMATS} value={format} onValueChange={(v) => setFormat(v as Provider['format'])} fullWidth />
-          <Input label="名称" description="自己起,用来区分不同的接口" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input label="名称" value={name} onChange={(e) => setName(e.target.value)} />
           <Input
             label="接口地址"
             placeholder={format === 'openai' ? 'https://api.example.com/v1' : 'https://api.example.com'}
@@ -83,14 +83,14 @@ export function ProviderDialog({ provider, onClose, onSaved }: { provider: Provi
             label="API key"
             type="password"
             autoComplete="off"
-            description={provider?.has_key ? `已保存 ${provider.api_key},留空表示不修改` : '本地模型可以留空'}
+            placeholder={provider?.has_key ? `${provider.api_key}(不修改请留空)` : undefined}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
           {format === 'anthropic' && (
-            <Input label="anthropic-version 请求头" description="部分第三方网关只认 2023-06-01" value={version} onChange={(e) => setVersion(e.target.value)} />
+            <Input label="anthropic-version" value={version} onChange={(e) => setVersion(e.target.value)} />
           )}
-          <Textarea label="额外请求头" description="JSON 对象,可以留空" rows={2} value={headers} onChange={(e) => setHeaders(e.target.value)} />
+          <Textarea label="额外请求头" placeholder='{"X-Header": "value"}' rows={2} value={headers} onChange={(e) => setHeaders(e.target.value)} />
           {error && <Alert tone="danger" title="没有保存">{error}</Alert>}
           <Footer onClose={onClose} saving={saving} disabled={!name.trim() || !baseUrl.trim()} label={provider ? '保存修改' : '添加厂商'} onSave={save} />
         </div>
@@ -150,10 +150,10 @@ export function ModelPicker({ provider, existing, onClose, onSaved }: { provider
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title={`从 ${provider.name} 选择模型`} description="勾选的模型会各建一个模型档案,之后可以单独调整参数。">
+      <DialogContent title={`从 ${provider.name} 选择模型`}>
         <div className={styles.form}>
           {loading && <Skeleton lines={4} label="正在拉取模型列表" />}
-          {error && <Alert tone="warning" title="拉取模型列表失败">{`${error}。这个接口可能不提供模型列表,可以在下面直接填写模型 id。`}</Alert>}
+          {error && <Alert tone="warning" title="拉取模型列表失败,请手动填写模型 id">{error}</Alert>}
           {models.length > 0 && (
             <>
               {models.length > 8 && <SearchField label="筛选模型" value={query} onValueChange={setQuery} />}
@@ -179,7 +179,7 @@ export function ModelPicker({ provider, existing, onClose, onSaved }: { provider
               </div>
             </>
           )}
-          <Input label="手动填写模型 id" description="多个用逗号分隔" value={manual} onChange={(e) => setManual(e.target.value)} />
+          <Input label="模型 id" placeholder="model-a, model-b" value={manual} onChange={(e) => setManual(e.target.value)} />
           {saveError && <Alert tone="danger" title="有模型没有添加成功">{saveError}</Alert>}
           <Footer onClose={onClose} saving={saving} disabled={!ids.length} label={ids.length ? `添加 ${ids.length} 个模型` : '添加模型'} onSave={save} />
         </div>
@@ -227,7 +227,7 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title={model ? `编辑 ${model.name}` : '添加模型档案'} description="额外请求参数会原样合并进请求体,用来打开思考模式、调节 effort 等。">
+      <DialogContent title={model ? `编辑 ${model.name}` : '添加模型档案'}>
         <div className={styles.form}>
           <Select label="厂商" options={providers.map((p) => ({ value: p.name, label: p.name }))} value={provider} onValueChange={setProvider} />
           {available.models.length > 0 ? (
@@ -239,9 +239,9 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
               onValueChange={setModelId}
             />
           ) : (
-            <Input label="模型 id" description={available.loading ? '正在拉取模型列表' : '这个接口没有提供模型列表,请手动填写'} value={modelId} onChange={(e) => setModelId(e.target.value)} />
+            <Input label="模型 id" value={modelId} onChange={(e) => setModelId(e.target.value)} />
           )}
-          <Input label="档案名" description="留空则与模型 id 相同" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input label="档案名" placeholder={modelId || undefined} value={name} onChange={(e) => setName(e.target.value)} />
           <SegmentedControl
             label="工具调用方式"
             options={[
@@ -253,11 +253,11 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
             fullWidth
           />
           <div className={page.fields2}>
-            <NumberField label="max_tokens" description="0 表示不发送" min={0} max={200000} step={1000} locale="zh-CN" formatOptions={{ useGrouping: false }} value={maxTokens} onValueChange={setMaxTokens} />
+            <NumberField label="max_tokens(0 为不限)" min={0} max={200000} step={1000} locale="zh-CN" formatOptions={{ useGrouping: false }} value={maxTokens} onValueChange={setMaxTokens} />
             <NumberField label="超时" suffix=" 秒" min={10} max={3600} step={30} value={timeoutS} onValueChange={setTimeoutS} />
           </div>
-          <Textarea label="额外请求参数" description='JSON 对象,例如 {"reasoning_effort": "high"}' rows={4} value={extraBody} onChange={(e) => setExtraBody(e.target.value)} />
-          <Textarea label="额外请求头" description="JSON 对象,可以留空" rows={2} value={extraHeaders} onChange={(e) => setExtraHeaders(e.target.value)} />
+          <Textarea label="额外请求参数" placeholder='{"reasoning_effort": "high"}' rows={4} value={extraBody} onChange={(e) => setExtraBody(e.target.value)} />
+          <Textarea label="额外请求头" placeholder='{"X-Header": "value"}' rows={2} value={extraHeaders} onChange={(e) => setExtraHeaders(e.target.value)} />
           {error && <Alert tone="danger" title="没有保存">{error}</Alert>}
           <Footer onClose={onClose} saving={saving} disabled={!provider || !modelId.trim()} label={model ? '保存修改' : '添加模型档案'} onSave={save} />
         </div>

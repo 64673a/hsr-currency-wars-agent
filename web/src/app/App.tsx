@@ -30,9 +30,9 @@ const GROUPS: { label: string; pages: Page[] }[] = [
 const ALL = GROUPS.flatMap((g) => g.pages);
 
 const PLACEHOLDERS: Record<string, { title: string; description: string }> = {
-  '#/watch': { title: '观战', description: '实时观看 agent 对局:游戏截图、局面、模型的思考和每一步动作。全自动对局完成后开放。' },
-  '#/runs': { title: '对局记录', description: '历史对局列表和逐步回放,能看到每一步的提示词、思考和结果。决策层完成后开放。' },
-  '#/compare': { title: '模型对比', description: '把同一批局面交给多个模型,并排比较它们的思考与决策。离线回放完成后开放。' },
+  '#/watch': { title: '观战', description: '暂未开放' },
+  '#/runs': { title: '对局记录', description: '暂未开放' },
+  '#/compare': { title: '模型对比', description: '暂未开放' },
 };
 
 function readPath() {
@@ -62,7 +62,6 @@ export default function App() {
         <aside className={styles.sidebar}>
           <div className={styles.brand}>
             <span className={styles.brandName}>货币战争</span>
-            <span className={styles.brandSub}>入画奇航 · LLM 游玩 agent</span>
           </div>
           <nav className={styles.nav} aria-label="主导航">
             {GROUPS.map((g) => (

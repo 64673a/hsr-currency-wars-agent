@@ -4,7 +4,6 @@ import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
 import { Drawer, DrawerContent } from '@/components/arc/drawer/drawer';
 import EmptyState from '@/components/arc/empty-state/empty-state';
-import { MetricCard } from '@/components/arc/metric-card/metric-card';
 import { Pagination } from '@/components/arc/pagination/pagination';
 import { Progress } from '@/components/arc/progress/progress';
 import { SearchField } from '@/components/arc/search-field/search-field';
@@ -112,8 +111,8 @@ export default function KnowledgePage() {
           <h1 className={page.title}>知识库</h1>
           <p className={page.subtitle}>
             {synced
-              ? `赛季 S${meta?.season_id}-${meta?.sub_season_id} · 游戏版本 ${meta?.game_version} · 同步于 ${meta?.synced_at?.slice(0, 16).replace('T', ' ')}`
-              : '来自米游社货币战争专题页的官方数据,以及积累的记忆'}
+              ? `S${meta?.season_id}-${meta?.sub_season_id} · 版本 ${meta?.game_version} · 同步于 ${meta?.synced_at?.slice(0, 16).replace('T', ' ')}`
+              : ''}
           </p>
         </div>
         <Button loading={running} onClick={startSync}>
@@ -132,21 +131,12 @@ export default function KnowledgePage() {
         </Alert>
       )}
 
-      {meta === null ? (
-        <Skeleton lines={2} />
-      ) : synced ? (
-        <div className={page.metrics}>
-          <MetricCard label="角色" value={counts.roles ?? 0} suffix=" 名" context="1 到 5 费,外加 7 费的阿哈" />
-          <MetricCard label="投资策略" value={counts.augments ?? 0} suffix=" 条" context="银色、金色、棱彩三档" />
-          <MetricCard label="装备" value={counts.equipment ?? 0} suffix=" 件" context="含合成原料与特权装备" />
-          <MetricCard label="指引卡" value={counts.guides ?? 0} suffix=" 张" context="按使用量排序的官方阵容" />
-        </div>
-      ) : (
+      {meta !== null && !synced && !running && (
         <EmptyState
           title="知识库还是空的"
-          description="同步一次官方数据(约 1 分钟),就能浏览角色、羁绊、装备、投资策略和热门阵容。"
+          description="同步官方数据后可以浏览角色、羁绊、装备和阵容。"
           action={
-            <Button size="sm" loading={running} onClick={startSync}>
+            <Button size="sm" onClick={startSync}>
               同步官方数据
             </Button>
           }
@@ -154,7 +144,7 @@ export default function KnowledgePage() {
       )}
 
       {meta?.warnings && meta.warnings.length > 0 && (
-        <Alert tone="warning" title="有些数据需要从游戏内补充">
+        <Alert tone="warning" title="数据不完整">
           {meta.warnings.join(';')}
         </Alert>
       )}
@@ -234,7 +224,7 @@ function KindList({ kind, name, total, synced }: { kind: string; name: string; t
       ) : data.items.length === 0 ? (
         <EmptyState
           title={synced ? (q ? '没有匹配的条目' : `还没有${name}`) : '知识库还是空的'}
-          description={synced ? (q ? '换个关键词试试,也可以搜索羁绊名或描述里的字。' : kind === 'companions' ? '奇遇伙伴在对局中遇到时自动记录。' : '') || '没有数据。' : '先同步一次官方数据。'}
+          description={synced ? (q ? '换个关键词试试。' : '暂无数据。') : '先同步官方数据。'}
         />
       ) : (
         <div className={page.group}>

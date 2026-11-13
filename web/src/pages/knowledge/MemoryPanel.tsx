@@ -64,19 +64,16 @@ export default function MemoryPanel() {
   return (
     <div className={page.section} style={{ marginTop: 16 }}>
       <div className={page.sectionHead}>
-        <p className={page.hint} style={{ maxWidth: 640 }}>
-          积累的游戏经验:机制、打法和教训。决策时按局面里出现的名字、节点类型和界面自动想起。公共记忆随仓库发布,对局中学到的先作为草稿,审核后才会使用。
-        </p>
+        <SegmentedControl label="按状态筛选" options={FILTERS} value={filter} onValueChange={setFilter} />
         <Button size="sm" variant="secondary" onClick={() => setEditing('new')}>
           添加记忆
         </Button>
       </div>
-      <SegmentedControl label="按状态筛选" options={FILTERS} value={filter} onValueChange={setFilter} />
       {error && <Alert tone="danger" title="读取失败">{error}</Alert>}
       {items === null ? (
         <Skeleton lines={5} />
       ) : shown.length === 0 ? (
-        <EmptyState title="这里还没有记忆" description={filter === 'draft' ? '对局中模型写下的笔记和复盘结论会出现在这里等待审核。' : '添加一条你知道的游戏经验,agent 会在相关局面里想起它。'} />
+        <EmptyState title="没有记忆" description={filter === 'draft' ? '没有待审核的记忆。' : '还没有这类记忆。'} />
       ) : (
         <div className={page.group}>
           {shown.map((m) => {
@@ -100,7 +97,7 @@ export default function MemoryPanel() {
                   </span>
                   <p className={styles.memoryContent}>{m.content}</p>
                   <p className={page.rowHint}>
-                    想起时机:{trig.join('、') || '所有决策'} · {CONFIDENCE[m.confidence]} · {m.origin === '公共' ? '公共记忆' : '本机记忆'} · 用过 {m.stats.injected} 次
+                    {trig.join('、') || '通用'} · {CONFIDENCE[m.confidence]} · {m.origin === '公共' ? '公共' : '本机'} · 用过 {m.stats.injected} 次
                   </p>
                 </div>
                 <div className={page.rowActions}>
@@ -173,13 +170,10 @@ function PreviewSection() {
 
   return (
     <section className={page.section} aria-labelledby={`${id}-preview`} style={{ marginTop: 16 }}>
-      <div>
-        <h2 id={`${id}-preview`} className={page.heading}>检索预览</h2>
-        <p className={page.hint}>模拟一个决策点的局面,看会想起哪些记忆,以及写进提示词的样子。</p>
-      </div>
+      <h2 id={`${id}-preview`} className={page.heading}>检索预览</h2>
       <div className={styles.previewGrid}>
-        <Input label="局面里的名字" description="逗号分隔" value={entities} onChange={(e) => setEntities(e.target.value)} />
-        <Input label="节点类型" description="如 reward、battle" value={nodes} onChange={(e) => setNodes(e.target.value)} />
+        <Input label="局面里的名字" placeholder="绯英, 经济严重过热" value={entities} onChange={(e) => setEntities(e.target.value)} />
+        <Input label="节点类型" placeholder="reward" value={nodes} onChange={(e) => setNodes(e.target.value)} />
         <Select label="决策层" options={['不限', '战略', '战术', '选择', '事件'].map((v) => ({ value: v, label: v }))} value={layer} onValueChange={setLayer} />
       </div>
       <div className={page.row} style={{ padding: 0, minHeight: 0 }}>
@@ -188,7 +182,7 @@ function PreviewSection() {
           包含待审核草稿
         </span>
         <Button size="sm" variant="secondary" loading={loading} onClick={run}>
-          预览检索结果
+          预览
         </Button>
       </div>
       {result &&
@@ -207,7 +201,7 @@ function PreviewSection() {
             <pre className={styles.prompt}>{result.prompt}</pre>
           </>
         ) : (
-          <Alert tone="info" title="没有想起任何记忆">换一组名字或节点类型试试。</Alert>
+          <Alert tone="info" title="没有匹配的记忆" />
         ))}
     </section>
   );
@@ -252,7 +246,7 @@ function MemoryDialog({ memory, onClose, onSaved }: { memory: Memory | null; onC
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent title={memory ? '编辑记忆' : '添加记忆'} description="写清楚在什么条件下、该怎么做、为什么。修改公共记忆会保存为本机版本。">
+      <DialogContent title={memory ? '编辑记忆' : '添加记忆'}>
         <div style={{ display: 'grid', gap: 16 }}>
           <SegmentedControl
             label="类别"
@@ -261,15 +255,15 @@ function MemoryDialog({ memory, onClose, onSaved }: { memory: Memory | null; onC
             onValueChange={(v) => setKind(v as Memory['kind'])}
             fullWidth
           />
-          <Input label="标题" description="一句话说清这条经验" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <Input label="标题" value={title} onChange={(e) => setTitle(e.target.value)} />
           <Textarea label="内容" rows={5} value={content} onChange={(e) => setContent(e.target.value)} />
-          <Input label="触发名字" description="局面里出现这些名字时想起,逗号分隔" value={entities} onChange={(e) => setEntities(e.target.value)} />
+          <Input label="触发名字" placeholder="绯英, 经济严重过热" value={entities} onChange={(e) => setEntities(e.target.value)} />
           <div className={page.fields2}>
-            <Input label="触发节点类型" description="如 reward" value={nodes} onChange={(e) => setNodes(e.target.value)} />
-            <Input label="触发界面" description="如 prepare" value={screens} onChange={(e) => setScreens(e.target.value)} />
+            <Input label="触发节点类型" placeholder="reward" value={nodes} onChange={(e) => setNodes(e.target.value)} />
+            <Input label="触发界面" placeholder="prepare" value={screens} onChange={(e) => setScreens(e.target.value)} />
           </div>
           <div className={page.fields2}>
-            <Input label="限定决策层" description="战略、战术、选择、事件,留空不限" value={scope} onChange={(e) => setScope(e.target.value)} />
+            <Input label="限定决策层" placeholder="战略, 战术" value={scope} onChange={(e) => setScope(e.target.value)} />
             <Select
               label="置信度"
               options={Object.entries(CONFIDENCE).map(([value, label]) => ({ value, label }))}

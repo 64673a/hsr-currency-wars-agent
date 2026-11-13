@@ -7,8 +7,7 @@
 .detail { display: grid; gap: 20px; padding-bottom: 24px; }
 .detailHead { display: flex; align-items: center; gap: 14px; }
 .detailIcon { width: 64px; height: 64px; border-radius: 16px; object-fit: cover; background: var(--surface-muted); flex: none; }
-.detailName { margin: 0; font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 500; letter-spacing: var(--tracking-display); }
-.detailSub { margin: 4px 0 0; font-size: var(--text-sm); color: var(--text-secondary); }
+.detailSub { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
 .block { display: grid; gap: 8px; }
 .blockTitle { margin: 0; font-size: var(--text-sm); font-weight: 500; color: var(--text-secondary); }
 .text { margin: 0; font-size: var(--text-sm); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }

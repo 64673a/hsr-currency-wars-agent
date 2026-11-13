@@ -9,7 +9,7 @@ export default function Placeholder({ title, description }: { title: string; des
       <header className={page.header}>
         <h1 className={page.title}>{title}</h1>
       </header>
-      <EmptyState title="还没有开放" description={description} icon={<Hourglass size={20} strokeWidth={1.75} aria-hidden="true" />} />
+      <EmptyState title={description} description=""  icon={<Hourglass size={20} strokeWidth={1.75} aria-hidden="true" />} />
     </div>
   );
 }
