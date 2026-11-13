@@ -1,0 +1,51 @@
+# 公共记忆:随仓库发布的游戏经验,决策时按触发条件注入提示词。格式与用法见 docs/TECH_DESIGN.md 5.4。
+#
+# kind: 机制 | 打法 | 教训;status: approved 才会被注入;confidence: high 已核实 | medium 有依据未核实 | low 推测
+# triggers.entities 按名字匹配局面里出现的规则修正、奇遇伙伴、角色、装备、选项、节点名、事件文字;
+# triggers.nodes 匹配当前 / 下一个节点类型(reward、battle、boss、encounter…,以感知层的命名为准)。
+# 本机在对局中学到的记忆在 data/memory.sqlite,验证有效后用 `cwagent memory export <id>` 导出到这里。
+
+- id: m-20261114-reward-rules
+  kind: 机制
+  title: 奖励节点的战斗不限行动值,阵亡可无限复活
+  content: |-
+    奖励节点的战斗没有行动值限制,我方角色阵亡后可以无限复活,所以这里的战斗不会失败。
+    适合需要长时间战斗才能见效的打法(例如靠反复施放终结技叠永久增益的角色)。
+    注意:投资环境「经济过热」「经济严重过热」会把奖励节点换成次元扑满主题,规则不同,见相关记忆。
+  triggers:
+    nodes: [reward]
+  scope: [战术, 战略]
+  status: approved
+  confidence: medium
+  source: 维护者(2026-11-14),待游戏内核实
+
+- id: m-20261114-piggy-bank
+  kind: 打法
+  title: 次元扑满主题的奖励节点要上有输出的阵容去「抓猪」
+  content: |-
+    「经济过热」把全部奖励节点换成次元扑满主题,「经济严重过热」换成超级次元扑满主题(官方描述:掉落超多战利品,但跑得超快)。
+    普通奖励节点随便上几个角色就行,扑满节点则要有一定战力:输出不足(例如只上 1 费角色)会让扑满逃跑,损失大量战利品。
+    进入这类奖励节点前把主力输出放上场;战前查看敌方信息,尽量让我方属性对上扑满的弱点。
+    选投资环境时也要考虑:前期阵容弱时选「经济严重过热」,奖励节点可能抓不到猪,有玩家建议慎选。
+  triggers:
+    entities: [经济严重过热, 经济过热, 次元扑满, 扑满]
+    nodes: [reward]
+  scope: [选择, 战术, 战略]
+  status: approved
+  confidence: medium
+  source: 维护者(2026-11-14);玩家攻略(今日头条「货币战争技巧攻略」、B 站视频 BV1TSkkBMEkE)
+
+- id: m-20261114-feiying-stack
+  kind: 打法
+  title: 绯英可以在奖励节点单独上场,压低伤害多放终结技叠永久增伤
+  content: |-
+    绯英施放终结技时永久提高伤害增幅(官方描述),层数在之后的战斗中保留。
+    奖励节点不限行动值、阵亡可无限复活,可以利用这一点:在奖励节点只让绯英上场(其他角色移到备战席),不给她或队伍堆增伤,刻意让战斗拖长,多施放终结技来叠层;奖励节点结束后再把正常阵容摆回来。
+    扑满主题的奖励节点不适用(扑满会逃跑,需要正常输出)。
+  triggers:
+    entities: [绯英]
+    nodes: [reward]
+  scope: [战术, 战略]
+  status: approved
+  confidence: medium
+  source: 维护者(2026-11-14),待实战验证

@@ -1,7 +1,8 @@
 """知识库 sqlite 的写入与查询。设计见 docs/TECH_DESIGN.md 5.1。
 
 每类条目一张表,结构相同:id、name、sort、search、summary(JSON)、data(JSON)。
-另有 trait_layers(羁绊档位)、recipes(装备配方)、lessons(复盘经验,M4 使用)、meta、raw_snapshots。
+另有 trait_layers(羁绊档位)、recipes(装备配方)、meta、raw_snapshots。
+记忆(经验)不在这里,见 cwagent.memory;本库每次同步都整库重建。
 """
 
 from __future__ import annotations
@@ -28,15 +29,12 @@ _OTHER_TABLES = [
     "CREATE TABLE recipes (product_id TEXT NOT NULL, a_id TEXT NOT NULL, b_id TEXT NOT NULL, craft_id TEXT)",
     "CREATE INDEX recipes_a ON recipes (a_id)",
     "CREATE INDEX recipes_b ON recipes (b_id)",
-    "CREATE TABLE lessons (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,"
-    " status TEXT NOT NULL DEFAULT 'pending', condition TEXT NOT NULL, content TEXT NOT NULL,"
-    " evidence TEXT NOT NULL DEFAULT '')",
     "CREATE TABLE raw_snapshots (name TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, json TEXT NOT NULL)",
 ]
 
 
-def write(path: Path, knowledge: Knowledge, raw: dict[str, Any], *, lessons_from: Path | None = None) -> None:
-    """整库重建:先写临时文件,成功后替换,失败时旧库不受影响。复盘经验从旧库原样带过来。"""
+def write(path: Path, knowledge: Knowledge, raw: dict[str, Any]) -> None:
+    """整库重建:先写临时文件,成功后替换,失败时旧库不受影响。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".sqlite.tmp")
     tmp.unlink(missing_ok=True)
@@ -60,16 +58,7 @@ def write(path: Path, knowledge: Knowledge, raw: dict[str, Any], *, lessons_from
         con.executemany("INSERT INTO recipes VALUES (?, ?, ?, ?)", knowledge.recipes)
         con.executemany("INSERT INTO raw_snapshots VALUES (?, ?, ?)",
                         [(name, now, json.dumps(value, ensure_ascii=False)) for name, value in raw.items()])
-        con.commit()  # ATTACH 不能在事务中执行
-        source = lessons_from or path
-        if source.exists():
-            con.execute("ATTACH DATABASE ? AS old", (str(source),))
-            try:
-                con.execute("INSERT INTO lessons SELECT * FROM old.lessons")
-                con.commit()
-            except sqlite3.DatabaseError:
-                con.rollback()  # 旧库没有 lessons 表或已损坏
-            con.execute("DETACH DATABASE old")
+        con.commit()
     finally:
         con.close()
     os.replace(tmp, path)

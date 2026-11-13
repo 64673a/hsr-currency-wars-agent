@@ -20,6 +20,8 @@ knowledge_app = typer.Typer(help="知识库(官方数据)", no_args_is_help=True
 app.add_typer(knowledge_app, name="knowledge")
 regions_app = typer.Typer(help="界面区域坐标(config/regions.yaml)", no_args_is_help=True)
 app.add_typer(regions_app, name="regions")
+memory_app = typer.Typer(help="记忆(积累的游戏经验)", no_args_is_help=True)
+app.add_typer(memory_app, name="memory")
 
 
 def _fail(message: str) -> None:
@@ -318,3 +320,115 @@ def regions_check(
                     "区域可能对不上", fg="yellow")
     calibrated = sum(r.calibrated for r in region_set.regions.values())
     typer.echo(f"已输出 {target}({len(region_set.regions)} 个区域,已校准 {calibrated} 个)")
+
+
+# ---------------------------------------------------------------- 记忆
+
+def _split(values: list[str] | None) -> list[str]:
+    return [v.strip() for item in values or [] for v in item.replace("，", ",").split(",") if v.strip()]
+
+
+@memory_app.command("list")
+def memory_list(status: Annotated[str | None, typer.Option(help="只看某种状态:draft/approved/rejected/archived")] = None,
+                full: Annotated[bool, typer.Option(help="显示完整内容")] = False) -> None:
+    """列出全部记忆(公共 + 本机)。"""
+    from .memory import MemoryStore
+
+    items = MemoryStore().all()
+    for m, where in items:
+        if status and m.status != status:
+            continue
+        t = m.triggers
+        trig = " ".join([*t.entities, *(f"节点:{n}" for n in t.nodes), *(f"界面:{s}" for s in t.screens)]) or "通用"
+        s = m.stats
+        typer.echo(f"{m.id}  [{m.label()}|{where}]  {m.title}")
+        typer.echo(f"    触发: {trig}   注入 {s.injected} 次,有帮助 {s.helped},有害 {s.hurt}")
+        if full:
+            typer.echo("    " + m.content.strip().replace("\n", "\n    "))
+    if not items:
+        typer.echo("(还没有记忆)")
+
+
+@memory_app.command("add")
+def memory_add(
+    kind: Annotated[str, typer.Option(help="机制 / 打法 / 教训")],
+    title: Annotated[str, typer.Option(help="一句话标题")],
+    content: Annotated[str, typer.Option(help="完整说明:条件、做法、原因")],
+    entity: Annotated[list[str] | None, typer.Option(help="触发名字,可多次或用逗号分隔")] = None,
+    node: Annotated[list[str] | None, typer.Option(help="触发节点类型,如 reward")] = None,
+    screen: Annotated[list[str] | None, typer.Option(help="触发界面,如 prepare")] = None,
+    scope: Annotated[list[str] | None, typer.Option(help="限定决策层:战略/战术/选择/事件")] = None,
+    confidence: Annotated[str, typer.Option(help="high / medium / low")] = "medium",
+    source: Annotated[str, typer.Option(help="来源")] = "维护者",
+    approve: Annotated[bool, typer.Option(help="直接采纳(否则为待审核草稿)")] = True,
+) -> None:
+    """手动添加一条记忆(写入本机库)。"""
+    from .memory import Memory, MemoryError, MemoryStore, Triggers
+
+    try:
+        memory = MemoryStore().add(Memory(
+            kind=kind, title=title, content=content, confidence=confidence, source=source,
+            triggers=Triggers(entities=_split(entity), nodes=_split(node), screens=_split(screen)),
+            scope=_split(scope), status="approved" if approve else "draft"))
+    except (MemoryError, ValueError) as e:
+        _fail(str(e))
+    typer.echo(f"已添加记忆 {memory.id}")
+
+
+def _set_status(memory_id: str, status: str) -> None:
+    from .memory import MemoryError, MemoryStore
+
+    try:
+        MemoryStore().set_status(memory_id, status)
+    except MemoryError as e:
+        _fail(str(e))
+    typer.echo(f"{memory_id} → {status}")
+
+
+@memory_app.command("approve")
+def memory_approve(memory_id: str) -> None:
+    """采纳一条记忆(之后会被注入决策)。"""
+    _set_status(memory_id, "approved")
+
+
+@memory_app.command("reject")
+def memory_reject(memory_id: str) -> None:
+    """驳回一条记忆。"""
+    _set_status(memory_id, "rejected")
+
+
+@memory_app.command("archive")
+def memory_archive(memory_id: str) -> None:
+    """归档一条不再使用的记忆。"""
+    _set_status(memory_id, "archived")
+
+
+@memory_app.command("export")
+def memory_export(memory_id: str) -> None:
+    """把一条记忆写进公共文件 knowledge/memories.yaml,之后可以提交到仓库。"""
+    from .memory import MemoryError, MemoryStore
+
+    try:
+        path = MemoryStore().export(memory_id)
+    except MemoryError as e:
+        _fail(str(e))
+    typer.echo(f"已写入 {path}")
+
+
+@memory_app.command("preview")
+def memory_preview(
+    entity: Annotated[list[str] | None, typer.Option(help="局面里出现的名字,可多次或用逗号分隔")] = None,
+    text: Annotated[list[str] | None, typer.Option(help="自由文本,如节点名、事件文字")] = None,
+    node: Annotated[list[str] | None, typer.Option(help="当前 / 下一个节点类型")] = None,
+    screen: Annotated[str | None, typer.Option(help="当前界面")] = None,
+    layer: Annotated[str | None, typer.Option(help="决策层:战略/战术/选择/事件")] = None,
+    draft: Annotated[bool, typer.Option(help="包含待审核的草稿")] = False,
+) -> None:
+    """给定一组线索,预览会被想起的记忆和注入提示词的文字。"""
+    from .memory import Cues, MemoryStore, format_for_prompt, recall
+
+    cues = Cues(entities=set(_split(entity)), texts=text or [], nodes=set(_split(node)), screen=screen, layer=layer)
+    hits = recall([m for m, _ in MemoryStore().all()], cues, include_draft=draft)
+    for r in hits:
+        typer.echo(f"{r.score:5.2f}  {r.memory.id}  {r.memory.title}  ← {', '.join(r.reasons)}")
+    typer.echo("\n" + (format_for_prompt(hits) or "(没有相关记忆)"))

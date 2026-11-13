@@ -81,13 +81,11 @@ def test_build():
     assert k.icons["roles"]["1001"].endswith("r1001.png") and "1002" not in k.icons["roles_big"]
 
 
-def test_db_roundtrip_and_lessons_kept(tmp_path):
+def test_db_roundtrip(tmp_path):
     path = tmp_path / "k.sqlite"
     k = build(config(), [lineup()])
     write(path, k, {"config": {"a": 1}})
-    with sqlite3.connect(path) as con:
-        con.execute("INSERT INTO lessons (created_at, condition, content) VALUES ('t', 'c', '别乱卖')")
-    write(path, k, {"config": {"a": 2}})  # 重新同步不能丢掉复盘经验
+    write(path, k, {"config": {"a": 2}})  # 重新同步整库替换
 
     db = KnowledgeDB(path)
     meta = db.meta()
@@ -99,7 +97,6 @@ def test_db_roundtrip_and_lessons_kept(tmp_path):
     assert db.get("equipment", "4701")["name"] == "反重力皮靴" and db.get("roles", "nope") is None
     assert db.find_by_name("traits", "连击")[0]["id"] == "200402"
     with sqlite3.connect(path) as con:
-        assert con.execute("SELECT content FROM lessons").fetchall() == [("别乱卖",)]
         assert json.loads(con.execute("SELECT json FROM raw_snapshots WHERE name='config'").fetchone()[0]) == {"a": 2}
     with pytest.raises(KeyError):
         db.list("nope")

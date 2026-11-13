@@ -4,8 +4,9 @@
 
 - 让 LLM 自主游玩《崩坏:星穹铁道》货币战争 S2「入画奇航」的 agent。
 - 权威设计文档:`docs/TECH_DESIGN.md`。开始任何工作前先读它;第 1.6 节是已确定的设计决策,不要擅自改。
-- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)。待做:`collect`、`regions check`、后端、前端。
+- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)、截图采集(`cwagent collect`,已在 Windows 实测)、区域校对(`cwagent regions check`)、记忆系统的存储与检索(`cwagent memory`)。待做:后端、前端。
 - 流程不能写死:投资环境、投资策略、奇遇伙伴都会改变节点结构和出现的界面(设计文档 2.3)。奇遇伙伴数据官方接口没有,人工整理在 `knowledge/companions.yaml`。
+- 记忆系统(设计文档 5.4):公共记忆在 `knowledge/memories.yaml`(随仓库发布),本机学到的在 `data/memory.sqlite`。维护者口头告诉你的游戏经验,整理成记忆写进 `knowledge/memories.yaml`,并注明来源和是否已核实。
 - 运行形态:agent 作为一个服务运行在装有游戏的 Windows 上,像 March7thAssistant 一样直接定位游戏窗口截图、发送键鼠。
 
 ## 目录
