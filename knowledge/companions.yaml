@@ -23,9 +23,10 @@
 
 - name: 不死狼
   type: ""
-  desc: ""
+  desc: 不死狼将在【幕后茶歇】找你聊聊新的委托。本局将出现【幕后茶歇】奖励节点
   flow_effects:
-    - 局内出现「委托」
-  screens: [commission]
-  verified: false
-  source: 维护者告知(2026-11-14),待游戏内核实
+    - 本局出现【幕后茶歇】奖励节点
+    - 在幕后茶歇接取「委托」
+  screens: [tea_break, commission]
+  verified: true
+  source: 游戏内「主角光环与奇遇详情」(2026-11-14 实测);维护者告知
