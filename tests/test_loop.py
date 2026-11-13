@@ -83,4 +83,5 @@ def test_battle_screens_recognized():
     assert classify(boxes("1-6 0%", "29551")) == "battle"
     assert classify(boxes("敌方行动中", "UID:1")) == "battle"
     assert classify(boxes("总伤害", "19066")) == "battle"
-    assert classify(boxes("备战阶段 1-6", "出战")) == "prepare"
+    assert classify(boxes("1-7", "0%", "55")) == "battle"
+    assert classify(boxes("备战阶段", "1-7", "出战")) == "prepare"

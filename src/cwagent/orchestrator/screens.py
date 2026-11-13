@@ -19,6 +19,9 @@ def classify(boxes: list[TextBox]) -> str:
     if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中|^(我方|敌方)行动中$|^总伤害$") or find(
             boxes, r"^[1-3]-\d{1,2}\s*\d{1,3}%$"):
         return "battle"
+    # 顶部 HUD 的节点号和进度被识别成两段文字(如「1-7」「0%」)
+    if not has(boxes, "备战阶段") and find(boxes, r"^[1-3]-\d{1,2}$") and find(boxes, r"^\d{1,3}%$"):
+        return "battle"
     if has(boxes, "备战阶段"):
         return "prepare"
     if has(boxes, "^投资环境$") and find(boxes, "^确认$"):
