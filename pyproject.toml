@@ -2,17 +2,30 @@
 name = "cwagent"
 version = "0.1.0"
 description = "LLM agent that plays Honkai: Star Rail's Currency Wars mode"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
 # 依赖随功能逐步加入,完整清单见 docs/TECH_DESIGN.md 第 15 节。
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "mss>=9.0",
+    "pillow>=10.1",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+cwagent = "cwagent.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
 [tool.uv]
 # 只用 uv 管理的 Python,版本固定在 .python-version。
-# 固定到补丁号很重要:Windows 上设备服务以管理员身份运行,而管理员进程无法穿过
+# 固定到补丁号很重要:agent 需以管理员身份运行(游戏是提权进程),而 Windows 上管理员进程无法穿过
 # uv 为「次版本号」建立的目录联接(os error 448);固定补丁号时虚拟环境会直接指向真实安装目录。
 python-preference = "only-managed"
 

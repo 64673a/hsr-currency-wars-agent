@@ -535,35 +535,45 @@ Detect(截图 + 分类)
 ### 11.1 原则
 
 - 不安装 `anthropic`、`openai` 等厂商 SDK,用 `httpx` 直接发请求;
-- 一个模型档案只有 URL、key、模型名和格式,其余都是可选的透传参数;
-- 代码里不出现任何具体模型名或按模型名分支的逻辑,换模型只改档案。
+- 不锁定厂商和模型:厂商只描述"接口格式 + 地址 + key",可用模型从厂商接口拉取后由用户选择;
+- 代码里不出现任何具体厂商名、模型名或按模型名分支的逻辑,换模型只改配置。
 
-### 11.2 模型档案
+### 11.2 厂商与模型档案
+
+配置分两层:
+
+- **厂商(provider)**:接口格式 + 地址 + key,同一个 key 只填一次;
+- **模型档案(model)**:选一个厂商 + 一个模型 id,再加该模型自己的透传参数。同一厂商可以建多个档案,用来对比不同模型,或同一模型的不同参数(如思考开 / 关)。
 
 ```yaml
-models:
-  - name: opus                      # 档案名,界面上显示和选择用
-    format: anthropic               # anthropic | openai
-    base_url: https://api.anthropic.com
-    api_key: sk-ant-…
-    model: claude-opus-5-5
-    max_tokens: 16000               # anthropic 格式必填;openai 格式不填则不发送
-    extra_body:                     # 原样合并进请求体
-      thinking: {type: adaptive, display: summarized}
-      output_config: {effort: medium}
+providers:
+  - name: my-provider               # 厂商名,自己起
+    format: openai                  # openai | anthropic
+    base_url: https://api.example.com/v1
+    api_key: sk-…
     extra_headers: {}               # 原样合并进请求头
+    anthropic_version: "2026-10-21" # 仅 anthropic 格式使用;部分网关只认 2023-06-01
+
+models:
+  - name: my-model                  # 档案名,界面上显示和选择用
+    provider: my-provider
+    model: some-model-id            # 从厂商的模型列表里选,或手动填写
+    max_tokens: 16000               # anthropic 格式默认 16000;openai 格式不填则不发送
+    extra_body:                     # 原样合并进请求体:思考开关、effort 等厂商参数
+      reasoning_effort: high
+    extra_headers: {}               # 与厂商的 extra_headers 合并
     tool_mode: native               # native | json
     timeout_seconds: 300
 
-  - name: some-openai-compatible
-    format: openai
-    base_url: https://api.example.com/v1
-    api_key: sk-…
-    model: some-model-id
-    extra_body: {reasoning_effort: high}
+roles:                              # 各决策层用哪个模型档案;留空则用第一个
+  tactical: my-model
 ```
 
-`config.yaml` 含 key,必须在 `.gitignore` 中;仓库里放 `config.example.yaml`。后端接口返回档案时 key 只显示掩码(前 4 位 + 后 4 位)。
+调用时把厂商和模型档案合并成一个完整的调用参数(`ModelEndpoint`),LLM 接入层只认这个。
+
+**模型列表**:openai 格式 `GET {base_url}/models`,anthropic 格式 `GET {base_url}/v1/models`(按 `has_more` / `last_id` 翻页)。部分兼容网关不提供这个接口(例如 2026-11 时 DeepSeek 的 Anthropic 兼容接口返回 404),此时提示用户手动填写模型 id。
+
+`config.yaml` 含 key,必须在 `.gitignore` 中;仓库里放 `config.example.yaml`(不偏向任何厂商)。后端接口返回厂商时 key 只显示掩码(前 4 位 + 后 4 位);修改厂商时提交空 key 或掩码表示沿用原 key。
 
 ### 11.3 统一接口
 
@@ -594,7 +604,8 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
  "tool_choice": "auto"}
 ```
 
-- 响应解析:`choices[0].message.content` → text;`choices[0].message.tool_calls[].function.{name, arguments}`(`arguments` 是 JSON 字符串,需解析)→ tool_calls;思考依次尝试 `message.reasoning_content`、`message.reasoning`;`usage.prompt_tokens` / `completion_tokens` → usage;`choices[0].finish_reason` → stop_reason。
+- 响应解析:`choices[0].message.content` → text;`choices[0].message.tool_calls[].function.{name, arguments}`(`arguments` 是 JSON 字符串,需解析)→ tool_calls;思考依次尝试 `message.reasoning_content`、`message.reasoning`,再尝试回复开头的 `<think>…</think>`;`usage.prompt_tokens` / `completion_tokens` → usage,缓存命中取 `prompt_tokens_details.cached_tokens` 或 `prompt_cache_hit_tokens`,思考 token 取 `completion_tokens_details.reasoning_tokens`;`choices[0].finish_reason` → stop_reason。
+- 2026-11-14 用 DeepSeek(`deepseek-flash`,两种格式)实测通过:工具调用、思考内容(`reasoning_content`)、缓存命中均能正确解析。请求很简单时模型可能不输出思考内容。
 
 ### 11.5 Anthropic 格式
 
@@ -629,7 +640,7 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
 
 ### 11.8 连通性测试
 
-设置页的"测试"按钮调用后端接口,用该档案发一个最小请求(一句话 + 一个简单工具),返回是否成功、是否拿到工具调用、是否拿到思考内容、耗时和 token 用量。
+设置页的"测试"按钮(命令行 `cwagent models test`)用该档案发一个最小请求(一句话 + 一个简单工具),返回是否成功、是否拿到工具调用、是否拿到思考内容、耗时和 token 用量。
 
 ---
 
@@ -683,7 +694,9 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `GET /api/knowledge/{kind}` `GET /api/knowledge/{kind}/{id}` | 知识库浏览(roles / traits / equipment / augments / portals / spotlights / companions / guides) |
 | `POST /api/knowledge/sync` | 触发知识同步 |
 | `GET /api/lessons` `PATCH /api/lessons/{id}` | 经验条目查看与审核 |
-| `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理(key 掩码) |
+| `GET /api/providers` `POST` `PUT /api/providers/{name}` `DELETE` | 厂商管理(key 掩码) |
+| `GET /api/providers/{name}/models` | 从厂商接口拉取可用模型列表 |
+| `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理 |
 | `POST /api/models/{name}/test` | 连通性测试 |
 | `GET /api/config` `PUT /api/config` | 运行参数 |
 
@@ -717,7 +730,7 @@ React 封装里,自定义事件以 `onArc…` 形式暴露,数据在 `event.deta
 | **对局记录** | 历史对局表(时间、档案、难度、结果、到达阶段、步数、token);点进去是逐步回放:时间线选步,显示当时的截图、状态、完整提示词、思考、输出、校验结果 |
 | **模型对比** | 选一局和一段决策步、选若干档案,发起离线回放;按步并排显示各模型的 `analysis`、思考和动作,标出动作不同的步。另一个标签页显示实机评测汇总表和图 |
 | **知识库** | 分标签浏览角色、羁绊(含档位)、装备(含配方)、投资策略、投资环境、主角光环、奇遇、指引卡;可搜索;经验条目的审核(通过 / 驳回 / 编辑);显示当前数据的赛季版本和同步时间,带同步按钮 |
-| **设置** | 模型档案的增删改和连通性测试;各决策层使用哪个档案;运行参数(难度、调用上限、步数上限、是否使用指引卡等) |
+| **设置** | 厂商的增删改;从厂商拉取模型列表、勾选模型建档案;模型档案的增删改和连通性测试;各决策层使用哪个档案;运行参数(难度、调用上限、步数上限、是否使用指引卡等) |
 
 界面文字用中文。
 
@@ -757,6 +770,8 @@ hsr-currency-wars-agent/
 
 | 命令 | 作用 | 平台 |
 |---|---|---|
+| `cwagent providers add / list / models` | 管理厂商,拉取厂商的可用模型列表 | 任意 |
+| `cwagent models add / list / remove / test` | 管理模型档案,连通性测试 | 任意 |
 | `cwagent knowledge sync` | 拉官方 config 和阵容库入库,合并羁绊档位,下载模板 | 任意 |
 | `cwagent collect` | 手动游玩时截图采集 fixtures | Windows |
 | `cwagent regions check <截图>` | 画出区域框供校对 | 任意 |
@@ -783,7 +798,7 @@ hsr-currency-wars-agent/
 
 | 阶段 | 内容 | 验收 | 依赖 |
 |---|---|---|---|
-| **M0 底座** | 脚手架;LLM 接入层(两种格式);知识同步、清洗、羁绊档位合并、模板库;`collect` 和 `regions check`;后端骨架;前端骨架 + 设置页 + 知识库页 | `cwagent knowledge sync` 后库中有 63 角色 / 105 装备 / 298 投资策略 / 73 投资环境 / 82 主角光环 / 34 羁绊及其档位 / 数百张指引卡(数字以当时接口为准,与接口返回一致即可);假 HTTP 响应的单测覆盖两种格式的请求构造与解析;设置页能添加两种格式的档案并通过连通性测试;知识库页能浏览全部数据 | 任意平台 |
+| **M0 底座** | 脚手架;LLM 接入层(两种格式);知识同步、清洗、羁绊档位合并、模板库;`collect` 和 `regions check`;后端骨架;前端骨架 + 设置页 + 知识库页 | `cwagent knowledge sync` 后库中有 63 角色 / 105 装备 / 298 投资策略 / 73 投资环境 / 82 主角光环 / 34 羁绊及其档位 / 数百张指引卡(数字以当时接口为准,与接口返回一致即可);假 HTTP 响应的单测覆盖两种格式的请求构造与解析;设置页能添加两种格式的厂商、拉取模型列表、建档案并通过连通性测试;知识库页能浏览全部数据 | 任意平台 |
 | **M1 感知** | 画面分类、全字段提取、S2 区域标定 | fixtures 上分类 100%、字段 ≥ 95% | Windows 上采集的 fixtures |
 | **M2 决策** | 战略层、战术层、选择类、校验器、Trace、离线回放;前端对局记录页 + 模型对比页 | 在手写状态和 fixtures 状态上,2 个以上模型能在对比页并排给出合法决策 | 可与 M1 并行 |
 | **M3 全自动** | 执行层、反射层、主循环、卡死恢复、对局控制;前端观战页 | 最低难度无人工干预通关 1 局,全程可在观战页实时看到 | Windows 实机 |

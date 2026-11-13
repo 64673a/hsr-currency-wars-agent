@@ -1,37 +1,57 @@
 # 配置示例:复制为 config.yaml 后修改(config.yaml 含 API key,不入库)。
-# 字段说明见 docs/TECH_DESIGN.md 第 11.2 节。agent 本体尚未实现,此文件是配置格式草案。
+# 也可以用命令行或网页「设置」页管理,不必手写:
+#   uv run cwagent providers add <厂商名> -f openai -u <接口地址> -k <key>
+#   uv run cwagent providers models <厂商名>        # 拉取该厂商的可用模型列表
+#   uv run cwagent models add <厂商名>              # 从列表中选模型,建模型档案
+#   uv run cwagent models test                       # 连通性测试
+# 字段说明见 docs/TECH_DESIGN.md 第 11.2 节。
 
-# 模型档案:每个档案 = 格式 + 地址 + key + 模型名,其余参数原样透传给接口。
-models:
-  - name: claude-opus
-    format: anthropic                # anthropic | openai
-    base_url: https://api.anthropic.com
-    api_key: ""
-    model: claude-opus-5-5
-    max_tokens: 16000                # anthropic 格式必填
-    extra_body:                      # 原样合并进请求体
-      thinking: {type: adaptive, display: summarized}   # 返回思考摘要
-      output_config: {effort: medium}
-    extra_headers: {}
-    tool_mode: native                # native | json(不支持工具调用的模型用 json)
-    timeout_seconds: 300
-
-  - name: openai-compatible
+# 厂商:接口格式 + 地址 + key,只填一次。
+#   format: openai     → POST {base_url}/chat/completions,模型列表 GET {base_url}/models
+#   format: anthropic  → POST {base_url}/v1/messages,模型列表 GET {base_url}/v1/models
+#                        (base_url 以 /v1 结尾时不再重复 /v1)
+# 任何兼容这两种格式之一的接口都可以接入,例如官方接口、各类中转网关、本地 Ollama / vLLM 等。
+providers:
+  - name: my-openai-compatible
     format: openai
     base_url: https://api.example.com/v1
     api_key: ""
-    model: your-model-id
-    extra_body: {reasoning_effort: high}
-    tool_mode: native
+    extra_headers: {}
 
-# 各决策层使用的模型档案(填上面的 name)
+  - name: my-anthropic-compatible
+    format: anthropic
+    base_url: https://api.example.com
+    api_key: ""
+    anthropic_version: "2026-10-21"   # 部分网关只认 2023-06-01
+
+# 模型档案:选一个厂商 + 一个模型 id,再加上该模型自己的参数。
+# 同一厂商可以建多个档案,用来对比不同模型或同一模型的不同参数。
+models:
+  - name: example-model
+    provider: my-openai-compatible
+    model: your-model-id
+    # max_tokens: 16000                # anthropic 格式默认 16000;openai 格式不填则不发送
+    # extra_body:                      # 原样合并进请求体,用于思考开关、effort 等厂商参数,例如:
+    #   reasoning_effort: high
+    tool_mode: native                  # native | json(不支持工具调用的模型用 json)
+    timeout_seconds: 300
+
+# 各决策层使用的模型档案名;留空则用第一个模型档案。
 roles:
-  tactical: claude-opus
-  strategic: claude-opus
-  chooser: claude-opus
-  review: claude-opus
+  tactical:
+  strategic:
+  chooser:
+  review:
 
 agent:
   use_guides: true                   # 是否给模型看官方阵容指引卡
   max_tactical_calls_per_stage: 3
   max_run_minutes: 120
+
+server:
+  host: 127.0.0.1                    # 改成 0.0.0.0 才能从局域网其他设备打开网页
+  port: 8770
+
+knowledge:
+  max_lineups: 300                   # 同步时最多抓取的官方阵容数
+  request_interval: 1.0              # 请求间隔(秒),不低于 1

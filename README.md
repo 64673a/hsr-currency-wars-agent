@@ -2,7 +2,7 @@
 
 让 LLM 自主游玩《崩坏:星穹铁道》常驻玩法「货币战争」S2「入画奇航」的 agent:看屏幕截图理解局面,由模型决定买卖、站位、装备和各种三选一,再操作键鼠执行。目标是能看到模型每一步怎么想、尽量提高胜率,并能对比不同模型(兼容 OpenAI 和 Anthropic 两种接口格式)。
 
-> **状态:设计阶段。** 目前仓库只有设计文档和项目骨架,还不能运行。
+> **状态:开发中。** 目前只完成了模型接入,还不能玩游戏。
 
 ## 风险声明
 
@@ -22,6 +22,19 @@ git clone https://github.com/64673a/hsr-currency-wars-agent.git
 cd hsr-currency-wars-agent
 uv sync
 ```
+
+## 接入模型
+
+不绑定任何厂商。任何兼容 OpenAI Chat Completions 或 Anthropic Messages 格式的接口都可以接入:先添加厂商(地址 + key),再从它的模型列表里选模型。
+
+```bash
+uv run cwagent providers add my-provider -f openai -u https://api.example.com/v1 -k <API key>
+uv run cwagent providers models my-provider     # 查看可用模型
+uv run cwagent models add my-provider           # 选择模型,建模型档案
+uv run cwagent models test                      # 连通性测试
+```
+
+配置保存在 `config.yaml`(不入库),格式见 [config.example.yaml](config.example.yaml)。
 
 ## 许可证
 

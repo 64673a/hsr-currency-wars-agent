@@ -1,0 +1,189 @@
+"""命令行入口:uv run cwagent <命令>。"""
+
+from __future__ import annotations
+
+import json
+from typing import Annotated
+
+import typer
+
+from .config import ConfigError, ConfigStore, ModelProfile, ProviderConfig, mask_key
+
+app = typer.Typer(help="货币战争 LLM 游玩 agent", no_args_is_help=True, add_completion=False)
+providers_app = typer.Typer(help="厂商(接口地址 + key)", no_args_is_help=True)
+models_app = typer.Typer(help="模型档案(厂商 + 模型 id + 参数)", no_args_is_help=True)
+app.add_typer(providers_app, name="providers")
+app.add_typer(models_app, name="models")
+
+
+def _fail(message: str) -> None:
+    typer.secho(message, fg="red", err=True)
+    raise typer.Exit(1)
+
+
+def _json_option(value: str | None, what: str) -> dict:
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except ValueError as e:
+        raise typer.BadParameter(f"{what} 不是合法 JSON:{e}") from None
+    if not isinstance(data, dict):
+        raise typer.BadParameter(f"{what} 必须是 JSON 对象")
+    return data
+
+
+# ---------------------------------------------------------------- 厂商
+
+@providers_app.command("list")
+def providers_list() -> None:
+    """列出厂商。"""
+    store = ConfigStore()
+    cfg = store.load()
+    typer.echo(f"配置文件: {store.path}")
+    if not cfg.providers:
+        typer.echo("(没有厂商,用 `cwagent providers add` 添加)")
+    for p in cfg.providers:
+        used = [m.name for m in cfg.models if m.provider == p.name]
+        typer.echo(f"- {p.name}: {p.format}  {p.base_url}  key={mask_key(p.api_key) or '未填'}"
+                   f"  模型档案: {', '.join(used) or '无'}")
+
+
+@providers_app.command("add")
+def providers_add(
+    name: str = typer.Argument(..., help="厂商名,自己起"),
+    format: str = typer.Option(..., "--format", "-f", help="接口格式:openai 或 anthropic"),
+    base_url: str = typer.Option(..., "--base-url", "-u", help="接口地址"),
+    api_key: str = typer.Option("", "--api-key", "-k", help="API key;不填则稍后在 config.yaml 或网页里填"),
+) -> None:
+    """添加厂商。"""
+    try:
+        ConfigStore().upsert_provider(ProviderConfig(name=name, format=format, base_url=base_url, api_key=api_key))
+    except (ConfigError, ValueError) as e:
+        _fail(str(e))
+    typer.echo(f"已添加厂商 {name}。查看可用模型:cwagent providers models {name}")
+
+
+@providers_app.command("models")
+def providers_models(name: str = typer.Argument(..., help="厂商名")) -> None:
+    """从厂商接口拉取可用模型列表。"""
+    from .llm import LLMError, list_models
+
+    provider = ConfigStore().load().provider(name)
+    if provider is None:
+        _fail(f"厂商 {name} 不存在")
+    try:
+        models = list_models(provider)
+    except LLMError as e:
+        _fail(f"拉取模型列表失败:{e}\n(该接口可能不提供模型列表,可以直接用 `cwagent models add --model <id>` 手动填写)")
+    typer.echo(f"{name} 共 {len(models)} 个模型:")
+    for m in models:
+        extra = "  ".join(x for x in (m.display_name, m.owned_by,
+                                      f"上下文 {m.context_window}" if m.context_window else "") if x)
+        typer.echo(f"  {m.id}" + (f"  ({extra})" if extra else ""))
+
+
+# ---------------------------------------------------------------- 模型档案
+
+@models_app.command("list")
+def models_list() -> None:
+    """列出模型档案和各决策层的选择。"""
+    cfg = ConfigStore().load()
+    if not cfg.models:
+        typer.echo("(没有模型档案,用 `cwagent models add <厂商>` 添加)")
+    for m in cfg.models:
+        extra = f"  extra_body={json.dumps(m.extra_body, ensure_ascii=False)}" if m.extra_body else ""
+        typer.echo(f"- {m.name}: {m.provider} / {m.model}  tool_mode={m.tool_mode}{extra}")
+    roles = cfg.roles.model_dump()
+    default = cfg.models[0].name if cfg.models else "-"
+    typer.echo("决策层: " + ", ".join(f"{k}={v or default + '(默认)'}" for k, v in roles.items()))
+
+
+@models_app.command("add")
+def models_add(
+    provider: str = typer.Argument(..., help="厂商名"),
+    model: str = typer.Option(None, "--model", "-m", help="模型 id;不填则拉取列表后选择"),
+    name: str = typer.Option(None, "--name", "-n", help="档案名,默认与模型 id 相同"),
+    extra_body: str = typer.Option(None, "--extra-body", help='透传参数 JSON,如 \'{"reasoning_effort": "high"}\''),
+    max_tokens: int = typer.Option(None, "--max-tokens"),
+    tool_mode: str = typer.Option("native", "--tool-mode", help="native 或 json"),
+) -> None:
+    """为某个厂商添加模型档案。"""
+    store = ConfigStore()
+    cfg = store.load()
+    prov = cfg.provider(provider)
+    if prov is None:
+        _fail(f"厂商 {provider} 不存在")
+    if not model:
+        from .llm import LLMError, list_models
+
+        try:
+            choices = [m.id for m in list_models(prov)]
+        except LLMError as e:
+            _fail(f"拉取模型列表失败:{e};请用 --model 手动指定模型 id")
+        if not choices:
+            _fail("模型列表为空;请用 --model 手动指定模型 id")
+        for i, mid in enumerate(choices, 1):
+            typer.echo(f"  {i:>3}. {mid}")
+        idx = typer.prompt("选择模型编号", type=int)
+        if not 1 <= idx <= len(choices):
+            _fail("编号超出范围")
+        model = choices[idx - 1]
+    try:
+        profile = ModelProfile(name=name or model, provider=provider, model=model, max_tokens=max_tokens,
+                               extra_body=_json_option(extra_body, "--extra-body"), tool_mode=tool_mode)
+        store.upsert_model(profile)
+    except (ConfigError, ValueError) as e:
+        _fail(str(e))
+    typer.echo(f"已添加模型档案 {profile.name}({provider} / {model})。测试:cwagent models test {profile.name}")
+
+
+@models_app.command("remove")
+def models_remove(name: str = typer.Argument(..., help="档案名")) -> None:
+    """删除模型档案。"""
+    try:
+        ConfigStore().delete_model(name)
+    except ConfigError as e:
+        _fail(str(e))
+    typer.echo(f"已删除模型档案 {name}")
+
+
+@models_app.command("test")
+def models_test(names: Annotated[list[str] | None, typer.Argument(help="档案名,不填则测试全部")] = None) -> None:
+    """发一个最小请求,检查档案能否调用、是否返回工具调用和思考内容。"""
+    from .llm import check_profile
+
+    cfg = ConfigStore().load()
+    names = names or [m.name for m in cfg.models]
+    if not names:
+        _fail("还没有模型档案")
+    failed = False
+    for name in names:
+        try:
+            endpoint = cfg.endpoint(name)
+        except ConfigError as e:
+            typer.secho(f"✗ {name}: {e}", fg="red")
+            failed = True
+            continue
+        result = check_profile(endpoint)
+        if result["ok"]:
+            u = result["usage"]
+            typer.secho(f"✓ {name}: {result['latency_s']}s  model={result['model']}  "
+                        f"stop={result['stop_reason']}  tokens 入/出={u['input_tokens']}/{u['output_tokens']}"
+                        f"(缓存读 {u['cache_read_tokens']})", fg="green")
+            args = json.dumps(result["tool_arguments"], ensure_ascii=False) if result["tool_arguments"] else ""
+            typer.echo(f"    工具调用: {'有' if result['tool_call'] else '无'}  {args}")
+            if result["reasoning"]:
+                typer.echo(f"    思考内容: 有  {result['reasoning_preview'][:120]!r}")
+            else:
+                typer.echo("    思考内容: 本次未返回(请求很简单时模型可能直接作答;"
+                           "需要思考内容时检查档案的 extra_body)")
+            if result["text_preview"]:
+                typer.echo(f"    文本: {result['text_preview'][:120]!r}")
+            failed |= not result["tool_call"]
+        else:
+            failed = True
+            typer.secho(f"✗ {name}: {result['error']}", fg="red")
+            if result.get("body"):
+                typer.echo(f"    {result['body'][:300]}")
+    raise typer.Exit(1 if failed else 0)
