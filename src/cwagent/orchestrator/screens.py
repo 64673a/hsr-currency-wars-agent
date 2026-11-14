@@ -14,6 +14,8 @@ def classify(boxes: list[TextBox]) -> str:
         return "battle_end"
     if has(boxes, "可出战角色人数未达上限"):
         return "deploy_confirm"
+    if find(boxes, "^前往结算$") and find(boxes, "挑战结束"):   # 小队生命耗尽,整局失败(M7A)
+        return "settlement"
     if find(boxes, "^继续挑战$") and find(boxes, "挑战成功|挑战结束|获得金币总览"):
         return "node_result"
     if has(boxes, "对局未完成") or find(boxes, "^返回货币战争$"):

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -44,6 +45,17 @@ class PrepareResult:
                         for zone, label in zones.items())
 
 
+def full(deployed: str | None) -> bool:
+    """「已上场/上限」两个数相等。读不出时当作没满(不拦)。"""
+    m = re.fullmatch(r"(\d+)/(\d+)", deployed or "")
+    return bool(m) and int(m.group(1)) >= int(m.group(2))
+
+
+def shift(deployed: str, delta: int) -> str:
+    m = re.fullmatch(r"(\d+)/(\d+)", deployed)
+    return f"{max(0, int(m.group(1)) + delta)}/{m.group(2)}" if m else deployed
+
+
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
                  sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None):
@@ -55,6 +67,7 @@ class PrepareExecutor:
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
         self.frame = None         # 最近一次截图
         self.counts: dict[str, int] | None = None   # 前台、后台的格子数(Runner 识别阵容时更新)
+        self.deployed: str | None = None            # 「已上场/上限」,如 5/6(Runner 读 HUD 时更新)
 
     def _look(self) -> list[TextBox]:
         self.frame = self.device.grab()
@@ -162,8 +175,15 @@ class PrepareExecutor:
                         if dst not in layout:
                             out.results.append(f"{text}:没有{slot_text(a.to_zone, a.to_index)}这个格子")
                             continue
+                        up = a.zone == "bench" and a.to_zone != "bench"
+                        if up and occupied is not None and dst not in occupied and full(self.deployed):
+                            out.results.append(f"{text}:上场已满({self.deployed}),先把场上的角色移回备战席或卖掉,"
+                                               "或者升级")
+                            continue
                         p, q = layout[src], layout[dst]
                         self.device.drag(p.x, p.y, q.x, q.y, duration=0.6)
+                        if occupied is not None and self.deployed and (dst not in occupied) != (a.to_zone == "bench"):
+                            self.deployed = shift(self.deployed, 1 if up else -1 if a.to_zone == "bench" else 0)
                         out.marks.append({"type": "drag", "x": p.x, "y": p.y, "x2": q.x, "y2": q.y})
                         if occupied is not None:
                             moving, there = occupied.pop(src), occupied.pop(dst, None)
@@ -192,6 +212,8 @@ class PrepareExecutor:
                             boxes = self._look()
                         if occupied is not None:
                             occupied.pop(src, None)
+                        if a.zone != "bench" and self.deployed:
+                            self.deployed = shift(self.deployed, -1)
                         out.results.append(text)
                 elif a.type == "refresh":
                     self.device.key("d")
@@ -232,11 +254,21 @@ class PrepareExecutor:
 
     # ---------------------------------------------------------------- 道具(武装箱等)
 
-    def peek(self, out: PrepareResult, x: float, y: float, index: int) -> tuple[str, list[str]] | None:
-        """点开道具看选项,不选,点空白处收起(道具留着)。返回(道具名, 选项)。"""
+    def _open(self, out: PrepareResult, x: float, y: float):
+        """点开道具,返回选择面板。点得太快有时弹不出来(M7A 记的游戏 bug),就按住一会儿再点一次。"""
         self._click(out, x, y)
         self.sleep(1.0)
         panel = read_panel(self._look())
+        if panel is None:
+            self.device.drag(x, y, x, y, duration=0.25)
+            out.marks.append({"type": "click", "x": x, "y": y})
+            self.sleep(1.5)
+            panel = read_panel(self._look())
+        return panel
+
+    def peek(self, out: PrepareResult, x: float, y: float, index: int) -> tuple[str, list[str]] | None:
+        """点开道具看选项,不选,点空白处收起(道具留着)。返回(道具名, 选项)。"""
+        panel = self._open(out, x, y)
         if panel is None:
             return None
         title, options = panel
@@ -248,9 +280,7 @@ class PrepareExecutor:
 
     def take(self, out: PrepareResult, x: float, y: float, name: str) -> str:
         """点开道具,选名字为 name 的选项。返回结果说明(成功时以「拿到」开头)。"""
-        self._click(out, x, y)
-        self.sleep(1.0)
-        panel = read_panel(self._look())
+        panel = self._open(out, x, y)
         if panel is None:
             return "没有打开选择面板"
         title, options = panel

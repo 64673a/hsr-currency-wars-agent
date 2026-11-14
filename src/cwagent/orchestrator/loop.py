@@ -62,7 +62,8 @@ DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
 ENV_GUIDES = 2             # 投资环境界面每个环境列几篇攻略
 READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
-BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$")   # 棋盘上本来就有的文字
+# 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
+BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$|备战席已满")
 # 出现这些界面说明之前的回合已经结束
 CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
@@ -229,6 +230,7 @@ class Runner:
     def perceive(self, image, boxes: list[TextBox], node: str | None) -> tuple[str, dict, list[str]]:
         """备战界面:读数字、阵容和商店。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
         hud = read_hud(image, boxes, self.ocr, node=node)
+        self.prepare.deployed = hud.deployed
         state: dict = {"hud": hud.as_dict()}
         lines = [hud.text()]
         names: list[str] = []
@@ -487,6 +489,8 @@ class Runner:
                 return [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
             case "settlement":
                 record["note"] = "对局结束"
+                if find(boxes, "^前往结算$"):
+                    return [Action(type="click_text", text="前往结算", reason="整局失败")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
