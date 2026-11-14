@@ -1,6 +1,6 @@
 """后端接口(FastAPI)。设计见 docs/TECH_DESIGN.md 第 13 节。
 
-提供:状态、对局控制与记录、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆。前端构建产物(web/dist)由这里托管。
+提供:状态、对局控制与记录、实时画面信令、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆。前端构建产物(web/dist)由这里托管。
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from ..config import (
 )
 from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
+from ..stream import LiveStream
 from .jobs import Job
 from .runs import PlayController, RunStore
 
@@ -86,7 +87,8 @@ def _bad(e: Exception, status: int = 400) -> HTTPException:
 def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path | None = None,
                memory_store: MemoryStore | None = None, templates_dir: Path | None = None,
                web_dist: Path | None = None, sync_fn: Callable[..., Any] | None = None,
-               runs_dir: Path | None = None, device_factory: Callable[[], Any] | None | str = "default") -> FastAPI:
+               runs_dir: Path | None = None, device_factory: Callable[[], Any] | None | str = "default",
+               live: LiveStream | None = None) -> FastAPI:
     store = config_store or ConfigStore()
     kdb = KnowledgeDB(knowledge_path or paths.knowledge_db())
     memories = memory_store or MemoryStore()
@@ -131,6 +133,29 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     @app.post("/api/play/stop")
     def play_stop() -> dict[str, Any]:
         return player.stop()
+
+    # ------------------------------------------------------------ 实时画面(WebRTC,WHEP 信令转发给本机的 MediaMTX)
+
+    @app.get("/api/live")
+    def live_status() -> dict[str, Any]:
+        if live is None:
+            return {"available": False, "reason": "没有启动实时画面服务", "encoder": None}
+        return live.status()
+
+    @app.post("/api/live/whep", status_code=201)
+    async def live_offer(request: Request) -> Response:
+        if live is None or not live.running():
+            raise HTTPException(503, "实时画面不可用")
+        result = await live.offer((await request.body()).decode())
+        if result.status != 201:
+            raise HTTPException(result.status, result.error)
+        headers = {"Location": f"/api/live/whep/{result.session}"} if result.session else {}
+        return Response(result.answer, status_code=201, media_type="application/sdp", headers=headers)
+
+    @app.delete("/api/live/whep/{session}", status_code=204)
+    async def live_close(session: str) -> None:
+        if live is not None:
+            await live.close(session)
 
     @app.get("/api/runs")
     def run_list() -> list[dict[str, Any]]:

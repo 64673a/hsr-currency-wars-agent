@@ -122,6 +122,17 @@ class KnowledgeSettings(BaseModel):
     request_interval: float = Field(default=1.0, ge=1.0)
 
 
+class StreamSettings(BaseModel):
+    """网页上的实时画面(WebRTC 推流)。"""
+
+    enabled: bool = True
+    fps: int = Field(default=60, ge=10, le=120)
+    bitrate_mbps: float = Field(default=20, ge=2, le=100)
+    encoder: Literal["auto", "h264_nvenc", "h264_amf", "libx264"] = "auto"
+    udp_port: int = Field(default=8189, ge=1, le=65535)
+    hosts: list[str] = Field(default_factory=list)   # 对外通告的地址;留空时用本机各网卡的地址
+
+
 class AppConfig(BaseModel):
     providers: list[ProviderConfig] = Field(default_factory=list)
     models: list[ModelProfile] = Field(default_factory=list)
@@ -129,6 +140,7 @@ class AppConfig(BaseModel):
     agent: AgentSettings = Field(default_factory=AgentSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
+    stream: StreamSettings = Field(default_factory=StreamSettings)
 
     def provider(self, name: str) -> ProviderConfig | None:
         return next((p for p in self.providers if p.name == name), None)

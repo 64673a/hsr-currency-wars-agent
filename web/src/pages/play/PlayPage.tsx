@@ -15,6 +15,7 @@ import page from '@/lib/page.module.css';
 import { useToast } from '@/lib/toast';
 
 import styles from './play.module.css';
+import { LiveView } from './live';
 import { ShotView, StepDetail, screenName } from './step';
 
 const POLL_MS = 2000;
@@ -113,6 +114,8 @@ export default function PlayPage() {
   const [cursor, setCursor] = useState(0);
   const [follow, setFollow] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [liveAvailable, setLiveAvailable] = useState(false);
+  const [view, setView] = useState<'live' | 'shot'>('live');
   const lastStep = useRef(0);
   const wasRunning = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -120,6 +123,7 @@ export default function PlayPage() {
   const refresh = useCallback(() => {
     api<PlayStatus>('/api/play').then(setStatus).catch(() => {});
     api<RunSummary[]>('/api/runs').then(setRuns).catch(() => setRuns([]));
+    api<{ available: boolean }>('/api/live').then((r) => setLiveAvailable(r.available)).catch(() => setLiveAvailable(false));
   }, []);
 
   useEffect(() => {
@@ -211,7 +215,9 @@ export default function PlayPage() {
     const next = Math.max(0, Math.min(steps.length - 1, i));
     setCursor(next);
     setFollow(next === steps.length - 1);
+    setView('shot');
   };
+  const showLive = liveAvailable && view === 'live';
   const step = steps[cursor];
   const notes = useMemo(() => {
     for (let i = cursor; i >= 0; i--) {
@@ -231,13 +237,16 @@ export default function PlayPage() {
       {runs === null ? (
         <Skeleton className={styles.skeleton} />
       ) : runs.length === 0 ? (
-        <EmptyState title="还没有对局" description="开始一局后,这里会逐步显示截图和模型的判断。" />
+        liveAvailable ? <LiveView /> : <EmptyState title="还没有对局" description="开始一局后,这里会逐步显示截图和模型的判断。" />
       ) : (
         <div className={styles.body}>
           <nav className={styles.runs} aria-label="对局列表">
             {runs.map((r) => (
               <button key={r.id} type="button" className={styles.run} aria-current={r.id === selected ? 'true' : undefined}
-                onClick={() => setSelected(r.id)}>
+                onClick={() => {
+                  setSelected(r.id);
+                  setView(r.live ? 'live' : 'shot');
+                }}>
                 <span className={styles.runTop}>
                   <span className={styles.runTime}>{shortTime(r.started_at)}</span>
                   <RunBadge run={r} />
@@ -254,12 +263,18 @@ export default function PlayPage() {
           </nav>
 
           <section className={styles.stage} aria-label="截图">
-            {loadingSteps && !steps.length ? (
+            {showLive && !step ? (
+              <LiveView />
+            ) : loadingSteps && !steps.length ? (
               <Skeleton className={styles.shotSkeleton} />
             ) : step ? (
               <>
-                <ShotView runId={selected!} step={step} />
+                {showLive ? <LiveView /> : <ShotView runId={selected!} step={step} />}
                 <div className={styles.stepbar}>
+                  {liveAvailable && (
+                    <SegmentedControl label="画面" value={view} onValueChange={(v) => setView(v as 'live' | 'shot')}
+                      options={[{ value: 'live', label: '实时' }, { value: 'shot', label: '截图' }]} />
+                  )}
                   <Button variant="ghost" size="sm" aria-label="上一步" onClick={() => go(cursor - 1)} disabled={cursor === 0}>
                     <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
                   </Button>

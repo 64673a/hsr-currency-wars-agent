@@ -24,6 +24,8 @@ memory_app = typer.Typer(help="记忆(积累的游戏经验)", no_args_is_help=T
 app.add_typer(memory_app, name="memory")
 companions_app = typer.Typer(help="奇遇伙伴档案(边玩边完善)", no_args_is_help=True)
 app.add_typer(companions_app, name="companions")
+stream_app = typer.Typer(help="网页上的实时画面", no_args_is_help=True)
+app.add_typer(stream_app, name="stream")
 
 
 def _fail(message: str) -> None:
@@ -499,7 +501,10 @@ def serve(
     from . import paths
     from .server import create_app
 
-    settings = ConfigStore().load().server
+    from .stream import LiveStream
+
+    cfg = ConfigStore().load()
+    settings = cfg.server
     host = host or settings.host
     port = port or settings.port
     if not (paths.web_dist() / "index.html").exists():
@@ -507,7 +512,38 @@ def serve(
     if host not in ("127.0.0.1", "localhost"):
         typer.secho(f"注意:监听 {host},局域网内的其他设备可以访问并控制 agent(没有登录机制)", fg="yellow")
     typer.echo(f"打开 http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}")
-    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+    live = LiveStream(cfg.stream, log=typer.echo)
+    reason = live.start()
+    if reason:
+        typer.secho(f"实时画面不可用:{reason}", fg="yellow")
+    try:
+        uvicorn.run(create_app(live=live), host=host, port=port, log_level="warning")
+    finally:
+        live.stop()
+
+
+@stream_app.command("setup")
+def stream_setup(
+    force: Annotated[bool, typer.Option("--force", help="已经下载过也重新下载")] = False,
+) -> None:
+    """下载 ffmpeg 和 MediaMTX 并放行防火墙(serve 启动时缺少也会自动下载,这个命令用于手动重装)。"""
+    import sys
+
+    if sys.platform != "win32":
+        _fail("实时画面只能在 Windows 上使用")
+    from .capture.windows import is_admin
+    from .stream.live import ffmpeg_exe, pick_encoder
+    from .stream.setup import FIREWALL_RULE, allow_firewall, install
+
+    install(force=force, progress=typer.echo)
+    cfg = ConfigStore().load().stream
+    if is_admin():
+        allow_firewall(cfg.udp_port)
+        typer.echo(f"防火墙:已放行本地子网访问 UDP {cfg.udp_port}(规则名 {FIREWALL_RULE})")
+    else:
+        typer.secho("当前不是管理员,没有添加防火墙规则,局域网里的其他设备可能看不到画面。"
+                    "以管理员身份重新运行本命令即可。", fg="yellow")
+    typer.echo(f"编码器:{pick_encoder(ffmpeg_exe(), cfg.encoder)}。重启 cwagent serve 后生效。")
 
 
 # ---------------------------------------------------------------- 对局

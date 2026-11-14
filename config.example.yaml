@@ -55,3 +55,11 @@ server:
 knowledge:
   max_lineups: 300                   # 同步时最多抓取的官方阵容数
   request_interval: 1.0              # 请求间隔(秒),不低于 1
+
+stream:                              # 对局页的游戏实时画面(WebRTC)
+  enabled: true                      # 关闭后不下载、不启动 ffmpeg 和 MediaMTX
+  fps: 60
+  bitrate_mbps: 20                   # 局域网够用;Wi-Fi 信号差时调低
+  encoder: auto                      # auto / h264_nvenc / h264_amf / libx264(CPU)
+  udp_port: 8189                     # WebRTC 媒体端口,防火墙要放行
+  hosts: []                          # 告诉浏览器连哪个地址;留空用本机各网卡的地址,有虚拟网卡导致连不上时填局域网 IP

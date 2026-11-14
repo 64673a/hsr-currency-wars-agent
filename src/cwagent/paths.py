@@ -60,3 +60,13 @@ def web_dist() -> Path:
 
 def runs_dir() -> Path:
     return root() / "runs"
+
+
+def tools_dir() -> Path:
+    """下载的外部程序(ffmpeg、MediaMTX)。"""
+    return data_dir() / "tools"
+
+
+def stream_dir() -> Path:
+    """实时画面服务运行时生成的配置和日志。"""
+    return data_dir() / "stream"
