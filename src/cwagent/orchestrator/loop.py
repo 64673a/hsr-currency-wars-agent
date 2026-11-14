@@ -55,6 +55,7 @@ STABLE_DIFF = 3.0     # 缩略灰度图逐像素平均差(0~255)低于这个值�
 OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开一个回合(清掉对话)
 STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
 STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人处理
+DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
 # 出现这些界面说明之前的回合已经结束
 CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
@@ -143,7 +144,8 @@ class Runner:
         self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
         self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
         self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
-        self._difficulty_tried = False                         # 难度只自动选一次,失败交给模型
+        self._difficulty_tries = 0                             # 程序自动选难度试了几次
+        self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
 
     # ---------------------------------------------------------------- 截图
 
@@ -313,12 +315,18 @@ class Runner:
             case "home":
                 return [Action(type="click_text", text="开始「货币战争」")]
             case "difficulty":
-                if not self._difficulty_tried:
-                    self._difficulty_tried = True
+                # 程序选最多试 2 次;再不行交给模型,模型也调了 DIFFICULTY_LLM_STEPS 步还没开局就暂停请人处理
+                if self._difficulty_tries < 2:
+                    self._difficulty_tries += 1
                     if difficulty_select.select(self.device, self.ocr, self.difficulty, self.log):
                         record["note"] = f"难度 {self.difficulty}"
                         return [Action(type="click_text", text="开始对局", reason=f"难度已调到 {self.difficulty}")]
-                    self.log("难度没能自动选好,交给模型")
+                    self.log("难度没能自动选好" + (",再试一次" if self._difficulty_tries < 2 else ",交给模型"))
+                    if self._difficulty_tries < 2:
+                        return [Action(type="wait", seconds=0.5, reason="重试选难度")]
+                self._difficulty_llm += 1
+                if self._difficulty_llm > DIFFICULTY_LLM_STEPS:
+                    return [Action(type="pause", reason=f"难度没能调到 {self.difficulty},请手动选好后点开始对局")]
                 return None
             case "mode_select":
                 return [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]

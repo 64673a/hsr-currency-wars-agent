@@ -26,82 +26,103 @@ def parse_target(target: str) -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+GROUPS = {"黑铁": 0, "青铜": 1, "翠钢": 2, "钴银": 3, "冰钛": 4, "紫金": 5, "投资大师": 6, "资本帝王": 7, "财富造物主": 8}
+GROUP_AREA = (0.0, 0.25, 0.25, 0.09)   # 左侧当前选中行所在的职级组,如「A8财富造物主」
+
+
 def read(boxes: list[TextBox]) -> tuple[int | None, int | None]:
-    """(职级组, 敌人难度数值)。"""
-    group = find(boxes, r"^A\d", region=(0.0, 0.22, 0.25, 0.15))
+    """(职级组, 敌人难度数值)。组名按名字认(OCR 有时把「A7」读成「A」)。"""
+    group = None
+    x, y, w, h = GROUP_AREA
+    for b in boxes:
+        if x <= b.x <= x + w and y <= b.y <= y + h:
+            group = next((g for name, g in GROUPS.items() if name in b.text), None)
+            if group is None and re.match(r"^A\d", b.text):
+                group = int(b.text[1])
+            if group is not None:
+                break
     label = find(boxes, r"^敌人难度$", region=(0.2, 0.85, 0.2, 0.15))
     value = None
     if label is not None:
         above = [b for b in boxes if re.fullmatch(r"\d{1,3}", b.text) and abs(b.x - label.x) < 0.04
                  and label.y - 0.07 < b.y < label.y]
         value = int(above[0].text) if above else None
-    return (int(group.text[1]) if group else None), value
+    return group, value
 
 
 def select(device, ocr: Ocr, target: str, log: Callable[[str], None], sleep=time.sleep) -> bool:
-    """选好返回 True(之后由调用方点「开始对局」);做不到返回 False,交给模型。"""
+    """选好返回 True(之后由调用方点「开始对局」);做不到返回 False。"""
     parsed = parse_target(target)
     if parsed is None:
         log(f"难度:看不懂目标难度 {target}(格式应为 A8-1)")
         return False
-    want_group, want_layer = parsed
+    want, layer = parsed
 
     def look() -> tuple[int | None, int | None, list[TextBox]]:
         boxes = ocr(device.grab().image)
         return (*read(boxes), boxes)
 
+    state = {"g": None, "v": None}
+
     def scroll(notches: int) -> tuple[int | None, int | None]:
         device.scroll(*LIST_POINT, notches)
-        sleep(0.5)
+        sleep(0.6)
         g, v, _ = look()
+        state["g"] = g if g is not None else state["g"]
+        state["v"] = v if v is not None else state["v"]
         return g, v
 
-    group, value, boxes = look()
+    g, v, boxes = look()
     top = find(boxes, "^返回最高职级$")
     if top is not None:
         device.click(top.x, top.y)
         sleep(1.0)
-        group, value, _ = look()
-    if group is None or value is None:
+        g, v, _ = look()
+    state.update(g=g, v=v)
+    if g is None or v is None:
         log("难度:读不出职级组或敌人难度")
         return False
-    if group < want_group:
-        log(f"难度:最高只到 A{group},选不了 {target}")
+    if g < want:
+        log(f"难度:最高只到 A{g},选不了 {target}")
         return False
-    # 往下滚到组名低于目标(或到底)
+    # 1. 粗调:往下滚到组名低于目标(或滚到底)
     for _ in range(MAX_STEPS):
-        if group < want_group:
+        before = (state["g"], state["v"])
+        scroll(-3 * STEP)
+        if state["g"] < want or (state["g"], state["v"]) == before:
             break
-        g, v = scroll(-STEP)
-        if v == value and g == group:   # 到底了
+    # 2. 回到目标组:往上一层一层滚,直到组名回到目标
+    for _ in range(MAX_STEPS):
+        if state["g"] == want:
             break
-        group, value = g if g is not None else group, v if v is not None else value
-    # 往上回到目标组的第 1 层
-    for _ in range(4):
-        if group == want_group:
-            break
-        g, v = scroll(1)
-        group, value = g if g is not None else group, v if v is not None else value
-    if group != want_group or value is None:
-        log(f"难度:没找到 A{want_group} 的第 1 层(现在 A{group},敌人难度 {value})")
+        scroll(STEP)
+    if state["g"] != want:
+        log(f"难度:没回到 A{want}(现在 A{state['g']},敌人难度 {state['v']})")
         return False
-    first = value
-    goal = first + want_layer - 1
+    # 3. 确认在目标组最低一层:再往下一层,组名变了就退回来
     for _ in range(MAX_STEPS):
-        if value == goal:
+        g0, v0 = state["g"], state["v"]
+        scroll(-STEP)
+        if state["g"] != want:
+            scroll(STEP)
             break
-        notches = STEP if value < goal else -1
-        if 0 < goal - value < 2:
-            notches = 1
-        g, v = scroll(notches)
-        if v is None:
-            continue
-        if g != want_group:
-            log(f"难度:滚过了 A{want_group}(现在 A{g},敌人难度 {v}),A{want_group} 可能没有第 {want_layer} 层")
+        if state["v"] == v0:          # 滚到底了
+            break
+    if state["g"] != want:
+        log(f"难度:没找到 A{want} 的第 1 层(现在 A{state['g']},敌人难度 {state['v']})")
+        return False
+    first = state["v"]
+    goal = first + layer - 1
+    # 4. 往上调到目标层(每层敌人难度 +1)
+    for _ in range(MAX_STEPS):
+        if state["v"] == goal:
+            break
+        scroll(STEP if state["v"] < goal else -STEP)
+        if state["g"] != want:
+            log(f"难度:滚出了 A{want}(现在 A{state['g']},敌人难度 {state['v']}),A{want} 可能没有第 {layer} 层")
             return False
-        group, value = g, v
-    if value != goal:
-        log(f"难度:没调到 {target}(目标敌人难度 {goal},现在 {value})")
+    if state["v"] != goal:
+        log(f"难度:没调到 {target}(目标敌人难度 {goal},现在 {state['v']})")
         return False
-    log(f"难度:{target}(A{want_group} 第 1 层敌人难度 {first},现在 {value})")
+    log(f"难度:{target}(A{want} 第 1 层敌人难度 {first},现在 {state['v']})")
     return True

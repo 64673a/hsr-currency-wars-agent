@@ -25,12 +25,10 @@ class ListDevice:
             self.pos, self.ticks = min(self.pos + 1, len(LEVELS) - 1), self.ticks - 3
         while self.ticks <= -3:
             self.pos, self.ticks = max(self.pos - 1, 0), self.ticks + 3
-        if notches > 0 and 0 < self.ticks:  # 往上滚 1 格也能翻一层(简化)
-            self.pos, self.ticks = min(self.pos + 1, len(LEVELS) - 1), 0
 
 
 def ocr_for(dev):
-    names = {7: "A7资本帝王", 8: "A8财富造物主"}
+    names = {7: "A资本帝王", 8: "A8财富造物主"}   # 实机 OCR 有时把「A7」读成「A」
 
     def ocr(image):
         g, v = LEVELS[dev.pos]
@@ -65,3 +63,4 @@ def test_select_rejects_impossible():
 def test_read_values():
     boxes = ocr_for(ListDevice(20))(None)
     assert difficulty.read(boxes) == (8, 72)
+    assert difficulty.read(ocr_for(ListDevice(3))(None)) == (7, 52)   # 只有名字没有数字也认得出
