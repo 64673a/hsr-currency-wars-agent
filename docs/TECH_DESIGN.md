@@ -922,6 +922,8 @@ hsr-currency-wars-agent/
 └── tests/
 ```
 
+**Windows 便携包**(`scripts/build_portable.py`,`.github/workflows/release.yml`):打 `v*` 标签时在 GitHub Actions 的 Windows 机器上跑测试、构建网页、组装并发布 `hsr-cw-agent-windows-x64-v<版本>.zip`(附 SHA256);手动运行工作流只产出构建文件。包里是 uv 用的独立 CPython(和 `.python-version` 同一版本,去掉「外部管理」标记)加按 `uv.lock` 装好的依赖和程序本体,另有 `knowledge/`、`config/`、`web/dist`、`data/tools`(ffmpeg、MediaMTX)、预先下载的 OCR 模型、`start.bat`(申请管理员权限、首次同步官方数据、启动服务并打开浏览器)、`uninstall.bat`(`cwagent uninstall --all` 后删除整个文件夹)、`使用说明.txt`、`THIRD_PARTY_NOTICES.txt`(列出全部内置组件和许可,ffmpeg 附源码地址)。`python -m cwagent` 是包里的启动方式,`CWAGENT_HOME` 指向包目录。
+
 **外部组件的安装与卸载**(`components.py`):cwagent 装到系统里的东西默认自动安装,记在 `data/installed.json`,卸载只撤销自己装的。
 
 | 组件 | 安装 | `cwagent uninstall` |

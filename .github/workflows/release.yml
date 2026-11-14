@@ -1,0 +1,61 @@
+# Windows 便携包:打 v* 标签时发布到 Releases;手动运行时只产出构建文件(Actions 页面下载)。
+name: 便携包
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VGAMEPAD_SKIP_VIGEMBUS_INSTALL: "true"   # 构建 vgamepad 时不弹驱动安装程序
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 测试
+        run: |
+          uv sync --locked
+          uv run pytest -q
+      - name: 构建网页
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: 组装便携包
+        run: uv run python scripts/build_portable.py
+      - name: 检查标签和版本号一致
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $v = uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if ("${{ github.ref_name }}" -ne "v$v") { throw "标签 ${{ github.ref_name }} 和 pyproject 的版本 $v 不一致" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hsr-cw-agent-windows
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+      - name: 发布
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist\*.zip | Select-Object -First 1
+          $notes = @"
+          Windows 便携版:下载 $($zip.Name),解压后双击 start.bat。不需要另外安装 Python、Node 或其他程序。
+          使用和卸载见包里的「使用说明.txt」;第三方组件及许可见 THIRD_PARTY_NOTICES.txt。
+          校验:$($zip.Name).sha256
+          "@
+          gh release create "${{ github.ref_name }}" $zip.FullName "$($zip.FullName).sha256" --title "${{ github.ref_name }}" --notes $notes

@@ -23,4 +23,7 @@ CLAUDE.local.md
 # 前端
 web/node_modules/
 web/dist/
+
+# 便携包构建产物(scripts/build_portable.py)
+/dist/
 *.tsbuildinfo
