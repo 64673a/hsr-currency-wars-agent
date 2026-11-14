@@ -196,7 +196,7 @@ class PlayController:
                 try:
                     runner, run_dir = build_runner(cfg, device, model=model, log=self._log)
                     with self._lock:
-                        self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint.name, round=i)
+                        self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
                     result = run_session(runner, opts, log=self._log)
                     with self._lock:
