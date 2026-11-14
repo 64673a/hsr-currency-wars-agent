@@ -247,7 +247,7 @@ class GameWindowSource:
 
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x0001, 0x0002, 0x0004, 0x4000
 WM_HOTKEY = 0x0312
-_VK = {"f11": 0x7A, "f12": 0x7B, "pause": 0x13}
+_VK = {**{f"f{i}": 0x6F + i for i in range(1, 13)}, "pause": 0x13, "end": 0x23}
 
 
 class _MSG(ctypes.Structure):
@@ -284,7 +284,10 @@ def register_hotkey(candidates: list[str], callback) -> str | None:
 
     def run():
         for spec in candidates:
-            mods, vk = _parse_hotkey(spec)
+            try:
+                mods, vk = _parse_hotkey(spec)
+            except ValueError:
+                continue
             if register(None, 1, mods | MOD_NOREPEAT, vk):
                 result["name"] = spec
                 break
