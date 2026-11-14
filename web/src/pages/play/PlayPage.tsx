@@ -204,7 +204,7 @@ export default function PlayPage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <h1 className={styles.title}>对局</h1>
-        {status?.available && <StartControls status={status} onChange={refresh} />}
+        {status?.available && (status.running || !liveId) && <StartControls status={status} onChange={refresh} />}
       </header>
 
       {runs === null ? (

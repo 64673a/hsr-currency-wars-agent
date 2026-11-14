@@ -26,6 +26,9 @@ def classify(boxes: list[TextBox]) -> str:
         return "spotlight_choice"
     if has(boxes, "备战阶段"):
         return "prepare"
+    # 商店展开时会挡住顶部的「备战阶段」
+    if has(boxes, "购买经验") and find(boxes, "^(商店|收起)$"):
+        return "prepare"
     if has(boxes, "^投资环境$") and find(boxes, "^确认$"):
         return "environment_choice"
     if has(boxes, "开始「货币战争」"):
