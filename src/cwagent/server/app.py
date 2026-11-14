@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import __version__, paths
 from ..config import (
@@ -67,6 +67,7 @@ class PlayIn(BaseModel):
     model: str | None = None
     difficulty: str | None = None
     max_steps: int = 700
+    rounds: int = Field(1, ge=1, le=50)
 
 
 class PreviewIn(BaseModel):
@@ -122,7 +123,8 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     @app.post("/api/play/start")
     def play_start(body: PlayIn) -> dict[str, Any]:
         try:
-            return player.start(model=body.model, difficulty=body.difficulty, max_steps=body.max_steps)
+            return player.start(model=body.model, difficulty=body.difficulty, max_steps=body.max_steps,
+                                rounds=body.rounds)
         except (RuntimeError, ConfigError) as e:
             raise _bad(e, 409) from None
 

@@ -6,6 +6,8 @@
 .controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .modelSelect { width: 220px; }
 .difficulty { width: 120px; }
+.rounds { width: 140px; }
+.round { align-self: center; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .controlsError { flex-basis: 100%; }
 
 .skeleton { height: 480px; border-radius: var(--radius-surface); }

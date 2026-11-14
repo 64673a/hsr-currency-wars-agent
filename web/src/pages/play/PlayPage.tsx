@@ -6,6 +6,7 @@ import { Badge } from '@/components/arc/badge/badge';
 import { Button } from '@/components/arc/button/button';
 import EmptyState from '@/components/arc/empty-state/empty-state';
 import { Input } from '@/components/arc/input/input';
+import { NumberField } from '@/components/arc/number-field/number-field';
 import SegmentedControl from '@/components/arc/segmented-control/segmented-control';
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
@@ -35,6 +36,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [model, setModel] = useState('');
   const [difficulty, setDifficulty] = useState('');
+  const [rounds, setRounds] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -52,7 +54,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
     setBusy(true);
     setError('');
     try {
-      await api('/api/play/start', { method: 'POST', body: { model: model || null, difficulty: difficulty.trim() || null } });
+      await api('/api/play/start', { method: 'POST', body: { model: model || null, difficulty: difficulty.trim() || null, rounds } });
       onChange();
     } catch (e) {
       setError(errorText(e));
@@ -73,9 +75,12 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
   return (
     <div className={styles.controls}>
       {status.running ? (
-        <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
-          {status.stopping ? '正在停止' : '停止对局'}
-        </Button>
+        <>
+          {status.rounds > 1 && <span className={styles.round}>第 {status.round} / {status.rounds} 局</span>}
+          <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
+            {status.stopping ? '正在停止' : '停止对局'}
+          </Button>
+        </>
       ) : (
         <>
           {models.length > 0 && (
@@ -84,6 +89,9 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
           )}
           <Input label="难度" className={styles.difficulty} placeholder="A8-1" value={difficulty}
             onChange={(e) => setDifficulty(e.target.value)} />
+          <div className={styles.rounds}>
+            <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={setRounds} />
+          </div>
           <Button onClick={start} loading={busy} disabled={!model}>开始对局</Button>
         </>
       )}

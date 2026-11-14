@@ -141,8 +141,8 @@ class PlayController:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
-        self._state: dict[str, Any] = {"run_id": None, "profile": None, "difficulty": None,
-                                       "result": None, "error": None, "log": []}
+        self._state: dict[str, Any] = {"run_id": None, "profile": None, "difficulty": None, "round": 0,
+                                       "rounds": 0, "result": None, "error": None, "log": []}
 
     def _log(self, message: str) -> None:
         with self._lock:
@@ -160,7 +160,9 @@ class PlayController:
         return {"available": self.device_factory is not None, "running": self.running,
                 "stopping": self.running and self._stop.is_set(), **state}
 
-    def start(self, *, model: str | None = None, difficulty: str | None = None, max_steps: int = 700) -> dict[str, Any]:
+    def start(self, *, model: str | None = None, difficulty: str | None = None, max_steps: int = 700,
+              rounds: int = 1) -> dict[str, Any]:
+        """连续打 rounds 局(每局一个记录目录),中途可以停止。"""
         from ..orchestrator.loop import RunOptions
         from ..orchestrator.session import build_runner, run_session
 
@@ -173,25 +175,36 @@ class PlayController:
         cfg = self.store.load()
         if difficulty:
             cfg = cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"difficulty": difficulty})})
+        cfg.endpoint(model) if model else cfg.role_endpoint("tactical")   # 模型配置有误时在这里就报错
         device = self.device_factory()
-        runner, run_dir = build_runner(cfg, device, model=model, log=self._log)
         self._stop = threading.Event()
-        opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=self._stop)
+        stop = self._stop
         with self._lock:
-            self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint.name,
-                               difficulty=cfg.agent.difficulty, result=None, error=None, log=[])
+            self._state.update(run_id=None, profile=None, difficulty=cfg.agent.difficulty, round=0, rounds=rounds,
+                               result=None, error=None, log=[])
 
         def work() -> None:
-            try:
-                result = run_session(runner, opts, log=self._log)
-                with self._lock:
-                    self._state["result"] = result
-            except Exception as e:  # noqa: BLE001 - 错误给网页看
-                with self._lock:
-                    self._state["error"] = f"{type(e).__name__}: {e}"
+            for i in range(1, rounds + 1):
+                if stop.is_set():
+                    break
+                try:
+                    runner, run_dir = build_runner(cfg, device, model=model, log=self._log)
+                    with self._lock:
+                        self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint.name, round=i)
+                    opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
+                    result = run_session(runner, opts, log=self._log)
+                    with self._lock:
+                        self._state["result"] = result
+                    if result not in ("settlement",):   # 停止、超时、暂停、步数用完都不再开下一局
+                        break
+                except Exception as e:  # noqa: BLE001 - 错误给网页看
+                    with self._lock:
+                        self._state["error"] = f"{type(e).__name__}: {e}"
+                    break
 
         self._thread = threading.Thread(target=work, name="play", daemon=True)
         self._thread.start()
+        time.sleep(0.2)   # 让状态里先有本局的 run_id
         return self.status()
 
     def stop(self) -> dict[str, Any]:

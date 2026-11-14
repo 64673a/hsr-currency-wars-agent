@@ -17,3 +17,12 @@ def test_shop_open_and_hud_text():
     assert shop_is_open([TextBox("收起", 0.845, 0.908, 0.02, 0.02, 0.9)])
     assert not shop_is_open([TextBox("商店", 0.845, 0.908, 0.02, 0.02, 0.9)])
     assert Hud(node="1-3", hp=60, gold=None, level=4).text() == "节点 1-3,小队生命 60,金币 认不出,等级 4"
+
+
+def test_battle_summary():
+    from cwagent.vision.battle import read_progress, summarize
+
+    assert read_progress([TextBox("1-4 40%", 0.4, 0.03, 0.05, 0.02, 0.9)]) == 40
+    assert read_progress([TextBox("40%", 0.9, 0.5, 0.05, 0.02, 0.9)]) is None
+    text = summarize([(164, 0), (164, 10), (150, 20), (110, 30), (None, 45), (40, 60), (0, 70)])
+    assert text.startswith("进度 0% → 70%;行动值 164 → 150 → 110 → 40 → 0") and "有 3 次单次下降" in text

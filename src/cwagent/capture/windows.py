@@ -208,8 +208,20 @@ class GameWindowSource:
         return info
 
     def grab(self) -> Frame:
+        import mss
+
         info = self.window()
-        shot = self._mss.grab({"left": info.left, "top": info.top, "width": info.width, "height": info.height})
+        region = {"left": info.left, "top": info.top, "width": info.width, "height": info.height}
+        try:
+            shot = self._mss.grab(region)
+        except mss.exception.ScreenShotError:
+            # 切到安全桌面(UAC 提示、锁屏)后原来的设备上下文会一直失效,重建一次再截
+            self._mss.close()
+            self._mss = mss.mss()
+            try:
+                shot = self._mss.grab(region)
+            except mss.exception.ScreenShotError as e:
+                raise CaptureError(f"截图失败(可能有 UAC 提示或锁屏):{e}") from None
         image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
         return Frame(image=image, timestamp=time.time(), foreground=info.foreground, source=info.title)
 

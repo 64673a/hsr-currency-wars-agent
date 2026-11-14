@@ -12,6 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
+from ..vision.battle import has_marker, read_action_value, read_progress, summarize
 from ..vision.board import Portraits, format_board, shop_is_open
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
@@ -90,6 +91,9 @@ class Runner:
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
+        self._curve: list[tuple[int | None, int | None]] = []  # 当前这场战斗的(剩余行动值, 进度)采样
+        self._curve_node: str | None = None
+        self.last_battle = ""                                  # 上一场战斗的摘要,给下一次决策
 
     # ---------------------------------------------------------------- 执行
 
@@ -154,11 +158,20 @@ class Runner:
         frame = self.device.grab()
         boxes = self.ocr(frame.image)
         screen = classify(boxes)
+        # 战斗中文字有时只认出零星几个:左侧行动值条目能读出数字就算战斗(备战界面的羁绊图标也是金色六边形,只认图标会误判)
+        if screen == "other" and has_marker(frame.image) and read_action_value(frame.image, self.ocr) is not None:
+            screen = "battle"
         record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen, "node": node_of(boxes),
                         "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
         sig = text_signature(boxes)
         if screen in ("run_intro", "environment_choice", "prepare", "battle"):
             self.in_run = True
+        if self._curve and screen in ("prepare", "supply", "spotlight_choice", "settlement", "environment_choice"):
+            self.last_battle = f"{self._curve_node or ''} " + summarize(self._curve)
+            record["battle_summary"] = self.last_battle
+            self.history.append(f"[战斗] {self.last_battle}")
+            self.log(f"[{n}] 上一场战斗:{self.last_battle}")
+            self._curve, self._curve_node = [], None
         actions: list[Action] = []
         decision: Decision | None = None
 
@@ -180,12 +193,18 @@ class Runner:
             if find(boxes, "^下一步$"):
                 actions = [Action(type="click_text", text="下一步", reason="离开结算界面")]
         elif screen == "battle":
-            actions = [Action(type="wait", seconds=5, reason="战斗进行中")]
+            av, progress = read_action_value(frame.image, self.ocr), read_progress(boxes)
+            self._curve.append((av, progress))
+            self._curve_node = record["node"] or self._curve_node
+            record["battle"] = {"av": av, "progress": progress}
+            actions = [Action(type="wait", seconds=4, reason="战斗进行中")]
         elif screen == "other" and self._waits and similar(sig, self._last_sig) > 0.6 and self._waits < 30:
             actions = [Action(type="wait", seconds=4, reason="画面与上一步相似,继续等待")]
             self._waits += 1
         else:
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
+            if self.last_battle and screen in ("prepare", "supply", "spotlight_choice"):
+                hints += f"\n\n## 上一场战斗(程序记录的行动值和进度)\n{self.last_battle}"
             names: list[str] = []
             if screen == "prepare":
                 try:

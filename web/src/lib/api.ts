@@ -149,6 +149,8 @@ export interface PlayStatus {
   run_id: string | null;
   profile: string | null;
   difficulty: string | null;
+  round: number;
+  rounds: number;
   result: string | null;
   error: string | null;
   log: string[];
@@ -204,6 +206,8 @@ export interface StepRecord {
   actions?: string[];
   marks?: StepMark[];
   state?: StepState;
+  battle?: { av: number | null; progress: number | null };
+  battle_summary?: string;
   note?: string;
   error?: string;
 }

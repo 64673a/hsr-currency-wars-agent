@@ -127,6 +127,17 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
       {step.error && <Alert tone="danger" title="这一步出错">{step.error}</Alert>}
       {d?.error && <Alert tone="warning" title="模型没有给出有效操作">{d.error}</Alert>}
 
+      {step.battle && (
+        <p className={styles.facts}>
+          剩余行动值 {step.battle.av ?? '?'} · 进度 {step.battle.progress ?? '?'}%
+        </p>
+      )}
+      {step.battle_summary && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>上一场战斗</h2>
+          <p className={styles.analysis}>{step.battle_summary}</p>
+        </section>
+      )}
       {step.state && <StateView state={step.state} />}
 
       {d?.analysis && (
