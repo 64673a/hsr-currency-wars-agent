@@ -94,6 +94,7 @@ class _POINT(ctypes.Structure):
 
 MOVED_PX = 40     # 光标离开 agent 上次放的位置这么远,就认为有人在用鼠标
 CORNER_PX = 3
+RECENTER_PX = 3   # 光标正好在游戏窗口中心这么近:是游戏自己挪的
 
 
 class WindowsDevice:
@@ -117,8 +118,14 @@ class WindowsDevice:
         if near_x and near_y:
             raise UserInterrupt("鼠标在屏幕角落(急停)")
         if self._last and abs(pt.x - self._last[0]) + abs(pt.y - self._last[1]) > MOVED_PX:
-            self._last = None
-            raise UserInterrupt("检测到有人在动鼠标,已让出控制")
+            # 节点切换、战斗前后游戏会把光标挪到窗口正中(2026-11-14 实测,差 1 像素):不算有人在用电脑
+            info = self.source.window()
+            cx, cy = info.left + info.width // 2, info.top + info.height // 2
+            if abs(pt.x - cx) <= RECENTER_PX and abs(pt.y - cy) <= RECENTER_PX:
+                self._last = (pt.x, pt.y)
+            else:
+                last, self._last = self._last, None
+                raise UserInterrupt(f"检测到有人在动鼠标,已让出控制(光标从 {last} 移到了 ({pt.x}, {pt.y}))")
         # 键盘也算:系统记录的最后一次输入比 agent 自己最后一次注入的晚,就是有人在用电脑
         if _last_sent and tick_diff(_last_input_tick(), _last_sent) > 1000:
             raise UserInterrupt("检测到有人在用键盘或鼠标,已让出控制")
