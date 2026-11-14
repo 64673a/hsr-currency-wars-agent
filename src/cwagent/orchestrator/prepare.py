@@ -54,6 +54,7 @@ class PrepareExecutor:
         self.sleep = sleep or (lambda s: time.sleep(s))
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
         self.frame = None         # 最近一次截图
+        self.counts: dict[str, int] | None = None   # 前台、后台的格子数(Runner 识别阵容时更新)
 
     def _look(self) -> list[TextBox]:
         self.frame = self.device.grab()
@@ -136,7 +137,7 @@ class PrepareExecutor:
                     if a.type in ("open", "take") and occupied is not None and not is_item:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}不是可开启的道具")
                         continue
-                    layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
+                    layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
                     if src not in layout:
                         out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
                         continue
@@ -330,7 +331,7 @@ class PrepareExecutor:
         if occupied is not None and src not in occupied:
             out.results.append(f"{text}:{slot_text(a.zone, a.index)}没有角色")
             return None
-        layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
+        layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
         if src not in layout:
             out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
             return None

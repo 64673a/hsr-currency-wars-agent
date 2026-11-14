@@ -22,23 +22,27 @@ from PIL import Image
 
 from .ocr import TextBox
 
-# 每格卡片的中心和大小(归一化)
-FRONT_X = (0.3885, 0.4630, 0.5375, 0.6125)
+# 每格卡片的中心和大小(归一化)。前台、后台每排居中、等距,格子数会变:后台一般 6 格,有的局是 7 格
+# (2026-11-14 实机,原因待核实,可能和奇遇伙伴的「团队规模提升」有关),按画面判断(detect_counts)。
 FRONT_Y = 0.372
 FRONT_SIZE = (0.062, 0.116)
-BACK_X = (0.3115, 0.3870, 0.4620, 0.5375, 0.6120, 0.6875)
 BACK_Y = 0.615
 BACK_SIZE = (0.066, 0.120)
 BENCH_X = (0.2285, 0.2935, 0.3585, 0.4240, 0.4890, 0.5535, 0.6185, 0.6840, 0.7485)
 BENCH_Y = 0.845
 BENCH_SIZE = (0.059, 0.120)
 # 商店展开时棋盘会缩小下移(备战席不变)
-FRONT_X_SHOP = (0.4100, 0.4700, 0.5300, 0.5910)
 FRONT_Y_SHOP = 0.451
 FRONT_SIZE_SHOP = (0.050, 0.093)
-BACK_X_SHOP = (0.3520, 0.4120, 0.4700, 0.5300, 0.5900, 0.6480)
 BACK_Y_SHOP = 0.638
 BACK_SIZE_SHOP = (0.054, 0.094)
+ROW_X = {   # (zone, 商店展开): (整排中心, 格距)
+    ("front", False): (0.5006, 0.07467), ("back", False): (0.4995, 0.0752),
+    ("front", True): (0.5003, 0.0603), ("back", True): (0.5000, 0.0592),
+}
+DEFAULT_COUNTS = {"front": 4, "back": 6}
+COUNT_CHOICES = {"front": (4, 5), "back": (6, 7)}   # 相邻两种格子数奇偶不同,按格子的位置区分得很清楚
+COUNT_MIN = 0.5      # 分数低于这个(弹窗、动画挡住棋盘)就沿用上次的判断
 
 # 商店 5 张卡:立绘区域(卡片上半部,特性条之上)和名字所在的行
 SHOP_X = (0.2550, 0.3960, 0.5350, 0.6760, 0.8160)
@@ -76,14 +80,52 @@ class Slot:
         return self.name is None and self.score == 0.0
 
 
-def slots(shop_open: bool = False) -> list[Slot]:
-    if shop_open:
-        out = [Slot("front", i, x, FRONT_Y_SHOP) for i, x in enumerate(FRONT_X_SHOP)]
-        out += [Slot("back", i, x, BACK_Y_SHOP) for i, x in enumerate(BACK_X_SHOP)]
-    else:
-        out = [Slot("front", i, x, FRONT_Y) for i, x in enumerate(FRONT_X)]
-        out += [Slot("back", i, x, BACK_Y) for i, x in enumerate(BACK_X)]
+def row_x(zone: str, shop_open: bool, n: int) -> list[float]:
+    cx, pitch = ROW_X[(zone, shop_open)]
+    return [cx + (i - (n - 1) / 2) * pitch for i in range(n)]
+
+
+def _row_y(zone: str, shop_open: bool) -> float:
+    return {"front": FRONT_Y_SHOP, "back": BACK_Y_SHOP}[zone] if shop_open else {"front": FRONT_Y, "back": BACK_Y}[zone]
+
+
+def slots(shop_open: bool = False, counts: dict[str, int] | None = None) -> list[Slot]:
+    counts = {**DEFAULT_COUNTS, **(counts or {})}
+    out = []
+    for zone in ("front", "back"):
+        y = _row_y(zone, shop_open)
+        out += [Slot(zone, i, x, y) for i, x in enumerate(row_x(zone, shop_open, counts[zone]))]
     out += [Slot("bench", i, x, BENCH_Y) for i, x in enumerate(BENCH_X)]
+    return out
+
+
+def detect_counts(img: np.ndarray, shop_open: bool = False) -> dict[str, int | None]:
+    """前台、后台各有几格。每张卡(有角色的卡面、空格的框)底边都是一段横向边缘,格子之间断开:
+    取卡片底边一带每列的纵向梯度,比较各种格子数下「格子里」和「格缝、两端外侧」的强弱。
+    实测(2026-11-14,92 张备战截图):对的格子数约 1.5~2.8,奇偶不对的 ≤0.1。看不出来时为 None。"""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    H, W = gray.shape
+    out: dict[str, int | None] = {}
+    for zone in ("front", "back"):
+        w, h = _size(zone, shop_open)
+        bottom = _row_y(zone, shop_open) + h / 2
+        band = gray[int((bottom - 0.015) * H):int((bottom + 0.015) * H)]
+        prof = np.abs(cv2.Sobel(band, cv2.CV_32F, 0, 1, ksize=3)).max(axis=0)
+
+        def mean(x0: float, x1: float) -> float:
+            a, b = int(x0 * W), int(x1 * W)
+            return float(prof[max(0, a):max(a + 1, b)].mean())
+
+        scores = {}
+        for n in COUNT_CHOICES[zone]:
+            xs = row_x(zone, shop_open, n)
+            pitch = ROW_X[(zone, shop_open)][1]
+            inner = [mean(x - w * 0.35, x + w * 0.35) for x in xs]
+            gaps = [mean((a + b) / 2 - 0.002, (a + b) / 2 + 0.002) for a, b in zip(xs, xs[1:])]
+            gaps += [mean(x - w * 0.35, x + w * 0.35) for x in (xs[0] - pitch, xs[-1] + pitch)]
+            scores[n] = float(np.log(np.mean(inner) + 1) - np.log(np.mean(gaps) + 1))
+        best = max(scores, key=lambda n: scores[n])
+        out[zone] = best if scores[best] >= COUNT_MIN else None
     return out
 
 
@@ -176,6 +218,7 @@ class Portraits:
 
     def __init__(self, templates_dir: Path, names: dict[str, str]):
         self.names = names                       # role_id -> 名字
+        self.counts = dict(DEFAULT_COUNTS)       # 前台、后台现在几格(最近一次看得出来的)
         self.ids = {v: k for k, v in names.items()}
         self.cards_dir = templates_dir / "cards"
         self.avatars: list[tuple[str, np.ndarray]] = []   # (role_id, 头像中央),一个角色可以有多张(皮肤)
@@ -267,8 +310,9 @@ class Portraits:
 
     def read(self, image: Image.Image, *, shop_open: bool = False) -> list[Slot]:
         img = _bgr(image.resize((1920, 1080)) if image.size != (1920, 1080) else image)
+        self.counts.update({z: n for z, n in detect_counts(img, shop_open).items() if n})
         out = []
-        for s in slots(shop_open):
+        for s in slots(shop_open, self.counts):
             w, h = _size(s.zone, shop_open)
             card = _crop(img, s.x, s.y, w, h)
             if not _filled(card):

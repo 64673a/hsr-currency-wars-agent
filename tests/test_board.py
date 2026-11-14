@@ -1,3 +1,10 @@
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+from PIL import Image
+
 from cwagent.vision.board import Slot, format_board, shop_is_open, slots
 from cwagent.vision.hud import Hud
 from cwagent.vision.ocr import TextBox
@@ -75,3 +82,18 @@ def test_identify_by_m7a_avatar(tmp_path):
     card[y:y + face.shape[0], x:x + face.shape[1]] = face
     rid, score = p.identify(card)
     assert rid == "150102" and score > 0.95
+
+
+@pytest.mark.parametrize("name, shop_open, back", [
+    ("back7.jpg", False, 7), ("back7-shop.jpg", True, 7), ("back6.jpg", False, 6), ("back6-shop.jpg", True, 6)])
+def test_detect_counts(name, shop_open, back):
+    """实机截图(960x540,只留棋盘一带):后台有 6 格的局,也有 7 格的局。"""
+    from cwagent.vision.board import detect_counts
+
+    crop = Image.open(Path(__file__).parent / "fixtures" / "board" / name).convert("RGB")
+    frame = Image.new("RGB", (960, 540))
+    frame.paste(crop, (int(0.2 * 960), int(0.3 * 540)))
+    img = cv2.cvtColor(np.asarray(frame.resize((1920, 1080))), cv2.COLOR_RGB2BGR)
+    counts = detect_counts(img, shop_open)
+    assert counts == {"front": 4, "back": back}
+    assert len([s for s in slots(shop_open, counts) if s.zone == "back"]) == back

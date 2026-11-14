@@ -243,6 +243,7 @@ class Runner:
                 if learned:
                     self.log(f"从商店记下了立绘:{'、'.join(learned)}")
             board = self.portraits.read(image, shop_open=shop)
+            self.prepare.counts = dict(self.portraits.counts)
             for s in board:
                 # 备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色
                 if s.zone == "bench" and any(b.text == "开启" and abs(b.x - s.x) < 0.035 and abs(b.y - s.y) < 0.065
