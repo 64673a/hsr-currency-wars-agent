@@ -16,6 +16,7 @@ from ..vision.ocr import Ocr, TextBox, find
 from .screens import (
     DIFFICULTY_HINT,
     PREPARE_LAYOUT,
+    SPOTLIGHT_LAYOUT,
     classify,
     companion_name,
     similar,
@@ -142,6 +143,8 @@ class Runner:
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
             if screen == "difficulty":
                 hints = DIFFICULTY_HINT.format(target=self.difficulty)
+            elif screen == "spotlight_choice":
+                hints = SPOTLIGHT_LAYOUT
             if self._same >= 3:
                 hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
                           "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
