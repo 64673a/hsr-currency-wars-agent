@@ -81,7 +81,10 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
     return result
 
 
-def play(cfg: AppConfig, device, *, model: str | None = None, max_steps: int = 600, log=print) -> str:
+def play(cfg: AppConfig, device, *, model: str | None = None, max_steps: int = 600, log=print, stop=None) -> str:
     runner, run_dir = build_runner(cfg, device, model=model, log=log)
     log(f"对局记录:{run_dir}")
-    return run_session(runner, RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes), log=log)
+    opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes)
+    if stop is not None:
+        opts.stop = stop
+    return run_session(runner, opts, log=log)

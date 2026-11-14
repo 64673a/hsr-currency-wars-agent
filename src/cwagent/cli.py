@@ -612,9 +612,16 @@ def play_cmd(
     from .device.windows import WindowsDevice
     from .orchestrator.session import play
 
+    import threading
+
+    from .capture import windows as win
+
     device = WindowsDevice()
+    device.stop = threading.Event()
+    hotkey = win.register_hotkey(["ctrl+alt+f10", "ctrl+alt+f9", "ctrl+shift+f10"], device.stop.set)
+    typer.echo(f"停止:{hotkey.title() if hotkey else '快捷键注册失败,'}" + ("" if hotkey else "把鼠标甩到屏幕角落急停"))
     try:
-        play(ConfigStore().load(), device, model=model, max_steps=max_steps,
+        play(ConfigStore().load(), device, model=model, max_steps=max_steps, stop=device.stop,
              log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
     finally:
         device.close()

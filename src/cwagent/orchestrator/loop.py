@@ -574,7 +574,7 @@ class Runner:
             except UserInterrupt as e:
                 self.log(f"[{n}] {e}")
                 self.trace.write({"step": n, "error": str(e)})
-                return "interrupted"
+                return "stopped" if opts.stop.is_set() else "interrupted"
             except Exception as e:  # noqa: BLE001 - 单步出错不终止整局,记录后稍等重试
                 self.log(f"[{n}] 出错:{type(e).__name__}: {e}")
                 self.trace.write({"step": n, "error": f"{type(e).__name__}: {e}"})

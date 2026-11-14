@@ -185,6 +185,8 @@ class PlayController:
             self._hotkey = win.register_hotkey(["ctrl+alt+f10", "ctrl+alt+f9", "ctrl+shift+f10"], self.stop) or ""
         self._stop = threading.Event()
         stop = self._stop
+        if hasattr(device, "stop"):
+            device.stop = stop   # 快捷键 / 停止按钮在下一个键鼠操作前就生效
         with self._lock:
             self._state.update(run_id=None, profile=None, difficulty=cfg.agent.difficulty, round=0, rounds=rounds,
                                result=None, error=None, log=[])

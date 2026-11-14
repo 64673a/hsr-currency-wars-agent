@@ -136,7 +136,7 @@ export default function PlayPage() {
   useEffect(() => {
     if (!status) return;
     if (wasRunning.current && !status.running) {
-      const why: Record<string, string> = { settlement: '打完了', stopped: '已停止', interrupted: '检测到有人在用电脑,已让出控制', timeout: '超时', max_steps: '步数用完' };
+      const why: Record<string, string> = { settlement: '打完了', stopped: '已停止', interrupted: '急停', timeout: '超时', max_steps: '步数用完' };
       toast('对局已结束', status.error ?? (status.result ? why[status.result] ?? status.result : undefined));
     }
     wasRunning.current = status.running;
