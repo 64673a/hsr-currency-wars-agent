@@ -11,6 +11,7 @@ from cwagent.knowledge.equipment import EquipmentBook
 from cwagent.orchestrator import prepare as prep
 from cwagent.orchestrator.prepare import PrepareExecutor, _shift
 from cwagent.vision.equipment import EquipmentReader, Item, cell_center
+from cwagent.vision.ocr import TextBox
 
 
 def icon(seed: int) -> Image.Image:
@@ -148,28 +149,74 @@ def test_privilege_v_mark(templates):
     assert [(i.name, i.privileged) for i in items] == [("轮滑鞋", False), ("反重力皮靴", True)]
 
 
-def test_items_on_bench_open_but_not_move():
+PANEL = [("简易武装箱", 0.535, 0.056), ("请选择1个", 0.535, 0.091), ("以太钻头", 0.308, 0.309), ("折叠小刀", 0.460, 0.310),
+         ("量产型装甲", 0.611, 0.310), ("幸运星", 0.762, 0.310), ("查看详情", 0.314, 0.363), ("开启", 0.228, 0.870)]
+
+
+def tb(items):
+    return [TextBox(t, x, y, 0.05, 0.02, 0.9) for t, x, y in items]
+
+
+def test_item_slots_and_panel():
+    from cwagent.vision.boxes import item_slots, read_panel
+
+    assert item_slots(tb(PANEL)) == [1]
+    title, options = read_panel(tb(PANEL))
+    assert title == "简易武装箱" and [o.text for o in options] == ["以太钻头", "折叠小刀", "量产型装甲", "幸运星"]
+    assert read_panel(tb([("开启", 0.228, 0.87)])) is None
+
+
+class BoxGame:
+    """假游戏:点道具弹出选择面板,点空白处收起,点选项拿走。"""
+
+    def __init__(self):
+        self.panel, self.taken, self.actions = False, None, []
+
+    def grab(self):
+        return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    def click(self, x, y, *, button="left"):
+        self.actions.append((round(x, 3), round(y, 3)))
+        if not self.panel and abs(x - 0.2285) < 0.01:
+            self.panel = True
+        elif self.panel and (x, y) == (0.75, 0.5):
+            self.panel = False
+        elif self.panel and y < 0.3:
+            self.taken = next(t for t, px, _ in PANEL[2:6] if abs(px - x) < 0.01)
+            self.panel = False
+
+    def ocr(self, image):
+        return tb(PANEL if self.panel else [p for p in PANEL if p[0] == "开启"] if not self.taken else [])
+
+
+def test_peek_and_take_items():
     from cwagent.vision.board import Slot
 
-    class D:
-        def __init__(self):
-            self.actions = []
-
-        def click(self, x, y, *, button="left"):
-            self.actions.append(("click", round(x, 3), round(y, 3)))
-
-        def drag(self, *a, **k):
-            self.actions.append(("drag",))
-
-        def grab(self):
-            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
-
-    dev = D()
-    ex = PrepareExecutor(dev, lambda image: [], raw=lambda a, b: "", sleep=lambda s: None)
+    game = BoxGame()
+    ex = PrepareExecutor(game, game.ocr, raw=lambda a, b: "", sleep=lambda s: None)
     board = [Slot("bench", 0, 0.2285, 0.845, "道具(可开启)", None, 0.66), Slot("bench", 1, 0.2935, 0.845, "花火", None, 0.9, 1)]
     out = ex.run([Action(type="move", zone="bench", index=1, to_zone="back", to_index=1),
-                  Action(type="open", zone="bench", index=2),
-                  Action(type="open", zone="bench", index=1), Action(type="ready")], [], board)
-    assert "是道具,不是角色" in out.results[0] and "不是可开启的道具" in out.results[1]
-    assert out.results[2].startswith("打开备战席1号的道具") and out.observe and len(out.results) == 3   # 打开后停下
-    assert dev.actions == [("click", 0.229, 0.845)]
+                  Action(type="open", zone="bench", index=1), Action(type="take", zone="bench", index=2, text="幸运星"),
+                  Action(type="take", zone="bench", index=1, text="幸运星")], [], board)
+    assert "是道具,不是角色" in out.results[0]
+    assert out.results[1].endswith("简易武装箱,可选 以太钻头、折叠小刀、量产型装甲、幸运星(没选,道具留着)")
+    assert out.seen == {1: ("简易武装箱", ["以太钻头", "折叠小刀", "量产型装甲", "幸运星"])}
+    assert "不是可开启的道具" in out.results[2]
+    assert out.results[3].endswith("拿到 幸运星(来自简易武装箱)") and out.taken == [1] and game.taken == "幸运星"
+
+
+def test_with_boxes_example(db):
+    """维护者的例子:手里有折叠小刀,箱子里有幸运星 → 能凑成高周波电锯。"""
+    con = sqlite3.connect(db)
+    for i, n, c in (("6", "幸运星", "简易装备"), ("7", "折叠小刀", "简易装备"), ("8", "高周波电锯", "进阶装备")):
+        con.execute("INSERT INTO equipment VALUES (?, ?, ?)", (i, n, json.dumps({"category": c})))
+    con.execute("INSERT INTO recipes VALUES ('8', '6', '7', NULL)")
+    con.commit()
+    con.close()
+    book = EquipmentBook(db)
+    items = [Item(1, 0, 0, "7", "折叠小刀")]
+    boxes = {1: ("简易武装箱", ["以太钻头", "折叠小刀", "量产型装甲", "幸运星"])}
+    lines = book.with_boxes(items, boxes)
+    assert "高周波电锯(进阶装备) = 折叠小刀(装备栏1号)+ 幸运星(备战席1号的简易武装箱)" in lines
+    text, names = book.describe(items, [], boxes)
+    assert "先留着" in text and "高周波电锯" in names

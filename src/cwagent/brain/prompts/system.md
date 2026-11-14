@@ -14,7 +14,7 @@
   - buy_exp:买经验,times 为次数;
   - compose:把装备栏第 item 件拖到第 onto 件上合成;
   - equip:把装备栏第 item 件装给 zone 第 index 格的角色;
-  - open:打开备战席 index 格里的道具(如武装箱);
+  - take:从备战席 index 格的道具(如武装箱)里拿名为 text 的选项;open:只看选项不拿;
   - ready:出战,结束这个备战阶段。
 - 通用:
   - click_text:点击界面上文字为 text 的位置(与识别出的文字完全一致或包含它;有多个时用 nth 指定第几个,从 0 开始);

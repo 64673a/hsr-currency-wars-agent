@@ -76,7 +76,22 @@ class EquipmentBook:
                     lines.append(f"- {role}:{picks}(出现在 {n} 篇攻略的最终阵容里)")
         return lines
 
-    def describe(self, items: list[Item], roles: list[str]) -> tuple[str, list[str]]:
+    def with_boxes(self, items: list[Item], boxes: dict[int, tuple[str, list[str]]]) -> list[str]:
+        """缺的那一件在备战席道具里有的配方:装备栏的一件 + 道具里选一件,或两个道具各选一件。"""
+        out, seen = [], set()
+        have = [(f"装备栏{i.index}号", i.name) for i in items if i.name]
+        offers = [(f"备战席{k}号的{title}", o) for k, (title, opts) in sorted(boxes.items()) for o in opts]
+        for (wa, a), (wb, b) in [(x, y) for x in have for y in offers] + [
+                (x, y) for n, x in enumerate(offers) for y in offers[n + 1:] if x[0] != y[0]]:
+            product = self.recipes.get(tuple(sorted((a, b))))
+            if product and (product, wa, wb) not in seen:
+                seen.add((product, wa, wb))
+                cat = self.category(product)
+                out.append(f"{product}{f'({cat})' if cat else ''} = {a}({wa})+ {b}({wb})")
+        return out
+
+    def describe(self, items: list[Item], roles: list[str],
+                 boxes: dict[int, tuple[str, list[str]]] | None = None) -> tuple[str, list[str]]:
         """给模型的装备信息,以及要附上效果描述的装备名。"""
         from ..vision.equipment import format_items
 
@@ -85,8 +100,13 @@ class EquipmentBook:
         if combos:
             lines.append("现在能合成:" + ";".join(
                 f"{a}号+{b}号 → {p}" + (f"({self.category(p)})" if self.category(p) else "") for a, b, p in combos))
+        partial = self.with_boxes(items, boxes or {})
+        if partial:
+            lines.append("用备战席道具里的选项能凑成的(道具可以先留着,等别的渠道拿到其中一半再开箱选另一半):\n"
+                         + "\n".join(f"- {x}" for x in partial[:12]))
         advice = self.advice(roles)
         if advice:
             lines.append("攻略里这些角色常配的装备(只作参考,要结合装备效果和当前阵容判断):\n" + "\n".join(advice))
-        names = [i.name for i in items if i.name] + [p for _, _, p in combos]
+        names = [i.name for i in items if i.name] + [p for _, _, p in combos] + [x.split("(")[0].split(" =")[0]
+                                                                                for x in partial[:12]]
         return "\n".join(lines), names

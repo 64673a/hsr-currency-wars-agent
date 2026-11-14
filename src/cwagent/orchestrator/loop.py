@@ -30,6 +30,7 @@ from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
 from . import difficulty as difficulty_select
 from .macros import open_crystals, survey_plane
+from ..vision.boxes import item_slots
 from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
     DIFFICULTY_HINT,
@@ -232,12 +233,32 @@ class Runner:
         if self.equipment is not None and self.equipment_reader is not None:
             items = self.equipment_reader.read(image)
             state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]
-            text, equip_names = self.equipment.describe(items, names)
+            text, equip_names = self.equipment.describe(items, names, self.ledger.items)
             lines.append(text)
             names = names + equip_names
         if node and not self.ledger.node(node).start:
             self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
+
+    def _peek_items(self, n: int, boxes: list[TextBox]) -> None:
+        """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。"""
+        here = item_slots(boxes)
+        for index in list(self.ledger.items):
+            if index not in here:
+                self.ledger.items.pop(index)           # 已经开掉或挪走了
+        if self.prepare.shop_now(boxes):
+            return
+        from ..vision.board import slots
+
+        layout = {s.index: s for s in slots(False) if s.zone == "bench"}
+        result = PrepareResult()
+        for index in here:
+            if index in self.ledger.items or index - 1 not in layout:
+                continue
+            seen = self.prepare.peek(result, layout[index - 1].x, layout[index - 1].y, index)
+            if seen:
+                self.log(f"[{n}] 备战席{index}号 {seen[0]}:{'、'.join(seen[1])}")
+        self.ledger.items.update(result.seen)
 
     def _lineup(self) -> str:
         if not self._board:
@@ -412,6 +433,7 @@ class Runner:
                 self._last_sig = sig
                 self.trace.write(record)
                 return screen
+            self._peek_items(n, boxes)
             if not self.prepare.shop_now(boxes):
                 # 先打开商店,让模型第一眼就看到能买什么
                 opened = PrepareResult()
@@ -473,6 +495,9 @@ class Runner:
             self._results = result.results
         for role, item in result.equipped:
             self.ledger.equip(role, item)
+        self.ledger.items.update(result.seen)
+        for index in result.taken:
+            self.ledger.items.pop(index, None)
         if result.ready:
             if self.episode is not None and self.episode.node and result.lineup():
                 self.ledger.node(self.episode.node).lineup = result.lineup()

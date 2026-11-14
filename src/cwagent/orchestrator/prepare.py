@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from ..brain.screen_agent import Action, action_text, slot_text
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, slots
+from ..vision.boxes import CLOSE_POINT, read_panel
 from ..vision.equipment import EquipmentReader, find_compose_confirm
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import read_shop, shop_state
@@ -32,6 +33,8 @@ class PrepareResult:
     observe: bool = False      # 刷新了商店等:停下来让模型看新界面
     occupied: dict[tuple[str, int], str] | None = None   # 执行完以后各格子里是谁(认不出阵容时为 None)
     equipped: list[tuple[str, str]] = field(default_factory=list)   # (角色, 装备):这次给谁装了什么
+    seen: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号:(道具名, 选项)
+    taken: list[int] = field(default_factory=list)                         # 已经开掉的道具格子
 
     def lineup(self) -> str:
         if self.occupied is None:
@@ -121,16 +124,16 @@ class PrepareExecutor:
                         if free:
                             occupied[("bench", free[0])] = name or "新买的角色"
                     out.results.append(f"{text}" + (f"({name})" if name else ""))
-                elif a.type in ("move", "sell", "open"):
+                elif a.type in ("move", "sell", "open", "take"):
                     src = (a.zone, a.index - 1)
                     if occupied is not None and src not in occupied:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是空的")
                         continue
                     is_item = occupied is not None and occupied[src].startswith(ITEM_PREFIX)
-                    if a.type != "open" and is_item:
-                        out.results.append(f"{text}:{slot_text(a.zone, a.index)}是道具,不是角色,不能上场或出售;用 open 打开")
+                    if a.type in ("move", "sell") and is_item:
+                        out.results.append(f"{text}:{slot_text(a.zone, a.index)}是道具,不是角色,不能上场或出售")
                         continue
-                    if a.type == "open" and occupied is not None and not is_item:
+                    if a.type in ("open", "take") and occupied is not None and not is_item:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}不是可开启的道具")
                         continue
                     layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
@@ -138,14 +141,21 @@ class PrepareExecutor:
                         out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
                         continue
                     if a.type == "open":
-                        p = layout[src]
-                        self._click(out, p.x, p.y)
-                        self.sleep(1.2)
-                        out.results.append(f"{text}(停下来看得到了什么)")
-                        if occupied is not None:
-                            occupied.pop(src, None)
-                        out.observe = True
-                        break
+                        seen = self.peek(out, layout[src].x, layout[src].y, a.index)
+                        out.results.append(f"{text}:" + (f"{seen[0]},可选 {'、'.join(seen[1])}(没选,道具留着)"
+                                                         if seen else "没有打开选择面板"))
+                        continue
+                    if a.type == "take":
+                        got = self.take(out, layout[src].x, layout[src].y, a.text or "")
+                        out.results.append(f"{text}:{got}")
+                        if got.startswith("拿到"):
+                            out.taken.append(a.index)
+                            if occupied is not None:
+                                occupied.pop(src, None)
+                        out.observe = not got.startswith("拿到")
+                        if out.observe:
+                            break
+                        continue
                     if a.type == "move":
                         dst = (a.to_zone, a.to_index - 1)
                         if dst not in layout:
@@ -218,6 +228,49 @@ class PrepareExecutor:
                 break
         out.occupied = occupied
         return out
+
+    # ---------------------------------------------------------------- 道具(武装箱等)
+
+    def peek(self, out: PrepareResult, x: float, y: float, index: int) -> tuple[str, list[str]] | None:
+        """点开道具看选项,不选,点空白处收起(道具留着)。返回(道具名, 选项)。"""
+        self._click(out, x, y)
+        self.sleep(1.0)
+        panel = read_panel(self._look())
+        if panel is None:
+            return None
+        title, options = panel
+        self._click(out, *CLOSE_POINT)
+        self.sleep(0.6)
+        seen = (title, [o.text for o in options])
+        out.seen[index] = seen
+        return seen
+
+    def take(self, out: PrepareResult, x: float, y: float, name: str) -> str:
+        """点开道具,选名字为 name 的选项。返回结果说明(成功时以「拿到」开头)。"""
+        self._click(out, x, y)
+        self.sleep(1.0)
+        panel = read_panel(self._look())
+        if panel is None:
+            return "没有打开选择面板"
+        title, options = panel
+        pick = next((o for o in options if o.text == name), None) or next((o for o in options if name and name in o.text),
+                                                                          None)
+        if pick is None:
+            self._click(out, *CLOSE_POINT)
+            self.sleep(0.6)
+            return f"{title}里没有「{name}」,可选 {'、'.join(o.text for o in options)}(没选,道具留着)"
+        self._click(out, pick.x, pick.y - 0.08)   # 选项卡片(名字上方的图标处)
+        self.sleep(1.0)
+        boxes = self._look()
+        if read_panel(boxes) is not None:          # 还要确认
+            ok = find(boxes, "^(确认|确定|选择)$")
+            if ok is not None:
+                self._click(out, ok.x, ok.y)
+                self.sleep(1.0)
+                boxes = self._look()
+        if read_panel(boxes) is not None:
+            return f"点了「{name}」但选择面板还在,没拿成"
+        return f"拿到 {name}(来自{title})"
 
     # ---------------------------------------------------------------- 装备
 
