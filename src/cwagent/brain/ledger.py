@@ -38,6 +38,8 @@ class RunLedger:
     events: list[str] = field(default_factory=list)          # 各次选择(投资环境、投资策略、遭遇……)
     equipped: dict[str, list[str]] = field(default_factory=dict)   # 角色 → 程序给他装上的装备
     items: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号的道具:(名字, 看过的选项)
+    environment: str = ""                                    # 这局选的投资环境(给攻略打分用,「做过的选择」里已有记录)
+    guide: str = ""                                          # 当前参考的攻略(卡片文字)
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
 
     def node(self, name: str) -> NodeRecord:
@@ -59,6 +61,8 @@ class RunLedger:
         parts = ["## 本局档案(程序记录)\n" + ("- " + ";".join(h for h in head if h) if any(head) else "- (刚开局)")]
         if self.intro:
             parts.append("### 开局信息\n" + self.intro)
+        if self.guide:
+            parts.append("### 当前参考的攻略(只是方向,买谁、怎么站、给谁装备看局面判断)\n" + self.guide)
         if self.events:
             parts.append("### 做过的选择(从旧到新)\n" + "\n".join(f"- {e}" for e in self.events))
         if self.equipped:

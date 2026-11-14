@@ -21,6 +21,7 @@ from PIL import Image
 
 from ..brain.ledger import RunLedger
 from ..knowledge.equipment import EquipmentBook
+from ..knowledge.guides import SWITCH_MARGIN, Guide, GuideAdvisor, card
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, to_jsonable
 from .. import paths
 from ..device import UserInterrupt
@@ -123,7 +124,7 @@ class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
                  on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
                  difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
-                 settle: bool = True, equipment: EquipmentBook | None = None):
+                 settle: bool = True, equipment: EquipmentBook | None = None, guides: GuideAdvisor | None = None):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
@@ -141,6 +142,13 @@ class Runner:
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader)
+        self.guides = guides
+        self._guide: Guide | None = None                       # 当前参考的攻略
+        self._guide_pinned = False                             # 模型自己选的攻略不再自动换
+        self._candidates: list[Guide] = []                     # 上次给模型看的候选攻略(按编号)
+        self._shown: tuple = ()                                # 本回合已经给模型看过的候选
+        self._roles: list[str] = []                            # 最近一次认出的场上 + 备战席角色
+        self._shop_names: list[str] = []                       # 最近一次读到的商店角色
         self._node: str | None = None
         self._board: list[Slot] | None = None
         self._last_screen = ""
@@ -225,7 +233,9 @@ class Runner:
         names: list[str] = []
         shop = self.prepare.shop_now(boxes)
         if shop:
-            lines.append("商店(从左到右):" + format_shop(read_shop(boxes)))
+            cards = read_shop(boxes)
+            self._shop_names = [name for _, name, _ in cards if name]
+            lines.append("商店(从左到右):" + format_shop(cards))
         self._board = None
         if self.portraits is not None:
             if shop:
@@ -244,6 +254,7 @@ class Runner:
                               for b in board if not b.empty]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
+            self._roles = names
         if self.equipment is not None and self.equipment_reader is not None:
             items = self.equipment_reader.read(image)
             state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]
@@ -253,6 +264,73 @@ class Runner:
         if node and not self.ledger.node(node).start:
             self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
+
+    # ---------------------------------------------------------------- 攻略
+
+    def _set_guide(self, g: Guide) -> None:
+        self._guide = g
+        self.ledger.guide = card(g)
+        self.ledger.event(f"参考攻略:「{g.title}」(主 C {'、'.join(g.carries)})"[:160])
+
+    def guide_advice(self, opening: bool, record: dict) -> str:
+        """按场上、备战席、商店里的角色和投资环境给攻略打分:还没定方向时定下第一名;当前攻略的主 C 一个都没有、
+        别的攻略高出 SWITCH_MARGIN 时自动换(模型自己选的不换);已经有主 C 时只提示可以转向,由模型决定。
+        回合开头给候选;回合中间只有候选变了(例如刷新商店后出了别的攻略的主 C)才再给。"""
+        if self.guides is None:
+            return ""
+        env = self.ledger.environment or None
+        ranked = self.guides.rank(self._roles, self._shop_names, env)
+        if not ranked:
+            return ""
+        current = self.guides.score(self._guide, set(self._roles), set(self._shop_names) - set(self._roles), env) \
+            if self._guide else None
+        best = ranked[0]
+        if current is None:
+            self._set_guide(best.guide)
+            self.log(f"初始方向:攻略「{best.guide.title}」({best.why()})")
+            current = best
+        elif (best.guide.id != self._guide.id and not self._guide_pinned and not current.carries_have
+              and best.score >= current.score + SWITCH_MARGIN):
+            self.log(f"换攻略:「{self._guide.title}」→「{best.guide.title}」({best.why()})")
+            self._set_guide(best.guide)
+            current = best
+        shop = [m for m in self.guides.shop_carries(self._roles, self._shop_names, env)
+                if m.guide.id != self._guide.id and not set(m.guide.carries) & set(self._guide.carries)]
+        cands: list = []
+        for m in ranked + shop[:2]:
+            if m.guide.id != self._guide.id and all(c.guide.id != m.guide.id for c in cands):
+                cands.append(m)
+        shown = (self._guide.id, tuple(m.guide.id for m in cands), tuple(m.guide.id for m in shop))
+        if not opening and shown == self._shown:
+            return ""
+        self._shown = shown
+        self._candidates = [m.guide for m in cands]
+        record["guides"] = {"current": self._guide.title, "score": current.score,
+                            "candidates": [{"title": m.guide.title, "score": m.score} for m in cands]}
+        lines = [f"当前方向「{self._guide.title}」:{current.why()}(匹配分 {current.score})"]
+        for i, m in enumerate(cands, start=1):
+            lines.append(f"候选 {i}(匹配分 {m.score}):{m.why()}\n{card(m.guide, full=False)}")
+        for m in shop:
+            i = next((i for i, c in enumerate(cands, start=1) if c.guide.id == m.guide.id), None)
+            lines.append(f"商店里有 {'、'.join(m.carries_shop)},是{f'候选 {i}' if i else ''}「{m.guide.title}」的主 C,"
+                         "可以考虑转向。")
+        if cands and cands[0].score >= current.score + SWITCH_MARGIN and all(m.guide.id != cands[0].guide.id
+                                                                             for m in shop):
+            lines.append("候选 1 比当前方向匹配得多,可以考虑转向。")
+        return "\n".join(lines)
+
+    def choose_guide(self, key: str, n: int) -> None:
+        key = key.strip().removeprefix("候选").strip()
+        g = (self._candidates[int(key) - 1] if key.isdigit() and 0 < int(key) <= len(self._candidates)
+             else self.guides.find(key.strip("「」")) if self.guides else None)
+        if g is None:
+            self.log(f"[{n}] 找不到模型选的攻略:{key}")
+            return
+        if self._guide is None or g.id != self._guide.id:
+            self.log(f"[{n}] 模型改用攻略「{g.title}」")
+            self._set_guide(g)
+        self._guide_pinned = True
+        self._shown = ()
 
     def _peek_items(self, n: int, boxes: list[TextBox]) -> None:
         """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。"""
@@ -446,6 +524,13 @@ class Runner:
                 rec.actions = (f"{rec.actions} | {done}" if rec.actions else done)[-300:]
             rec.lineup = rec.lineup or self._lineup()
         elif done and ep.screen not in ("difficulty",):
+            if ep.screen == "environment_choice" and self.guides is not None:
+                envs = sorted(self.guides.environments, key=len, reverse=True)
+                for d in reversed(ep.done):
+                    env = next((e for e in envs if e in d), None)
+                    if env:
+                        self.ledger.environment = env
+                        break
             self.ledger.event(f"{ep.node or ''} {SCREEN_NAMES.get(ep.screen, ep.screen)}:{done}"[:160].strip())
 
     def _hints(self, screen: str, frame, boxes: list[TextBox], record: dict, opening: bool) -> tuple[str, list[str]]:
@@ -461,6 +546,12 @@ class Runner:
                 hints += "\n\n## 程序识别的局面\n" + seen
             except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
                 self.log(f"[{record['step']}] 局面识别出错:{type(e).__name__}: {e}")
+            try:
+                advice = self.guide_advice(opening, record)
+                if advice:
+                    hints += "\n\n## 攻略参考\n" + advice
+            except Exception as e:  # noqa: BLE001
+                self.log(f"[{record['step']}] 攻略匹配出错:{type(e).__name__}: {e}")
         elif opening and screen == "difficulty":
             hints = DIFFICULTY_HINT.format(target=self.difficulty)
         elif opening and screen == "spotlight_choice":
@@ -541,6 +632,8 @@ class Runner:
             return screen
         if decision.run_notes:
             self.ledger.set_direction(decision.run_notes)
+        if decision.guide:
+            self.choose_guide(decision.guide, n)
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
         if ep.screen == "prepare":
             return self._finish_prepare(record, decision.actions, boxes, sig, screen)

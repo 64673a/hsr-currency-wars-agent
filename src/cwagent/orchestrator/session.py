@@ -10,6 +10,7 @@ from ..brain.screen_agent import ScreenAgent, load_rules
 from ..config import AppConfig, ModelEndpoint
 from ..knowledge.companions import CompanionBook
 from ..knowledge.equipment import EquipmentBook
+from ..knowledge.guides import GuideAdvisor
 from ..knowledge.index import NameIndex
 from ..memory import MemoryStore
 from ..vision.board import Portraits
@@ -52,6 +53,13 @@ def load_equipment() -> EquipmentBook | None:
     return EquipmentBook(paths.knowledge_db())
 
 
+def load_guides() -> GuideAdvisor | None:
+    """攻略(按局面挑方向用)。知识库没同步时返回 None。"""
+    if not paths.knowledge_db().exists():
+        return None
+    return GuideAdvisor(paths.knowledge_db())
+
+
 def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print) -> tuple[Runner, Path]:
     eps = endpoints(cfg, model)
     endpoint = eps["default"]
@@ -62,7 +70,8 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print)
     book = CompanionBook()
     runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name: book.record(name, screenshot=str(run_dir / "shots")),
-                    prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment())
+                    prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
+                    guides=load_guides())
     trace.meta(profile=endpoint.name, model=endpoint.model, difficulty=cfg.agent.difficulty,
                roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"))

@@ -70,6 +70,7 @@ class ActInput(BaseModel):
     analysis: str
     actions: list[Action] = Field(min_length=1, max_length=MAX_ACTIONS)
     run_notes: str | None = None
+    guide: str | None = None
     notes: list[Note] = []
 
 
@@ -102,6 +103,7 @@ ACT_TOOL = ToolSpec(
                 },
             },
             "run_notes": {"type": "string", "description": "整体改写对局方向与计划(可选)"},
+            "guide": {"type": "string", "description": "改用另一篇攻略作为方向时,填「攻略参考」里的候选编号或标题(可选)"},
             "notes": {
                 "type": "array",
                 "items": {"type": "object", "properties": {
@@ -157,6 +159,7 @@ class Decision:
     episode: int = 0
     turn: int = 0
     role: str = ""
+    guide: str | None = None       # 模型改选的攻略(候选编号或标题)
 
 
 class ScreenAgent:
@@ -254,7 +257,8 @@ class ScreenAgent:
                         raise ValueError(f"{'、'.join(wrong)} 只能在备战界面使用")
                     episode.pending = [call.id] + [i for i in ids if i != call.id]
                     episode.waiting = all(a.type == "wait" for a in data.actions)
-                    return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp, **base)
+                    return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
+                                    guide=data.guide, **base)
                 except ValidationError as e:
                     last_error = "; ".join(f"{'.'.join(map(str, er['loc']))}: {er['msg']}" for er in e.errors()[:5])
                 except ValueError as e:
@@ -319,4 +323,4 @@ def to_jsonable(d: Decision) -> dict[str, Any]:
             "run_notes": d.run_notes, "notes": [n.model_dump() for n in d.notes], "recalled": d.recalled,
             "error": d.error, "reasoning": r.reasoning if r else "", "usage": r.usage.model_dump() if r else None,
             "latency_s": r.latency_s if r else None, "model": r.model if r else "",
-            "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt}
+            "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt, "guide": d.guide}
