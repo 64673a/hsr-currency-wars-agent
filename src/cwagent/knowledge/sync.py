@@ -21,6 +21,12 @@ from .official_api import OfficialApi
 
 Progress = Callable[[str, str], None]  # (阶段, 说明)
 
+# March7thAssistant(GPL-3.0)仓库里的角色头像:和货币战争的卡面是同一套立绘,还包括皮肤。
+# 名字表是「文件名 -> 中文名」,皮肤写成「火花·甜梦电波」「流萤「春日手信」」。
+M7A_RAW = "https://raw.githubusercontent.com/moesnow/March7thAssistant/main"
+M7A_NAMES = M7A_RAW + "/assets/config/character_names.json"
+M7A_AVATAR = M7A_RAW + "/assets/images/share/character/{}.png"
+
 
 @dataclass
 class SyncResult:
@@ -100,6 +106,31 @@ def download_templates(icons: dict[str, dict[str, str]], out_dir: Path, *, worke
     return downloaded, errors
 
 
+def download_avatars(out_dir: Path, *, progress: Progress | None = None,
+                     http: httpx.Client | None = None) -> tuple[int, list[str]]:
+    """下载 M7A 的角色头像和名字表到 <out_dir>/avatars/。名字表每次都更新,头像已存在的跳过。"""
+    own = http is None
+    client = http or httpx.Client(timeout=30.0, follow_redirects=True)
+    try:
+        try:
+            resp = client.get(M7A_NAMES)
+            resp.raise_for_status()
+            names = resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            return 0, [f"avatars {M7A_NAMES}: {e}"]
+        folder = out_dir / "avatars"
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = folder / "names.json.part"
+        tmp.write_text(json.dumps(names, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, folder / "names.json")
+        done, errors = download_templates({"avatars": {k: M7A_AVATAR.format(k) for k in names}}, out_dir,
+                                          progress=progress, http=client)
+        return done["avatars"], errors
+    finally:
+        if own:
+            client.close()
+
+
 def sync(*, max_lineups: int = 300, interval: float = 1.0, templates: bool = True,
          progress: Progress | None = None, api: OfficialApi | None = None,
          db_path: Path | None = None, export_dir: Path | None = None,
@@ -126,7 +157,10 @@ def sync(*, max_lineups: int = 300, interval: float = 1.0, templates: bool = Tru
                         lineups_fetched=len(lineups))
     if templates:
         report("templates", "下载模板图标")
-        result.templates, result.template_errors = download_templates(
-            knowledge.icons, templates_dir or paths.templates_dir(), progress=report)
+        out = templates_dir or paths.templates_dir()
+        result.templates, result.template_errors = download_templates(knowledge.icons, out, progress=report)
+        report("templates", "下载 M7A 角色头像")
+        result.templates["avatars"], errors = download_avatars(out, progress=report)
+        result.template_errors += errors
     report("done", json.dumps(result.counts, ensure_ascii=False))
     return result

@@ -26,3 +26,52 @@ def test_battle_summary():
     assert read_progress([TextBox("40%", 0.9, 0.5, 0.05, 0.02, 0.9)]) is None
     text = summarize([(164, 0), (164, 10), (150, 20), (110, 30), (None, 45), (40, 60), (0, 70)])
     assert text.startswith("进度 0% → 70%;行动值 164 → 150 → 110 → 40 → 0") and "有 3 次单次下降" in text
+
+
+def test_avatar_roles_skins_and_paths():
+    from cwagent.vision.board import avatar_roles
+
+    names = {"150102": "火花", "151302": "砂金•戏浪", "130402": "砂金", "800902": "开拓者", "122402": "三月七",
+             "131002": "流萤"}
+    m7a = {"Sparxie": "火花", "SparxieCandyCoatedWaves": "火花·甜梦电波", "AventurineWaveflair": "砂金·戏浪",
+           "Aventurine": "砂金", "StelleElation": "星（欢愉）", "CaelumDestruction": "穹（毁灭）",
+           "March7thImaginary": "三月七（虚数）", "FireflySpringMissive": "流萤「春日手信」", "Seele": "希儿"}
+    assert avatar_roles(m7a, names) == {
+        "Sparxie": "150102", "SparxieCandyCoatedWaves": "150102", "AventurineWaveflair": "151302",
+        "Aventurine": "130402", "StelleElation": "800902", "CaelumDestruction": "800902",
+        "March7thImaginary": "122402", "FireflySpringMissive": "131002"}
+
+
+def test_identify_by_m7a_avatar(tmp_path):
+    import json
+
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    from cwagent.vision.board import AVATAR_CENTER, AVATAR_SCALE, AVATAR_SIDE, Portraits
+
+    rng = np.random.default_rng(0)
+
+    def texture(h, w):
+        return cv2.GaussianBlur(rng.integers(0, 255, (h, w, 3), dtype=np.uint8), (5, 5), 0)
+
+    folder = tmp_path / "avatars"
+    folder.mkdir()
+    skin, other = texture(100, 100), texture(100, 100)
+    Image.fromarray(skin).save(folder / "SparxieCandyCoatedWaves.png")
+    Image.fromarray(other).save(folder / "Pearl.png")
+    (folder / "names.json").write_text(json.dumps({"SparxieCandyCoatedWaves": "火花·甜梦电波", "Pearl": "真珠"}),
+                                       encoding="utf-8")
+    p = Portraits(tmp_path, {"150102": "火花", "150302": "真珠"})
+    assert sorted(r for r, _ in p.avatars) == ["150102", "150302"]
+
+    # 卡面:皮肤头像的中央按卡宽缩放后贴在实测位置
+    card = np.full((129, 113, 3), 40, np.uint8)
+    face = cv2.cvtColor(skin[18:18 + AVATAR_SIDE, 18:18 + AVATAR_SIDE], cv2.COLOR_RGB2BGR)
+    k = 113 * AVATAR_SCALE
+    face = cv2.resize(face, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+    y, x = int(AVATAR_CENTER[1] * 129 - face.shape[0] / 2), int(AVATAR_CENTER[0] * 113 - face.shape[1] / 2)
+    card[y:y + face.shape[0], x:x + face.shape[1]] = face
+    rid, score = p.identify(card)
+    assert rid == "150102" and score > 0.95

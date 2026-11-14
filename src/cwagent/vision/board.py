@@ -1,14 +1,17 @@
 """备战界面的阵容识别:前台、后台、备战席每一格是谁、几星。
 
-卡面上没有名字,只能比对头像。头像来源两种:
+卡面上没有名字,只能比对头像。头像来源按优先级:
+- March7thAssistant 的角色头像(data/templates/avatars/,知识同步时下载):和卡面是同一套立绘、
+  比例也接近,还包括皮肤(装了皮肤的角色卡面跟着换,官方图标对不上,例如火花「甜梦电波」);
 - 官方接口的角色图标(data/templates/roles/<id>.png):卡面就是它按卡宽缩放后的上半部分;
-- 游戏里商店卡片的立绘(data/templates/cards/<id>.png):有些角色的卡面和官方图标不是同一张图,
+- 游戏里商店卡片的立绘(data/templates/cards/<id>.png):前两种都没有的角色或皮肤,
   商店卡片下方有名字,看到一次就存下来(learn_from_shop)。
 坐标以 1920x1080 客户区实测(2026-11-14),全部归一化。
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +46,18 @@ SHOP_ART = (0.126, 0.057, 0.115)   # 宽、顶、高
 SHOP_NAME_Y = (0.262, 0.302)
 
 MIN_SCORE = 0.6    # 低于这个分数就当作认不出(实测认对的在 0.67~0.9)
+
+# M7A 头像:取中央 64x64 像素(避开左上角的属性图标和四周底色),缩放到卡面比例后在卡面里找。
+# 实测(2026-11-14):宽 113 像素的卡面上是 0.9 倍,匹配中心落在卡面 (0.45~0.56, 0.33~0.48);
+# 认对的 ≥0.8,认错的 ≤0.73,晶矿、弹窗遮挡等非角色 ≤0.70。
+# 先用中间倍率比一遍所有头像,再对分数最高的几张细调倍率。
+AVATAR_SIDE = 64
+AVATAR_SCALE = 0.9 / 113
+AVATAR_STEPS = (1.0, 0.94, 0.97, 1.03)
+AVATAR_CENTER = (0.50, 0.44)
+AVATAR_SLACK = 0.12
+AVATAR_REFINE = 6
+AVATAR_MIN = 0.75
 
 
 @dataclass
@@ -130,15 +145,50 @@ def _load(path: Path) -> np.ndarray:
     return _bgr(bg)
 
 
+def _norm(name: str) -> str:
+    return re.sub(r"[·•・]", "·", re.sub(r"\s+", "", name))
+
+
+def avatar_roles(avatar_names: dict[str, str], names: dict[str, str]) -> dict[str, str]:
+    """M7A 头像文件名 -> 角色 id。先按全名对(「砂金·戏浪」是单独的角色),对不上再去掉皮肤名
+    (「火花·甜梦电波」「流萤「春日手信」」)和命途(「三月七（虚数）」「星（毁灭）」)归到本体。"""
+    ids = {_norm(n): rid for rid, n in names.items()}
+    out = {}
+    for key, cn in avatar_names.items():
+        n = _norm(cn)
+        for cand in (n, re.sub(r"「.*」$", "", n), re.sub(r"[（(].*[）)]$", "", n), n.split("·")[0]):
+            cand = "开拓者" if cand in ("星", "穹") else cand
+            if cand in ids:
+                out[key] = ids[cand]
+                break
+    return out
+
+
+def _center(img: np.ndarray, side: int = AVATAR_SIDE) -> np.ndarray:
+    h, w = img.shape[:2]
+    s = min(side, h, w)
+    y, x = (h - s) // 2, (w - s) // 2
+    return img[y:y + s, x:x + s]
+
+
 class Portraits:
-    """头像库:官方图标 + 从商店学到的立绘。"""
+    """头像库:M7A 头像 + 官方图标 + 从商店学到的立绘。"""
 
     def __init__(self, templates_dir: Path, names: dict[str, str]):
         self.names = names                       # role_id -> 名字
         self.ids = {v: k for k, v in names.items()}
         self.cards_dir = templates_dir / "cards"
+        self.avatars: list[tuple[str, np.ndarray]] = []   # (role_id, 头像中央),一个角色可以有多张(皮肤)
+        self._scaled: dict[int, list[tuple[str, list[np.ndarray]]]] = {}   # 卡宽 -> 缩放好的头像
         self.icons: dict[str, np.ndarray] = {}
         self.cards: dict[str, np.ndarray] = {}
+        avatars = templates_dir / "avatars"
+        if (avatars / "names.json").exists():
+            table = json.loads((avatars / "names.json").read_text(encoding="utf-8"))
+            for key, rid in avatar_roles(table, names).items():
+                p = avatars / f"{key}.png"
+                if p.exists():
+                    self.avatars.append((rid, _center(_load(p))))
         roles = templates_dir / "roles"
         for rid in names:
             p = roles / f"{rid}.png"
@@ -170,7 +220,37 @@ class Portraits:
             best = max(best, float(cv2.matchTemplate(art, qq, cv2.TM_CCOEFF_NORMED).max()))
         return best
 
+    def _score_avatars(self, card: np.ndarray) -> dict[str, float]:
+        h, w = card.shape[:2]
+        if w not in self._scaled:
+            self._scaled[w] = [(rid, [cv2.resize(t, None, fx=w * AVATAR_SCALE * f, fy=w * AVATAR_SCALE * f,
+                                                 interpolation=cv2.INTER_AREA) for f in AVATAR_STEPS])
+                               for rid, t in self.avatars]
+        half = AVATAR_SIDE * w * AVATAR_SCALE * max(AVATAR_STEPS) / 2
+        cx, cy = AVATAR_CENTER[0] * w, AVATAR_CENTER[1] * h
+        dx, dy = half + AVATAR_SLACK * w, half + AVATAR_SLACK * h
+        window = card[max(0, int(cy - dy)):int(cy + dy), max(0, int(cx - dx)):int(cx + dx)]
+
+        def match(t: np.ndarray) -> float:
+            if t.shape[0] > window.shape[0] or t.shape[1] > window.shape[1]:
+                return -1.0
+            return float(cv2.matchTemplate(window, t, cv2.TM_CCOEFF_NORMED).max())
+
+        first = [match(ts[0]) for _, ts in self._scaled[w]]
+        top = sorted(range(len(first)), key=first.__getitem__, reverse=True)[:AVATAR_REFINE]
+        scores: dict[str, float] = {}
+        for i, (rid, ts) in enumerate(self._scaled[w]):
+            s = max([first[i]] + [match(t) for t in ts[1:]]) if i in top else first[i]
+            scores[rid] = max(scores.get(rid, -1.0), s)
+        return scores
+
     def identify(self, card: np.ndarray) -> tuple[str | None, float]:
+        if self.avatars:
+            scores = self._score_avatars(card)
+            if scores:
+                rid = max(scores, key=scores.__getitem__)
+                if scores[rid] >= AVATAR_MIN:
+                    return rid, scores[rid]
         q = _inner(card)
         w = card.shape[1]
         scores: dict[str, float] = {}

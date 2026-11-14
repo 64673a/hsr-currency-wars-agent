@@ -8,7 +8,7 @@ from cwagent.knowledge.build import build
 from cwagent.knowledge.clean import clean
 from cwagent.knowledge.db import KnowledgeDB, write
 from cwagent.knowledge.official_api import OfficialApi, OfficialApiError
-from cwagent.knowledge.sync import download_templates, sync
+from cwagent.knowledge.sync import M7A_NAMES, download_avatars, download_templates, sync
 from tests.fixtures.official_sample import config, lineup
 
 PROPS = {"ExtraLuckChance": "幸运一击率", "ExtraComboRate": "连击率", "ExtraAllDamageTypeAddedRatio1": "伤害增幅",
@@ -155,6 +155,23 @@ def test_download_templates(tmp_path):
     assert (tmp_path / "equipment" / "9.webp").read_bytes() == b"PNG/x.webp"
     done, _ = download_templates(icons, tmp_path, http=http)  # 已存在的跳过
     assert done == {"roles": 0, "equipment": 0}
+
+
+def test_download_avatars(tmp_path):
+    def handler(request):
+        if str(request.url) == M7A_NAMES:
+            return httpx.Response(200, json={"Sparxie": "火花", "SparxieCandyCoatedWaves": "火花·甜梦电波"})
+        return httpx.Response(200, content=b"PNG" + request.url.path.encode())
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    done, errors = download_avatars(tmp_path, http=http)
+    assert done == 2 and not errors
+    assert json.loads((tmp_path / "avatars" / "names.json").read_text(encoding="utf-8"))["Sparxie"] == "火花"
+    assert (tmp_path / "avatars" / "SparxieCandyCoatedWaves.png").read_bytes().endswith(b"SparxieCandyCoatedWaves.png")
+
+    offline = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    done, errors = download_avatars(tmp_path / "x", http=offline)
+    assert done == 0 and len(errors) == 1
 
 
 @pytest.mark.parametrize("desc, expected", [
