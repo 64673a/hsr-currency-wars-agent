@@ -187,15 +187,34 @@ class GameWindowSource:
     """截取游戏窗口客户区。每次截图都重新读取窗口位置,窗口被拖动后也能截对。"""
 
     def __init__(self, exe: str = GAME_EXE):
-        import mss
+        import threading
 
         set_dpi_awareness()
         self.exe = exe
-        self._mss = mss.mss()
+        self._local = threading.local()   # mss 的设备上下文跟线程走:网页里创建、对局线程里截图,所以每个线程各建一个
         self._hwnd = None
 
+    def _sct(self, fresh: bool = False):
+        import mss
+
+        old = getattr(self._local, "mss", None)
+        if old is not None and not fresh:
+            return old
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001 - 已经失效的上下文释放失败也无所谓
+                pass
+        self._local.mss = mss.mss()
+        return self._local.mss
+
     def close(self) -> None:
-        self._mss.close()
+        old = getattr(self._local, "mss", None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def window(self) -> WindowInfo:
         if self._hwnd is None or not _IsWindowVisible(self._hwnd):
@@ -213,13 +232,11 @@ class GameWindowSource:
         info = self.window()
         region = {"left": info.left, "top": info.top, "width": info.width, "height": info.height}
         try:
-            shot = self._mss.grab(region)
+            shot = self._sct().grab(region)
         except mss.exception.ScreenShotError:
             # 切到安全桌面(UAC 提示、锁屏)后原来的设备上下文会一直失效,重建一次再截
-            self._mss.close()
-            self._mss = mss.mss()
             try:
-                shot = self._mss.grab(region)
+                shot = self._sct(fresh=True).grab(region)
             except mss.exception.ScreenShotError as e:
                 raise CaptureError(f"截图失败(可能有 UAC 提示或锁屏):{e}") from None
         image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
