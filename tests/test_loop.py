@@ -85,3 +85,14 @@ def test_battle_screens_recognized():
     assert classify(boxes("总伤害", "19066")) == "battle"
     assert classify(boxes("1-7", "0%", "55")) == "battle"
     assert classify(boxes("备战阶段", "1-7", "出战")) == "prepare"
+
+
+def test_trace_accepts_numpy_numbers(tmp_path):
+    import json
+
+    import numpy as np
+
+    t = Trace(tmp_path / "run")
+    t.write({"x": np.float32(0.5), "n": np.int64(3)})
+    t.close()
+    assert json.loads((tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8")) == {"x": 0.5, "n": 3}

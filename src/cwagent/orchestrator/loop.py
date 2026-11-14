@@ -38,6 +38,11 @@ class RunOptions:
     on_step: Callable[[dict], None] | None = None       # 每一步的记录,给网页实时推送
 
 
+def _plain(o):
+    """numpy 的数字(OCR 坐标等)转成普通数字再写 JSON。"""
+    return o.item() if hasattr(o, "item") else str(o)
+
+
 class Trace:
     def __init__(self, root: Path):
         self.root = root
@@ -59,7 +64,7 @@ class Trace:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def write(self, record: dict) -> None:
-        self._f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._f.write(json.dumps(record, ensure_ascii=False, default=_plain) + "\n")
         self._f.flush()
 
     def close(self) -> None:
@@ -100,7 +105,7 @@ class Runner:
                         continue
                     b = matches[a.nth]
                     self.device.click(b.x, b.y)
-                    self._marks.append({"type": "click", "x": b.x, "y": b.y})
+                    self._marks.append({"type": "click", "x": float(b.x), "y": float(b.y)})
                 elif a.type == "click":
                     self.device.click(a.x, a.y)
                     self._marks.append({"type": "click", "x": a.x, "y": a.y})
