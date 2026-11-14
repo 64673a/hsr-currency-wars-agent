@@ -12,6 +12,7 @@ dependencies = [
     "mss>=9.0",
     "numpy>=2.4.6",
     "onnxruntime>=1.32.0",
+    "opencv-python-headless>=5.0",
     "pillow>=10.1",
     "pydantic>=2.7",
     "pyyaml>=6.0",
