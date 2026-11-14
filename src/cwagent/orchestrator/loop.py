@@ -271,11 +271,32 @@ class Runner:
 
     # ---------------------------------------------------------------- 固定流程
 
+    def _shop_closed(self, boxes: list[TextBox]):
+        """打完一关回到备战界面时,游戏会自动打开商店(维护者告知),手柄、拖动等操作会被商店吞掉:
+        先等这个自动打开发生完,开着就收起。返回(截图, 文字);收不起来时返回 None。"""
+        time.sleep(1.0)
+        frame = self.device.grab()
+        boxes = self.ocr(frame.image)
+        if self.prepare.shop_now(boxes):
+            boxes = self.prepare.set_shop(PrepareResult(), boxes, False)
+            frame = self.prepare.frame or frame
+            if self.prepare.shop_now(boxes):
+                self.log("固定流程:商店收不起来,先跳过")
+                return None
+        return frame, boxes
+
     def macros(self, image, boxes: list[TextBox], node: str | None) -> str | None:
-        """备战界面、商店收起时先做的固定流程。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
-        if not node or self.prepare.shop_now(boxes):
+        """备战界面先做的固定流程(先确保商店收起)。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
+        if not node:
             return None
         plane = node.split("-")[0]
+        tries = self._crystal_tries.get(node, 0)
+        if plane == self._surveyed and not (self._crystal_ok and tries < 2):
+            return None   # 没有要做的
+        closed = self._shop_closed(boxes)
+        if closed is None:
+            return None
+        image, boxes = closed[0].image, closed[1]
         if plane != self._surveyed:
             self._surveyed = plane
             lines = survey_plane(self.device, self.ocr, self.log)
@@ -283,13 +304,12 @@ class Runner:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             return "收集本位面的节点序列"
-        tries = self._crystal_tries.get(node, 0)
         if self._crystal_ok and tries < 2:
             opened = open_crystals(self.device, image, self.log, ocr=self.ocr, debug=self.trace.root / "debug")
             if opened is None:
                 return None
             self._crystal_tries[node] = tries + 1
-            if not opened and sum(self._crystal_tries.values()) >= 2:
+            if not opened and sum(self._crystal_tries.values()) >= 3:
                 self._crystal_ok = False
                 self.log("划开晶矿没有效果,本局不再尝试")
             return "划开晶矿" if opened else "尝试划开晶矿(没变化)"
