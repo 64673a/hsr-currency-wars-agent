@@ -7,6 +7,7 @@ import time
 
 from ..capture import CaptureError, Frame
 from ..capture import windows as win
+from . import UserInterrupt
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
 MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x0001, 0x8000, 0x4000
@@ -43,10 +44,31 @@ _user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
 _user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 
 
+class _LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+
+_last_sent = 0   # agent 最后一次注入输入时的 GetTickCount
+
+
 def _send(*inputs: _INPUT) -> None:
+    global _last_sent
     arr = (_INPUT * len(inputs))(*inputs)
     if _user32.SendInput(len(inputs), arr, ctypes.sizeof(_INPUT)) != len(inputs):
         raise OSError(f"SendInput 失败(错误码 {ctypes.get_last_error()}),agent 需要以管理员身份运行")
+    _last_sent = ctypes.windll.kernel32.GetTickCount()
+
+
+def tick_diff(a: int, b: int) -> int:
+    """GetTickCount 是 32 位无符号、约 49 天回绕一次:按有符号差值算 a - b。"""
+    d = (a - b) & 0xFFFFFFFF
+    return d - (1 << 32) if d >= (1 << 31) else d
+
+
+def _last_input_tick() -> int:
+    info = _LASTINPUTINFO(cbSize=ctypes.sizeof(_LASTINPUTINFO))
+    _user32.GetLastInputInfo(ctypes.byref(info))
+    return info.dwTime
 
 
 def _mouse(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> _INPUT:
@@ -64,10 +86,36 @@ def _key(vk: int, up: bool) -> _INPUT:
     return inp
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+MOVED_PX = 40     # 光标离开 agent 上次放的位置这么远,就认为有人在用鼠标
+CORNER_PX = 3
+
+
 class WindowsDevice:
     def __init__(self):
         self.source = win.GameWindowSource()
         self._info = None
+        self._last: tuple[int, int] | None = None   # agent 上次把光标放到的位置
+
+    def _guard(self) -> None:
+        """每次输入前检查:光标在屏幕角落 = 急停;光标不在 agent 上次放的位置 = 有人在用电脑。两种都立即让出。"""
+        pt = _POINT()
+        _user32.GetCursorPos(ctypes.byref(pt))
+        vx, vy = _user32.GetSystemMetrics(76), _user32.GetSystemMetrics(77)
+        vw, vh = _user32.GetSystemMetrics(78), _user32.GetSystemMetrics(79)
+        near_x = pt.x - vx <= CORNER_PX or vx + vw - 1 - pt.x <= CORNER_PX
+        near_y = pt.y - vy <= CORNER_PX or vy + vh - 1 - pt.y <= CORNER_PX
+        if near_x and near_y:
+            raise UserInterrupt("鼠标在屏幕角落(急停)")
+        if self._last and abs(pt.x - self._last[0]) + abs(pt.y - self._last[1]) > MOVED_PX:
+            self._last = None
+            raise UserInterrupt("检测到有人在动鼠标,已让出控制")
+        # 键盘也算:系统记录的最后一次输入比 agent 自己最后一次注入的晚,就是有人在用电脑
+        if _last_sent and tick_diff(_last_input_tick(), _last_sent) > 1000:
+            raise UserInterrupt("检测到有人在用键盘或鼠标,已让出控制")
 
     def grab(self) -> Frame:
         frame = self.source.grab()
@@ -90,11 +138,14 @@ class WindowsDevice:
         ay = round((sy - vy) * 65535 / max(vh - 1, 1))
         _send(_mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, ax, ay))
         _user32.SetCursorPos(sx, sy)
+        self._last = (sx, sy)
 
     def move(self, x: float, y: float) -> None:
+        self._guard()
         self._move_abs(*self._screen_point(x, y))
 
     def click(self, x: float, y: float, *, button: str = "left") -> None:
+        self._guard()
         self._move_abs(*self._screen_point(x, y))
         time.sleep(0.05)
         down, up = BUTTONS[button]
@@ -103,6 +154,7 @@ class WindowsDevice:
         _send(_mouse(up))
 
     def drag(self, x1: float, y1: float, x2: float, y2: float, *, duration: float = 0.4) -> None:
+        self._guard()
         a, b = self._screen_point(x1, y1), self._screen_point(x2, y2)
         self._move_abs(*a)
         time.sleep(0.05)
@@ -119,12 +171,14 @@ class WindowsDevice:
             _send(_mouse(BUTTONS["left"][1]))
 
     def scroll(self, x: float, y: float, notches: int) -> None:
+        self._guard()
         self._move_abs(*self._screen_point(x, y))
         for _ in range(abs(notches)):
             _send(_mouse(MOUSEEVENTF_WHEEL, data=120 if notches > 0 else -120))
             time.sleep(0.04)
 
     def key(self, key: str) -> None:
+        self._guard()
         self._screen_point(0.5, 0.5)  # 确保游戏在前台
         name = key.lower()
         vk = VK.get(name) or (ord(name.upper()) if len(name) == 1 else None)

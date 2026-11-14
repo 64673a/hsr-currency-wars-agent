@@ -139,6 +139,7 @@ class PlayController:
         self.runs = runs
         self.device_factory = default_device_factory() if device_factory == "default" else device_factory
         self._lock = threading.Lock()
+        self._hotkey: str | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._state: dict[str, Any] = {"run_id": None, "profile": None, "difficulty": None, "round": 0,
@@ -157,7 +158,7 @@ class PlayController:
     def status(self) -> dict[str, Any]:
         with self._lock:
             state = {**self._state, "log": list(self._state["log"])}
-        return {"available": self.device_factory is not None, "running": self.running,
+        return {"available": self.device_factory is not None, "running": self.running, "hotkey": self._hotkey,
                 "stopping": self.running and self._stop.is_set(), **state}
 
     def start(self, *, model: str | None = None, difficulty: str | None = None, max_steps: int = 700,
@@ -177,6 +178,11 @@ class PlayController:
             cfg = cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"difficulty": difficulty})})
         cfg.endpoint(model) if model else cfg.role_endpoint("tactical")   # 模型配置有误时在这里就报错
         device = self.device_factory()
+        if self._hotkey is None and sys.platform == "win32":
+            from ..capture import windows as win
+
+            # Ctrl+Alt+F12 被调试截图服务占着,agent 用自己的热键停止
+            self._hotkey = win.register_hotkey(["ctrl+alt+f10", "ctrl+alt+f9", "ctrl+shift+f10"], self.stop) or ""
         self._stop = threading.Event()
         stop = self._stop
         with self._lock:

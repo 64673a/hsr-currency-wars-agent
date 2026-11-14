@@ -7,6 +7,10 @@ from typing import Protocol
 from ..capture import Frame
 
 
+class UserInterrupt(RuntimeError):
+    """有人在用鼠标(或把鼠标甩到屏幕角落急停):agent 立即让出控制。"""
+
+
 class Device(Protocol):
     def grab(self) -> Frame: ...
     def click(self, x: float, y: float, *, button: str = "left") -> None: ...

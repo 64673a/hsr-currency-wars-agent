@@ -28,6 +28,7 @@ function RunBadge({ run }: { run: RunSummary }) {
   if (run.outcome === '通关') return <Badge tone="success" size="sm">通关</Badge>;
   if (run.outcome === '失败') return <Badge tone="danger" size="sm">失败</Badge>;
   if (run.result === 'stopped') return <Badge size="sm">已停止</Badge>;
+  if (run.result === 'interrupted') return <Badge tone="warning" size="sm">人工接管</Badge>;
   if (run.result === 'error') return <Badge tone="warning" size="sm">出错</Badge>;
   return <Badge size="sm">未完成</Badge>;
 }
@@ -77,6 +78,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
       {status.running ? (
         <>
           {status.rounds > 1 && <span className={styles.round}>第 {status.round} / {status.rounds} 局</span>}
+          {status.hotkey && <span className={styles.round}>{status.hotkey.replace(/\b\w/g, (c) => c.toUpperCase())} 停止</span>}
           <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
             {status.stopping ? '正在停止' : '停止对局'}
           </Button>
@@ -128,7 +130,10 @@ export default function PlayPage() {
   // 对局结束时提示一次
   useEffect(() => {
     if (!status) return;
-    if (wasRunning.current && !status.running) toast('对局已结束', status.error ?? status.result ?? undefined);
+    if (wasRunning.current && !status.running) {
+      const why: Record<string, string> = { settlement: '打完了', stopped: '已停止', interrupted: '检测到有人在用电脑,已让出控制', timeout: '超时', max_steps: '步数用完' };
+      toast('对局已结束', status.error ?? (status.result ? why[status.result] ?? status.result : undefined));
+    }
     wasRunning.current = status.running;
   }, [status, toast]);
 

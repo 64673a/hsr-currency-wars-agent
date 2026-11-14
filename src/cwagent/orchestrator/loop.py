@@ -11,11 +11,13 @@ from pathlib import Path
 
 from PIL import Image
 
+from ..device import UserInterrupt
 from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
 from ..vision.battle import has_marker, read_action_value, read_progress, summarize
 from ..vision.board import Portraits, format_board, shop_is_open
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
+from .macros import open_crystals, survey_plane
 from .screens import (
     DIFFICULTY_HINT,
     PREPARE_LAYOUT,
@@ -94,6 +96,10 @@ class Runner:
         self._curve: list[tuple[int | None, int | None]] = []  # 当前这场战斗的(剩余行动值, 进度)采样
         self._curve_node: str | None = None
         self.last_battle = ""                                  # 上一场战斗的摘要,给下一次决策
+        self.plane_nodes = ""                                  # 本位面的节点序列(进入新位面时程序收集)
+        self._surveyed: str | None = None                      # 已经收集过节点的位面
+        self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
+        self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
 
     # ---------------------------------------------------------------- 执行
 
@@ -126,6 +132,8 @@ class Runner:
                     time.sleep(min(a.seconds or 3, 60))
                 results.append(action_text(a))
                 time.sleep(ACTION_GAP)
+            except UserInterrupt:
+                raise
             except Exception as e:  # noqa: BLE001 - 单个操作失败记录下来,交给下一步重新判断
                 results.append(f"{action_text(a)}:失败({e})")
         return results
@@ -151,6 +159,32 @@ class Runner:
             lines.append("阵容(「认不出」表示有角色但没认出是谁,可以点开看详情):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name})
         return "\n".join(lines), state, names
+
+    # ---------------------------------------------------------------- 固定流程
+
+    def macros(self, image, boxes: list[TextBox], node: str | None) -> str | None:
+        """备战界面、商店收起时先做的固定流程。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
+        if not node or shop_is_open(boxes):
+            return None
+        plane = node.split("-")[0]
+        if plane != self._surveyed:
+            self._surveyed = plane
+            lines = survey_plane(self.device, self.ocr, self.log)
+            if lines:
+                self.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
+                self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
+            return "收集本位面的节点序列"
+        tries = self._crystal_tries.get(node, 0)
+        if self._crystal_ok and tries < 2:
+            opened = open_crystals(self.device, image, self.log)
+            if opened is None:
+                return None
+            self._crystal_tries[node] = tries + 1
+            if not opened and sum(self._crystal_tries.values()) >= 2:
+                self._crystal_ok = False
+                self.log("划开晶矿没有效果,本局不再尝试")
+            return "划开晶矿" if opened else "尝试划开晶矿(没变化)"
+        return None
 
     # ---------------------------------------------------------------- 一步
 
@@ -202,7 +236,25 @@ class Runner:
             actions = [Action(type="wait", seconds=4, reason="画面与上一步相似,继续等待")]
             self._waits += 1
         else:
+            if screen == "prepare":
+                try:
+                    did = self.macros(frame.image, boxes, record["node"])
+                except UserInterrupt:
+                    raise
+                except Exception as e:  # noqa: BLE001 - 固定流程出错就交给模型
+                    did = None
+                    self.log(f"[{n}] 固定流程出错:{type(e).__name__}: {e}")
+                if did:
+                    record["actions"] = [did]
+                    if did.startswith("收集") and self.plane_nodes:
+                        record["plane_nodes"] = self.plane_nodes
+                    self.history.append(f"[{screen}] {did}")
+                    self._last_sig = sig
+                    self.trace.write(record)
+                    return screen
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
+            if self.plane_nodes and screen in ("prepare", "supply"):
+                hints += f"\n\n## 本位面的节点(程序在位面开始时收集)\n{self.plane_nodes}"
             if self.last_battle and screen in ("prepare", "supply", "spotlight_choice"):
                 hints += f"\n\n## 上一场战斗(程序记录的行动值和进度)\n{self.last_battle}"
             names: list[str] = []
@@ -256,6 +308,10 @@ class Runner:
                 return "timeout"
             try:
                 screen = self.step(n)
+            except UserInterrupt as e:
+                self.log(f"[{n}] {e}")
+                self.trace.write({"step": n, "error": str(e)})
+                return "interrupted"
             except Exception as e:  # noqa: BLE001 - 单步出错不终止整局,记录后稍等重试
                 self.log(f"[{n}] 出错:{type(e).__name__}: {e}")
                 self.trace.write({"step": n, "error": f"{type(e).__name__}: {e}"})

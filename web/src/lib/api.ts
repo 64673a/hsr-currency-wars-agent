@@ -145,6 +145,7 @@ export const CONFIDENCE: Record<Memory['confidence'], string> = { high: '已核�
 export interface PlayStatus {
   available: boolean;
   running: boolean;
+  hotkey: string | null;
   stopping: boolean;
   run_id: string | null;
   profile: string | null;
@@ -208,6 +209,7 @@ export interface StepRecord {
   state?: StepState;
   battle?: { av: number | null; progress: number | null };
   battle_summary?: string;
+  plane_nodes?: string;
   note?: string;
   error?: string;
 }

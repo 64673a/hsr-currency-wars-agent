@@ -96,3 +96,29 @@ def test_trace_accepts_numpy_numbers(tmp_path):
     t.write({"x": np.float32(0.5), "n": np.int64(3)})
     t.close()
     assert json.loads((tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8")) == {"x": 0.5, "n": 3}
+
+
+def test_tick_diff_signed():
+    # device.windows 在非 Windows 上导入 ctypes.windll 会失败,只取纯函数测试
+    src = (Path(__file__).resolve().parents[1] / "src/cwagent/device/windows.py").read_text(encoding="utf-8")
+    start = src.index("def tick_diff")
+    ns: dict = {}
+    exec(src[start:src.index("\n\n\n", start)], ns)
+    tick_diff = ns["tick_diff"]
+    assert tick_diff(1000, 1016) == -16                 # 系统记录的输入略早于 agent 记录的时间:不算有人操作
+    assert tick_diff(5000, 1000) == 4000
+    assert tick_diff(10, 0xFFFFFFF0) == 26               # 回绕
+
+
+def test_user_interrupt_stops_run(tmp_path):
+    from cwagent.device import UserInterrupt
+
+    Image.new("RGB", (192, 108)).save(tmp_path / "0.png")
+
+    class Dev(RecordingDevice):
+        def click(self, x, y, *, button="left"):
+            raise UserInterrupt("检测到有人在动鼠标")
+
+    runner = Runner(Dev(DirectorySource(tmp_path)), FakeBrain(), Trace(tmp_path / "run"),
+                    ocr=FakeOcr([[("点击空白处继续", 0.5, 0.89)]]), log=lambda m: None)
+    assert runner.run(RunOptions(max_steps=5)) == "interrupted"

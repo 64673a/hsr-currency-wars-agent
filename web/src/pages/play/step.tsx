@@ -138,6 +138,12 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
           <p className={styles.analysis}>{step.battle_summary}</p>
         </section>
       )}
+      {step.plane_nodes && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>本位面节点</h2>
+          <p className={styles.foldText}>{step.plane_nodes}</p>
+        </section>
+      )}
       {step.state && <StateView state={step.state} />}
 
       {d?.analysis && (
