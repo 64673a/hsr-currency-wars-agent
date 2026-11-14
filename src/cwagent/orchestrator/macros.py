@@ -1,5 +1,13 @@
 """程序直接执行的固定流程(不经过模型):收集本位面的节点序列、打开晶矿。
 
+有没有晶矿:把晶矿面板和「空面板」参考图比对(维护者建议),对不上、且面板里有晶矿颜色的像素才算有。
+参考图自带第一位面的(assets/crystals/);换了位面背景对不上但没有晶矿颜色时,把当前面板记成新的空面板
+(data/templates/crystals/)。
+
+开晶矿优先用虚拟手柄(LT+RT 一次全开,device/gamepad.py);没有手柄驱动时用鼠标一笔划过所有晶矿位置,
+做法和坐标取自 March7thAssistant 的 collect_reward(GPL-3.0):从左上角空白处按下(直接在面板上按下
+可能先拖起装备),再连续经过各晶矿位置。
+
 都只在备战界面、商店收起时执行,每一步都截图确认效果,不对就放弃,交回模型。
 坐标以 1920x1080 客户区实测(2026-11-14)。
 """
@@ -8,11 +16,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
 
+from .. import paths
 from ..vision.ocr import Ocr, TextBox, find, has
 
 TOP_FIRST_NODE = (0.307, 0.058)     # 备战界面顶部节点轨道的第一个图标
@@ -20,8 +30,15 @@ DETAIL_ROW = (0.48, 0.61)           # 位面详情里中间那一排节点图标
 DETAIL_PANEL = (0.0, 0.60, 1.0, 0.25)
 CLOSE_X = (0.969, 0.063)
 ORB_AREA = (0.655, 0.11, 0.225, 0.35)   # 晶矿面板(x, y, 宽, 高)
-ORB_SWIPE_Y = (0.17, 0.23, 0.29, 0.35, 0.41)
-ORB_SWIPE_X = (0.665, 0.87)
+# 晶矿可能出现的位置(左右两列交替,1920x1080 像素中心,取自 M7A),鼠标路径按这个顺序经过
+_ORB_PIXELS = [(1577, 148), (1302, 148), (1302, 192), (1572, 191), (1581, 236), (1309, 238), (1314, 286),
+               (1592, 285), (1601, 319), (1318, 318), (1322, 353), (1609, 354), (1615, 389), (1328, 388),
+               (1332, 423), (1602, 423), (1563, 460), (1336, 460)]
+ORB_PATH = [(0.006, 0.011)] + [(x / 1920, y / 1080) for x, y in _ORB_PIXELS]   # 第一个点是左上角空白处
+PANEL_SIZE = (108, 94)          # 比对用的缩小灰度图
+EMPTY_DIFF = 2.0                # 和空面板逐像素平均差不超过这个值算空(实测:空 ≤0.2,1 个晶矿 2.9,4 个 6.3)
+ORB_MIN = 0.003                 # 晶矿颜色像素占比低于这个值算没有晶矿(实测:空 0,1 个晶矿 0.009)
+BUNDLED_EMPTY = Path(__file__).resolve().parents[1] / "assets" / "crystals"
 
 
 def _arr(image: Image.Image) -> np.ndarray:
@@ -94,15 +111,64 @@ def orb_amount(image: Image.Image) -> float:
     return float((blue | grey | gold).mean())
 
 
+def _learned_dir() -> Path:
+    return paths.templates_dir() / "crystals"
+
+
+def panel(image: Image.Image) -> np.ndarray:
+    x, y, w, h = ORB_AREA
+    crop = Image.fromarray(_arr(image)).crop((int(x * 1920), int(y * 1080), int((x + w) * 1920), int((y + h) * 1080)))
+    return np.asarray(crop.convert("L").resize(PANEL_SIZE), dtype=np.float32)
+
+
+def empty_diff(image: Image.Image) -> float:
+    """当前晶矿面板和已知各个空面板的最小平均差。"""
+    current = panel(image)
+    diffs = [float(np.abs(current - np.asarray(Image.open(p).convert("L").resize(PANEL_SIZE), dtype=np.float32)).mean())
+             for d in (BUNDLED_EMPTY, _learned_dir()) if d.exists() for p in sorted(d.glob("*.png"))]
+    return min(diffs, default=float("inf"))
+
+
+def learn_empty(image: Image.Image) -> Path:
+    d = _learned_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"empty-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    Image.fromarray(panel(image).astype(np.uint8)).save(path)
+    return path
+
+
+def has_crystals(image: Image.Image, log: Callable[[str], None] | None = None) -> bool:
+    diff = empty_diff(image)
+    if diff <= EMPTY_DIFF:
+        return False
+    if orb_amount(image) < ORB_MIN:
+        # 对不上空面板但看不到晶矿:多半是换了位面、背景不一样,记成新的空面板
+        path = learn_empty(image)
+        if log:
+            log(f"晶矿面板和已知的空面板对不上(差 {diff:.1f})但没有晶矿,记成新的空面板:{path.name}")
+        return False
+    return True
+
+
 def open_crystals(device, image: Image.Image, log: Callable[[str], None]) -> bool | None:
-    """在晶矿面板上来回划过去打开晶矿。返回:True 打开了,False 划了没变化,None 没有晶矿。"""
-    before = orb_amount(image)
-    if before < 0.006:
+    """打开晶矿。返回:True 打开了,False 试了没变化,None 没有晶矿。"""
+    if not has_crystals(image, log):
         return None
-    for yy in ORB_SWIPE_Y:
-        device.drag(ORB_SWIPE_X[0], yy, ORB_SWIPE_X[1], yy, duration=0.35)
-        time.sleep(0.15)
-    time.sleep(1.5)
-    after = orb_amount(device.grab().image)
-    log(f"晶矿:划开前 {before:.3f},划开后 {after:.3f}")
-    return after < before * 0.7
+    before = orb_amount(image)
+    pad = getattr(device, "pad_open_crystals", None)
+    if pad is not None and pad():
+        how = "手柄"
+    else:
+        how = "鼠标"
+        error = getattr(getattr(device, "pad", None), "error", "")
+        if error:
+            log(f"晶矿:{error},改用鼠标")
+        device.drag_path(ORB_PATH, duration=1.5)
+        time.sleep(1.5)
+    after_image = device.grab().image
+    after, diff = orb_amount(after_image), empty_diff(after_image)
+    opened = diff <= EMPTY_DIFF or after < ORB_MIN
+    if opened and diff > EMPTY_DIFF:
+        learn_empty(after_image)   # 开完了,但这个位面的空面板还没见过
+    log(f"晶矿({how}):开之前颜色占比 {before:.3f},开之后 {after:.3f},和空面板差 {diff:.1f}")
+    return opened

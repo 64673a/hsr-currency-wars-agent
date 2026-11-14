@@ -511,6 +511,12 @@ def serve(
     if host not in ("127.0.0.1", "localhost"):
         typer.secho(f"注意:监听 {host},局域网内的其他设备可以访问并控制 agent(没有登录机制)", fg="yellow")
     typer.echo(f"打开 http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}")
+    import threading
+
+    from . import components
+
+    # 外部组件(虚拟手柄驱动)缺了就在后台装上,不耽误网页启动
+    threading.Thread(target=components.ensure_all, kwargs={"log": typer.echo}, daemon=True).start()
     live = LiveStream(cfg.stream, log=typer.echo)
     reason = live.start()
     if reason:
@@ -562,6 +568,24 @@ def _ensure_web() -> None:
                     "界面不正常时运行 cwagent web download 更新", fg="yellow")
 
 
+@app.command("uninstall")
+def uninstall_cmd(
+    everything: Annotated[bool, typer.Option("--all", help="同时删除知识库、对局记录、配置等全部数据")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="不再确认")] = False,
+) -> None:
+    """撤销 cwagent 对系统做的改动(虚拟手柄驱动、防火墙规则、下载的程序);--all 连数据一起删。"""
+    from . import components
+
+    items = components.plan(everything=everything)
+    typer.echo("将要:\n" + "\n".join(f"- {i}" for i in items))
+    if not everything:
+        typer.echo("配置、对局记录、知识库保留;要一起删掉用 --all。")
+    if not yes and not typer.confirm("继续?"):
+        raise typer.Exit(1)
+    components.uninstall(log=typer.echo, everything=everything)
+    typer.echo("完成。" + ("现在可以删除程序所在的文件夹。" if everything else ""))
+
+
 @web_app.command("download")
 def web_download() -> None:
     """下载最新的网页界面预构建包(替换 web/dist)。"""
@@ -588,5 +612,9 @@ def play_cmd(
     from .device.windows import WindowsDevice
     from .orchestrator.session import play
 
-    play(ConfigStore().load(), WindowsDevice(), model=model, max_steps=max_steps,
-         log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
+    device = WindowsDevice()
+    try:
+        play(ConfigStore().load(), device, model=model, max_steps=max_steps,
+             log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
+    finally:
+        device.close()

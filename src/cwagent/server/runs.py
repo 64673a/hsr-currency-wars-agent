@@ -190,6 +190,14 @@ class PlayController:
                                result=None, error=None, log=[])
 
         def work() -> None:
+            try:
+                rounds_loop()
+            finally:
+                close = getattr(device, "close", None)   # 拔掉虚拟手柄等
+                if close:
+                    close()
+
+        def rounds_loop() -> None:
             for i in range(1, rounds + 1):
                 if stop.is_set():
                     break

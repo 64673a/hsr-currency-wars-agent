@@ -14,13 +14,13 @@ from pathlib import Path
 
 import httpx
 
+from ..components import FIREWALL_RULE
 from .live import NO_WINDOW, ffmpeg_exe, mediamtx_exe
 
 MEDIAMTX_VERSION = "v1.21.3"
 MEDIAMTX_URL = (f"https://github.com/bluenviron/mediamtx/releases/download/{MEDIAMTX_VERSION}/"
                 f"mediamtx_{MEDIAMTX_VERSION}_windows_amd64.zip")
 FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-8.1.zip"
-FIREWALL_RULE = "cwagent live view"
 
 
 def _download(url: str, dest: Path, progress: Callable[[str], None]) -> None:

@@ -26,6 +26,7 @@
 | 网页界面 | 浏览器里看对局、改设置 | `cwagent serve` 第一次启动时自动下载预构建包(GitHub Releases 的 `web-latest`),不需要 Node.js |
 | [ffmpeg](https://github.com/BtbN/FFmpeg-Builds) 8.1(BtbN 的 GPL 构建) | 实时画面:抓游戏窗口、用显卡编码 | `cwagent serve` 第一次启动时自动下载,也可以手动安装(见下文) |
 | [MediaMTX](https://github.com/bluenviron/mediamtx) v1.21.3 | 实时画面:WebRTC 推流 | 同上 |
+| [ViGEmBus](https://github.com/nefarius/ViGEmBus) 虚拟手柄驱动 | 开晶矿:模拟手柄按 LT+RT 一次打开全部晶矿 | `cwagent serve` 以管理员身份启动时自动安装(安装包随 Python 依赖 vgamepad 一起下载);装不上时开晶矿改用鼠标 |
 
 Python 依赖(包括 OCR 模型)由 `uv sync` 安装。
 
@@ -73,6 +74,17 @@ uv run cwagent serve              # 打开 http://127.0.0.1:8770;第一次启动
 - **编码器**:自动选择 NVIDIA(NVENC)或 AMD(AMF)的显卡编码;都不可用时改用 CPU 编码(占用明显更高,可以在 `config.yaml` 里调低 `stream.fps`)。
 - **不需要实时画面**:`config.yaml` 里设 `stream.enabled: false`,不会下载也不会启动。
 - **从其他设备看不到画面**:多半是防火墙拦了 UDP 8189。以管理员身份运行 `uv run cwagent stream setup`,或者手动放行 `data/tools/mediamtx/mediamtx.exe` 的入站 UDP 8189。
+
+## 卸载
+
+```bash
+uv run cwagent uninstall          # 撤销对系统的改动:卸载 cwagent 装的虚拟手柄驱动、删除防火墙规则和下载的程序;数据保留
+uv run cwagent uninstall --all    # 连同知识库、对局记录、配置(含 API key)、网页界面一起删除
+```
+
+- 以管理员身份运行(卸载驱动、删除防火墙规则需要)。
+- 虚拟手柄驱动只有在是 cwagent 装的时候才卸载;系统里原来就有的(其他软件装的)不动。
+- `--all` 之后删掉整个程序文件夹就清理干净了。uv 管理的 Python 是各项目共用的,不会删除,确实不再需要时运行 `uv python uninstall 3.12.13`。
 
 ## 许可证
 

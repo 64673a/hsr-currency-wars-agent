@@ -628,6 +628,8 @@ pivot_conditions: "到位面2中段仍没有任何主C 2星,或出现更契合�
 - 每个语义动作 = 原语序列 + 前置断言(对应按钮或格子存在)+ 后置校验(金币变化、格子内容变化、商店槽变空)。失败重试 1 次,仍失败则放弃本次动作列表的剩余部分,回到重新感知。
 - 已知可用的快捷键(S1 时期,S2 待核实):`D` 刷新商店、`F` 买经验、`Esc` 退出 / 取消。站位移动在 M7A 中用拖拽实现(按下 → 移动 → 抬起)。
 - 动作之间加入小的随机延迟。
+- **开晶矿**(2026-11-14 实机验证):用虚拟 Xbox 手柄(ViGEmBus + vgamepad)。推一下摇杆,游戏切到手柄界面,晶矿上显示「开启 LT + RT」;同时按 LT、RT 一次打开全部晶矿(实测 4 个一次全开);再动一下鼠标热切换回键鼠界面(维护者告知的做法)。用摇杆而不是按键触发切换,避免误触。没有驱动时退回鼠标:从左上角空白处按下,一笔经过所有晶矿位置(做法和坐标取自 M7A 的 `collect_reward`)。鼠标横向划动(原来的做法,trail-cli 也是这样)两次实测都没有效果。
+- **有没有晶矿**:把晶矿面板缩成 108x94 灰度图,和「空面板」参考图逐像素比对(维护者建议)。实测空面板平均差 ≤0.2、1 个晶矿 2.9、4 个 6.3,门槛 2;同时要求面板里有晶矿颜色的像素(占比 ≥0.003,1 个晶矿约 0.009),防止换了位面背景误判。对不上但没有晶矿颜色时,把当前面板记成新的空面板(`data/templates/crystals/`);自带第一位面的参考图(`assets/crystals/`)。
 - 安全措施:
   - 只在分类器识别为货币战争相关界面时才执行动作;识别到其他界面(抽卡、商城、充值等)立即停止并报警;
   - `--approve` 开关:每个动作列表执行前在终端或观战页等待人工确认(首次联调用);
@@ -920,6 +922,15 @@ hsr-currency-wars-agent/
 └── tests/
 ```
 
+**外部组件的安装与卸载**(`components.py`):cwagent 装到系统里的东西默认自动安装,记在 `data/installed.json`,卸载只撤销自己装的。
+
+| 组件 | 安装 | `cwagent uninstall` |
+|---|---|---|
+| ViGEmBus 虚拟手柄驱动 | `serve` 以管理员身份启动时在后台静默安装(安装包随 vgamepad 发布;`[tool.uv.extra-build-variables]` 让 vgamepad 构建时不弹安装程序) | 只卸载 cwagent 装的;系统里原来就有的不动 |
+| 防火墙规则「cwagent live view」 | 实时画面准备时添加 | 删除 |
+| ffmpeg、MediaMTX(`data/tools`)、`data/stream` | 实时画面准备时下载 | 删除 |
+| 知识库、模板、记忆、对局记录、配置、网页 | — | 只有 `--all` 才删除 |
+
 后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。
 
 命令:
@@ -938,6 +949,7 @@ hsr-currency-wars-agent/
 | `cwagent serve` | 启动后端和前端页面(Windows 上同时启动实时画面) | 任意 |
 | `cwagent stream setup [--force]` | 下载 ffmpeg 和 MediaMTX、添加防火墙规则 | Windows |
 | `cwagent web download` | 下载最新的网页界面预构建包 | 任意 |
+| `cwagent uninstall [--all]` | 撤销对系统的改动(驱动、防火墙、下载的程序);`--all` 连数据一起删 | 任意 |
 
 **现状**:仓库目前只有本文档和 uv 项目骨架(`pyproject.toml` 的依赖随功能逐步加入),业务代码尚未开始。
 

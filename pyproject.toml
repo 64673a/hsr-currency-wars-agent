@@ -19,6 +19,7 @@ dependencies = [
     "rapidocr>=3.10.0",
     "typer>=0.12",
     "uvicorn>=0.30",
+    "vgamepad>=0.2; sys_platform == 'win32'",   # 虚拟手柄开晶矿(驱动 ViGEmBus 由 cwagent 自动安装)
 ]
 
 [project.scripts]
@@ -32,6 +33,10 @@ dev = ["pytest>=8.0"]
 # 固定到补丁号很重要:agent 需以管理员身份运行(游戏是提权进程),而 Windows 上管理员进程无法穿过
 # uv 为「次版本号」建立的目录联接(os error 448);固定补丁号时虚拟环境会直接指向真实安装目录。
 python-preference = "only-managed"
+
+# vgamepad 只有源码包,构建时如果本机没有 ViGEmBus 会弹出驱动安装程序;跳过,驱动由 cwagent 自己按需安装和卸载
+[tool.uv.extra-build-variables]
+vgamepad = { VGAMEPAD_SKIP_VIGEMBUS_INSTALL = "true" }
 
 [build-system]
 requires = ["hatchling"]

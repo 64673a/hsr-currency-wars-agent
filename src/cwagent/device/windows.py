@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import time
 
 from ..capture import CaptureError, Frame
 from ..capture import windows as win
 from . import UserInterrupt
+from .gamepad import Gamepad
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
 MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK = 0x0001, 0x8000, 0x4000
@@ -99,6 +101,10 @@ class WindowsDevice:
         self.source = win.GameWindowSource()
         self._info = None
         self._last: tuple[int, int] | None = None   # agent 上次把光标放到的位置
+        self.pad = Gamepad()                         # 虚拟手柄,第一次开晶矿时才插上
+
+    def close(self) -> None:
+        self.pad.close()
 
     def _guard(self) -> None:
         """每次输入前检查:光标在屏幕角落 = 急停;光标不在 agent 上次放的位置 = 有人在用电脑。两种都立即让出。"""
@@ -170,6 +176,39 @@ class WindowsDevice:
             time.sleep(0.1)
         finally:
             _send(_mouse(BUTTONS["left"][1]))
+
+    def drag_path(self, points: list[tuple[float, float]], *, duration: float = 1.5) -> None:
+        """按住左键沿折线移动(经过每个点),用于一笔划过所有晶矿。"""
+        self._guard()
+        pts = [self._screen_point(x, y) for x, y in points]
+        self._move_abs(*pts[0])
+        time.sleep(0.05)
+        _send(_mouse(BUTTONS["left"][0]))
+        try:
+            time.sleep(0.1)
+            per = duration / max(1, len(pts) - 1)
+            for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+                steps = max(2, int(math.hypot(bx - ax, by - ay) / 25))
+                for i in range(1, steps + 1):
+                    self._move_abs(round(ax + (bx - ax) * i / steps), round(ay + (by - ay) * i / steps))
+                    time.sleep(per / steps)
+            time.sleep(0.1)
+        finally:
+            _send(_mouse(BUTTONS["left"][1]))
+
+    def pad_open_crystals(self) -> bool:
+        """用虚拟手柄开全部晶矿,再动鼠标切回键鼠界面。没有手柄驱动时返回 False。"""
+        global _last_sent
+        self._guard()
+        self._screen_point(0.5, 0.5)   # 确保游戏在前台
+        if not self.pad.open_crystals():
+            return False
+        _last_sent = ctypes.windll.kernel32.GetTickCount()   # 手柄输入不算「有人在用电脑」
+        self.move(0.5, 0.5)            # 棋盘中间的空处,只移动不点击
+        time.sleep(0.1)
+        self.move(0.503, 0.5)
+        time.sleep(1.0)
+        return True
 
     def scroll(self, x: float, y: float, notches: int) -> None:
         self._guard()
