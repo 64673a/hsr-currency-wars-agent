@@ -23,7 +23,7 @@
 | 程序 | 用途 | 安装方式 |
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | 管理 Python 和依赖(版本固定在 `.python-version`) | 手动安装 |
-| [Node.js](https://nodejs.org/) 20+ | 构建网页界面 | 手动安装,只在构建时用到 |
+| 网页界面 | 浏览器里看对局、改设置 | `cwagent serve` 第一次启动时自动下载预构建包(GitHub Releases 的 `web-latest`),不需要 Node.js |
 | [ffmpeg](https://github.com/BtbN/FFmpeg-Builds) 8.1(BtbN 的 GPL 构建) | 实时画面:抓游戏窗口、用显卡编码 | `cwagent serve` 第一次启动时自动下载,也可以手动安装(见下文) |
 | [MediaMTX](https://github.com/bluenviron/mediamtx) v1.21.3 | 实时画面:WebRTC 推流 | 同上 |
 
@@ -51,10 +51,11 @@ uv run cwagent models test                      # 连通性测试
 ## 网页界面
 
 ```bash
-cd web && npm install && npm run build && cd ..   # 需要 Node.js 20+
-uv run cwagent knowledge sync                     # 从米游社官方接口同步角色、羁绊、装备、阵容等(约 1 分钟)
-uv run cwagent serve                              # 打开 http://127.0.0.1:8770
+uv run cwagent knowledge sync     # 从米游社官方接口同步角色、羁绊、装备、阵容等(约 1 分钟)
+uv run cwagent serve              # 打开 http://127.0.0.1:8770;第一次启动会自动下载网页界面
 ```
+
+网页界面由 GitHub Actions 在每次更新后自动构建。更新代码后界面不正常,运行 `uv run cwagent web download` 换成最新的;下载不了时也可以自己构建(需要 Node.js 20+):`cd web && npm install && npm run build`。
 
 有「对局」(开始 / 停止对局、游戏实时画面、逐步回看截图和模型的判断)、「知识库」(官方数据、指引卡、记忆)和「设置」(厂商、模型档案、决策层、运行参数)三个页面。
 

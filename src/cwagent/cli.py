@@ -26,6 +26,8 @@ companions_app = typer.Typer(help="奇遇伙伴档案(边玩边完善)", no_args
 app.add_typer(companions_app, name="companions")
 stream_app = typer.Typer(help="网页上的实时画面", no_args_is_help=True)
 app.add_typer(stream_app, name="stream")
+web_app = typer.Typer(help="网页界面", no_args_is_help=True)
+app.add_typer(web_app, name="web")
 
 
 def _fail(message: str) -> None:
@@ -498,17 +500,14 @@ def serve(
     """启动后端和网页界面。"""
     import uvicorn
 
-    from . import paths
     from .server import create_app
-
     from .stream import LiveStream
 
     cfg = ConfigStore().load()
     settings = cfg.server
     host = host or settings.host
     port = port or settings.port
-    if not (paths.web_dist() / "index.html").exists():
-        typer.secho("前端还没有构建,只有接口可用。构建:cd web && npm install && npm run build", fg="yellow")
+    _ensure_web()
     if host not in ("127.0.0.1", "localhost"):
         typer.secho(f"注意:监听 {host},局域网内的其他设备可以访问并控制 agent(没有登录机制)", fg="yellow")
     typer.echo(f"打开 http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}")
@@ -544,6 +543,34 @@ def stream_setup(
         typer.secho("当前不是管理员,没有添加防火墙规则,局域网里的其他设备可能看不到画面。"
                     "以管理员身份重新运行本命令即可。", fg="yellow")
     typer.echo(f"编码器:{pick_encoder(ffmpeg_exe(), cfg.encoder)}。重启 cwagent serve 后生效。")
+
+
+def _ensure_web() -> None:
+    """没有网页界面时下载预构建包;有的话检查是不是和本地代码同一个提交构建的。"""
+    from . import paths, webdist
+
+    if not (paths.web_dist() / "index.html").exists():
+        try:
+            webdist.download(progress=typer.echo)
+        except Exception as e:  # noqa: BLE001 - 下载不了只是没有网页,接口照常可用
+            typer.secho(f"没有网页界面,只有接口可用({type(e).__name__}: {e})。"
+                        "可以稍后运行 cwagent web download,或自己构建:cd web && npm install && npm run build", fg="yellow")
+        return
+    info, local = webdist.build_info(), webdist.local_commit()
+    if info and local and info.get("commit") != local:
+        typer.secho(f"提示:网页界面是提交 {str(info.get('commit'))[:7]} 构建的,本地代码是 {local[:7]};"
+                    "界面不正常时运行 cwagent web download 更新", fg="yellow")
+
+
+@web_app.command("download")
+def web_download() -> None:
+    """下载最新的网页界面预构建包(替换 web/dist)。"""
+    from . import webdist
+
+    try:
+        webdist.download(progress=typer.echo)
+    except Exception as e:  # noqa: BLE001
+        _fail(f"下载失败:{type(e).__name__}: {e}")
 
 
 # ---------------------------------------------------------------- 对局

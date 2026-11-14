@@ -867,6 +867,8 @@ ffmpeg gfxcapture(Windows Graphics Capture,按 StarRail.exe 抓窗口;窗口被�
 
 React + Vite + TypeScript,放在仓库 `web/` 目录;`npm run build` 产出 `web/dist/`,由后端作为静态文件托管,所以运行时只有一个服务。开发时用 Vite 开发服务器并把 `/api` 代理到后端。
 
+**预构建包**(2026-11-14):`.github/workflows/web.yml` 在每次推送 `web/` 后构建,打包成 `web-dist.zip`(附 `.sha256`,包内 `BUILD.json` 记录提交号),上传到 Releases 的滚动预发布 `web-latest`。本机没有 `web/dist` 时 `cwagent serve` 自动下载(`webdist.py`,校验 SHA256、检查包内有 `index.html`,失败时不动原目录);和本地代码提交号不一致只提醒。使用者不需要 Node.js。
+
 组件库:**Arc**(https://uiarc.dev)。shadcn 风格,组件源码通过注册表复制进项目(`web/src/components/arc/`),样式是 CSS Modules + 语义 CSS 变量,不依赖 Tailwind;依赖 Radix、motion、lucide-react。
 
 - 安装:`web/components.json` 里登记 `"registries": {"@uiarc": "https://uiarc.dev/r/{name}.json"}`,再 `npx shadcn@latest add @uiarc/<名称>`;设计变量 `components/arc/foundation.css` 在入口导入一次;
@@ -935,6 +937,7 @@ hsr-currency-wars-agent/
 | `cwagent memory list / add / approve / reject / export / preview` | 管理记忆,预览检索结果 | 任意 |
 | `cwagent serve` | 启动后端和前端页面(Windows 上同时启动实时画面) | 任意 |
 | `cwagent stream setup [--force]` | 下载 ffmpeg 和 MediaMTX、添加防火墙规则 | Windows |
+| `cwagent web download` | 下载最新的网页界面预构建包 | 任意 |
 
 **现状**:仓库目前只有本文档和 uv 项目骨架(`pyproject.toml` 的依赖随功能逐步加入),业务代码尚未开始。
 

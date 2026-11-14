@@ -1,0 +1,46 @@
+# 构建网页界面并发布到 Releases 的 web-latest(滚动更新),没有 Node 的用户由 cwagent serve 自动下载。
+name: 网页构建
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: web-dist
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - name: 打包
+        run: |
+          printf '{"commit": "%s", "built_at": "%s"}\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/dist/BUILD.json
+          (cd web/dist && zip -qr ../../web-dist.zip .)
+          sha256sum web-dist.zip | cut -d' ' -f1 > web-dist.zip.sha256
+      - name: 发布到 web-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view web-latest > /dev/null 2>&1; then
+            gh release create web-latest --prerelease --target "$GITHUB_SHA" --title "网页界面(自动构建)" --notes "初始化"
+          fi
+          gh release upload web-latest web-dist.zip web-dist.zip.sha256 --clobber
+          gh release edit web-latest --notes "网页界面的预构建包,每次推送 web/ 后自动更新。cwagent serve 在本机没有网页时会自动下载;手动更新:uv run cwagent web download。
+
+          当前构建:$GITHUB_SHA"
