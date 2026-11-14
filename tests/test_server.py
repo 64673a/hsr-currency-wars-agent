@@ -176,6 +176,11 @@ def test_runs_and_play(tmp_path):
     steps = client.get(f"/api/runs/{d.name}/steps", params={"after": 0}).json()
     assert [s["step"] for s in steps] == [1, 2, 3] and steps[0]["node"] == "1-9" and steps[1]["node"] is None
     assert client.get(f"/api/runs/{d.name}/steps", params={"after": 1}).json()[0]["step"] == 2
+    d0 = runs / "20261114-100000_x"
+    d0.mkdir()
+    leftover = {"step": 1, "screen": "settlement", "texts": ["(0.5,0.2) 挑战失败"], "actions": []}  # 上一局留下的结算界面
+    (d0 / "steps.jsonl").write_text(json.dumps(leftover, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert next(r for r in client.get("/api/runs").json() if r["id"] == d0.name)["outcome"] is None
     assert client.get(f"/api/runs/{d.name}/shots/0001.jpg").content == b"jpg"
     assert client.get(f"/api/runs/{d.name}/shots/..%2Fmeta.json").status_code == 404
     assert client.get("/api/runs/nope/steps").status_code == 404

@@ -67,15 +67,17 @@ class RunStore:
         if cached and cached[0] == key:
             info = cached[1]
         else:
-            steps, node, outcome, decisions = 0, None, None, 0
+            steps, node, outcome, decisions, started = 0, None, None, 0, False
             for r in self._records(d):
+                started = started or r.get("screen") in ("run_intro", "environment_choice", "prepare", "battle")
                 steps = max(steps, r.get("step", 0))
                 n = r.get("node") or _node_from_texts(r.get("texts", []))
                 if n and (node is None or _node_key(n) > _node_key(node)):
                     node = n
                 if r.get("decision"):
                     decisions += 1
-                if r.get("screen") == "settlement":  # 单场战斗输了也会显示「挑战失败」,只看整局结算
+                # 单场战斗输了也会显示「挑战失败」,只看开局之后的整局结算(开头可能是上一局留下的结算界面)
+                if started and r.get("screen") == "settlement":
                     texts = " ".join(r.get("texts", []))
                     if "挑战失败" in texts:
                         outcome = "失败"
