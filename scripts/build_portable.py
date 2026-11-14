@@ -30,10 +30,13 @@ OUT = DIST / NAME
 
 def run(*cmd, env=None, **kw) -> str:
     print("+", " ".join(map(str, cmd)), flush=True)
-    r = subprocess.run([str(c) for c in cmd], check=True, text=True, capture_output=True,
+    r = subprocess.run([str(c) for c in cmd], text=True, capture_output=True, encoding="utf-8", errors="replace",
                        env={**os.environ, **(env or {})}, **kw)
     if r.stdout.strip():
         print(r.stdout.strip()[-2000:])
+    if r.returncode != 0:
+        print(r.stderr.strip()[-4000:], file=sys.stderr)
+        raise subprocess.CalledProcessError(r.returncode, cmd)
     return r.stdout
 
 
@@ -51,7 +54,12 @@ def main() -> None:
 
     # 1. Python:复制 uv 管理的独立 CPython;去掉「外部管理」标记,这份是包里私有的
     run("uv", "python", "install", PYTHON_VERSION)
-    exe = Path(run("uv", "python", "find", PYTHON_VERSION).strip().splitlines()[-1])
+    # 在 uv run 里 VIRTUAL_ENV 指向项目的 venv,find 会优先返回它;要的是 uv 管理的独立 CPython 本体
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    exe = Path(subprocess.run(["uv", "python", "find", "--no-project", "--system", "--managed-python", PYTHON_VERSION],
+                              text=True, capture_output=True, check=True, env=env).stdout.strip())
+    if (exe.parent / "pyvenv.cfg").exists() or (exe.parent.parent / "pyvenv.cfg").exists():
+        sys.exit(f"找到的是虚拟环境而不是独立的 Python:{exe}")
     shutil.copytree(exe.parent, OUT / "python", ignore=shutil.ignore_patterns("__pycache__"))
     (OUT / "python" / "Lib" / "EXTERNALLY-MANAGED").unlink(missing_ok=True)
 
