@@ -193,12 +193,14 @@ class PlayController:
             for i in range(1, rounds + 1):
                 if stop.is_set():
                     break
+                runner = None
                 try:
                     runner, run_dir = build_runner(cfg, device, model=model, log=self._log)
                     with self._lock:
                         self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
                     result = run_session(runner, opts, log=self._log)
+                    runner = None
                     with self._lock:
                         self._state["result"] = result
                     if result not in ("settlement",):   # 停止、超时、暂停、步数用完都不再开下一局
@@ -206,6 +208,8 @@ class PlayController:
                 except Exception as e:  # noqa: BLE001 - 错误给网页看
                     with self._lock:
                         self._state["error"] = f"{type(e).__name__}: {e}"
+                    if runner is not None:   # 记录目录建好了但没开始打:标记结束,否则会一直显示「进行中」
+                        runner.trace.meta(result="error", ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
                     break
 
         self._thread = threading.Thread(target=work, name="play", daemon=True)
