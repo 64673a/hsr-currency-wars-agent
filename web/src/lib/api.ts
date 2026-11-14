@@ -188,6 +188,11 @@ export interface StepDecision {
   usage: { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number } | null;
 }
 
+export interface StepState {
+  hud?: { node?: string; hp?: number; gold?: number; level?: number; exp?: string; deployed?: string };
+  board?: { zone: 'front' | 'back' | 'bench'; index: number; name: string | null; stars: number; score: number }[];
+}
+
 export interface StepRecord {
   step: number;
   ts?: string;
@@ -198,6 +203,7 @@ export interface StepRecord {
   decision?: StepDecision;
   actions?: string[];
   marks?: StepMark[];
+  state?: StepState;
   note?: string;
   error?: string;
 }

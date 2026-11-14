@@ -12,6 +12,8 @@ from pathlib import Path
 from PIL import Image
 
 from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
+from ..vision.board import Portraits, format_board, shop_is_open
+from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
 from .screens import (
     DIFFICULTY_HINT,
@@ -67,12 +69,13 @@ class Trace:
 class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
                  on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
-                 difficulty: str = "A8-1"):
+                 difficulty: str = "A8-1", portraits: Portraits | None = None):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
         self.trace = trace
         self.ocr = ocr or Ocr()
+        self.portraits = portraits
         self.on_companion = on_companion
         self.log = log
         self.run_notes = ""
@@ -118,6 +121,28 @@ class Runner:
                 results.append(f"{action_text(a)}:失败({e})")
         return results
 
+    # ---------------------------------------------------------------- 局面识别
+
+    def perceive(self, image, boxes: list[TextBox], node: str | None) -> tuple[str, dict, list[str]]:
+        """备战界面:读数字和阵容。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
+        hud = read_hud(image, boxes, self.ocr, node=node)
+        state: dict = {"hud": hud.as_dict()}
+        lines = [hud.text()]
+        names: list[str] = []
+        if self.portraits is not None:
+            shop = shop_is_open(boxes)
+            if shop:
+                learned = self.portraits.learn_from_shop(image, boxes)
+                if learned:
+                    self.log(f"从商店记下了立绘:{'、'.join(learned)}")
+            board = self.portraits.read(image, shop_open=shop)
+            state["board"] = [{"zone": b.zone, "index": b.index, "x": round(b.x, 3), "y": round(b.y, 3),
+                               "name": b.name, "stars": b.stars, "score": round(b.score, 2)}
+                              for b in board if not b.empty]
+            lines.append("阵容(「认不出」表示有角色但没认出是谁,可以点开看详情):\n" + format_board(board))
+            names = sorted({b.name for b in board if b.name})
+        return "\n".join(lines), state, names
+
     # ---------------------------------------------------------------- 一步
 
     def step(self, n: int) -> str:
@@ -156,6 +181,13 @@ class Runner:
             self._waits += 1
         else:
             hints = PREPARE_LAYOUT if screen == "prepare" else ""
+            names: list[str] = []
+            if screen == "prepare":
+                try:
+                    seen, record["state"], names = self.perceive(frame.image, boxes, record["node"])
+                    hints += "\n\n## 程序识别的局面\n" + seen
+                except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
+                    self.log(f"[{n}] 局面识别出错:{type(e).__name__}: {e}")
             if screen == "difficulty":
                 hints = DIFFICULTY_HINT.format(target=self.difficulty)
             elif screen == "spotlight_choice":
@@ -164,7 +196,7 @@ class Runner:
                 hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
                           "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
             decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history,
-                                         hints=hints)
+                                         hints=hints, names=names)
             record["decision"] = to_jsonable(decision)
             if decision.error:
                 self.log(f"[{n}] 决策失败:{decision.error}")

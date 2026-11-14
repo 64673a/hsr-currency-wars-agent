@@ -1,6 +1,6 @@
 import { Alert } from '@/components/arc/alert/alert';
 import { Badge } from '@/components/arc/badge/badge';
-import { enc, type RunSummary, type StepRecord } from '@/lib/api';
+import { enc, type RunSummary, type StepRecord, type StepState } from '@/lib/api';
 
 import styles from './play.module.css';
 
@@ -13,6 +13,7 @@ const SCREENS: Record<string, string> = {
   prepare: '备战',
   battle: '战斗',
   spotlight_choice: '主角光环',
+  supply: '补给',
   tap_continue: '点击继续',
   quit_dialog: '中断确认',
   settlement: '结算',
@@ -67,6 +68,49 @@ export function ShotView({ runId, step }: { runId: string; step: StepRecord }) {
   );
 }
 
+const ZONES = [
+  { zone: 'front', label: '前台' },
+  { zone: 'back', label: '后台' },
+  { zone: 'bench', label: '备战席' },
+] as const;
+
+function StateView({ state }: { state: StepState }) {
+  const h = state.hud ?? {};
+  const facts = [
+    h.hp !== undefined && `生命 ${h.hp}`,
+    `金币 ${h.gold ?? '?'}`,
+    h.level !== undefined && `等级 ${h.level}${h.exp ? `(${h.exp})` : ''}`,
+    h.deployed && `上场 ${h.deployed}`,
+  ].filter(Boolean);
+  return (
+    <section className={styles.block}>
+      <h2 className={styles.blockTitle}>局面</h2>
+      <p className={styles.facts}>{facts.join(' · ')}</p>
+      {state.board && (
+        <dl className={styles.board}>
+          {ZONES.map(({ zone, label }) => {
+            const units = state.board!.filter((u) => u.zone === zone);
+            return (
+              <div key={zone} className={styles.boardRow}>
+                <dt>{label}</dt>
+                <dd>
+                  {units.length === 0 && <span className={styles.unitEmpty}>空</span>}
+                  {units.map((u) => (
+                    <span key={u.index} className={styles.unit} data-unknown={u.name ? undefined : 'true'}>
+                      {u.name ?? '认不出'}
+                      {u.stars > 0 && <span className={styles.stars}>{'★'.repeat(u.stars)}</span>}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      )}
+    </section>
+  );
+}
+
 export function StepDetail({ step, notes, run }: { step: StepRecord; notes: string; run: RunSummary | null }) {
   const d = step.decision;
   const results = step.actions ?? [];
@@ -82,6 +126,8 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
 
       {step.error && <Alert tone="danger" title="这一步出错">{step.error}</Alert>}
       {d?.error && <Alert tone="warning" title="模型没有给出有效操作">{d.error}</Alert>}
+
+      {step.state && <StateView state={step.state} />}
 
       {d?.analysis && (
         <section className={styles.block}>

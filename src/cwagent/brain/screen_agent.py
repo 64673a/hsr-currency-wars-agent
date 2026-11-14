@@ -121,9 +121,9 @@ class ScreenAgent:
         self.system = (PROMPTS / "system.md").read_text(encoding="utf-8").replace("{rules}", rules)
 
     def build_user(self, boxes: list[TextBox], *, screen: str, run_notes: str, history: list[str],
-                   hints: str = "") -> tuple[str, list[str]]:
+                   hints: str = "", names: list[str] | None = None) -> tuple[str, list[str]]:
         texts = [b.text for b in boxes]
-        entities = self.index.link(texts)
+        entities = self.index.link(texts + (names or []))
         cues = Cues(entities={e.name for e in entities}, texts=texts, screen=screen,
                     layer="战术" if screen == "prepare" else "选择")
         hits = recall(self.memories, cues)
@@ -142,8 +142,9 @@ class ScreenAgent:
         return "\n\n".join(parts), [r.memory.id for r in hits]
 
     def decide(self, boxes: list[TextBox], *, screen: str, run_notes: str, history: list[str],
-               hints: str = "") -> Decision:
-        user, recalled = self.build_user(boxes, screen=screen, run_notes=run_notes, history=history, hints=hints)
+               hints: str = "", names: list[str] | None = None) -> Decision:
+        user, recalled = self.build_user(boxes, screen=screen, run_notes=run_notes, history=history, hints=hints,
+                                         names=names)
         prompt = user
         last_error = ""
         for _ in range(2):  # 输出不合法时带着错误重问一次

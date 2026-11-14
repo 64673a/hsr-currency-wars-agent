@@ -28,7 +28,7 @@ class FakeBrain:
     def __init__(self):
         self.calls = []
 
-    def decide(self, boxes, *, screen, run_notes, history, hints=""):
+    def decide(self, boxes, *, screen, run_notes, history, hints="", names=None):
         self.calls.append(screen)
         return Decision("选追击概念股", [Action(type="click_text", text="追击概念股"), Action(type="click_text", text="确认")],
                         "环境:追击概念股", [], "s", "u", None)

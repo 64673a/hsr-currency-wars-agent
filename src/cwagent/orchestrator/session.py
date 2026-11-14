@@ -11,7 +11,23 @@ from ..config import AppConfig
 from ..knowledge.companions import CompanionBook
 from ..knowledge.index import NameIndex
 from ..memory import MemoryStore
+from ..vision.board import Portraits
 from .loop import Runner, RunOptions, Trace
+
+
+def load_portraits() -> Portraits | None:
+    """头像库:知识库里的角色名 + 模板图。知识库没同步时返回 None(不识别阵容)。"""
+    import sqlite3
+
+    db = paths.knowledge_db()
+    if not db.exists():
+        return None
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        names = dict(con.execute("SELECT id, name FROM roles"))
+    finally:
+        con.close()
+    return Portraits(paths.templates_dir(), names)
 
 
 def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print) -> tuple[Runner, Path]:
@@ -21,7 +37,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print)
     run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{endpoint.name}"
     trace = Trace(run_dir)
     book = CompanionBook()
-    runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty,
+    runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name: book.record(name, screenshot=str(run_dir / "shots")))
     trace.meta(profile=endpoint.name, model=endpoint.model, difficulty=cfg.agent.difficulty,
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
