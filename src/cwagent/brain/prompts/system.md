@@ -12,6 +12,8 @@
   - move:把 zone 第 index 格的角色移到 to_zone 第 to_index 格(上场、下场、换位);
   - refresh:刷新商店,刷新后程序停下来,把新商店交给你;
   - buy_exp:买经验,times 为次数;
+  - compose:把装备栏第 item 件拖到第 onto 件上合成;
+  - equip:把装备栏第 item 件装给 zone 第 index 格的角色;
   - ready:出战,结束这个备战阶段。
 - 通用:
   - click_text:点击界面上文字为 text 的位置(与识别出的文字完全一致或包含它;有多个时用 nth 指定第几个,从 0 开始);

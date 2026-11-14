@@ -36,6 +36,7 @@ class RunLedger:
     plane_nodes: str = ""                                    # 本位面的节点序列(程序在位面开始时收集)
     direction: str = ""                                      # 对局方向与计划(模型写)
     events: list[str] = field(default_factory=list)          # 各次选择(投资环境、投资策略、遭遇……)
+    equipped: dict[str, list[str]] = field(default_factory=dict)   # 角色 → 程序给他装上的装备
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
 
     def node(self, name: str) -> NodeRecord:
@@ -45,6 +46,9 @@ class RunLedger:
 
     def event(self, text: str) -> None:
         self.events = (self.events + [text])[-MAX_EVENTS:]
+
+    def equip(self, role: str, item: str) -> None:
+        self.equipped.setdefault(role, []).append(item)
 
     def set_direction(self, text: str) -> None:
         self.direction = text.strip()[:MAX_DIRECTION]
@@ -56,6 +60,9 @@ class RunLedger:
             parts.append("### 开局信息\n" + self.intro)
         if self.events:
             parts.append("### 做过的选择(从旧到新)\n" + "\n".join(f"- {e}" for e in self.events))
+        if self.equipped:
+            parts.append("### 角色身上的装备(程序记录,角色卖掉或换下后可能不准)\n" + "\n".join(
+                f"- {r}:{'、'.join(items)}" for r, items in self.equipped.items()))
         if self.plane_nodes:
             parts.append("### 本位面的节点\n" + self.plane_nodes)
         if self.nodes:

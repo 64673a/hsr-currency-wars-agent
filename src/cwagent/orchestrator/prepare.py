@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from ..brain.screen_agent import Action, action_text, slot_text
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, slots
+from ..vision.equipment import EquipmentReader, find_compose_confirm
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import read_shop, shop_state
 
@@ -29,6 +30,7 @@ class PrepareResult:
     ready: bool = False        # 已经点了出战,备战阶段结束
     observe: bool = False      # 刷新了商店等:停下来让模型看新界面
     occupied: dict[tuple[str, int], str] | None = None   # 执行完以后各格子里是谁(认不出阵容时为 None)
+    equipped: list[tuple[str, str]] = field(default_factory=list)   # (角色, 装备):这次给谁装了什么
 
     def lineup(self) -> str:
         if self.occupied is None:
@@ -40,9 +42,10 @@ class PrepareResult:
 
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
-                 sleep: Callable[[float], None] | None = None):
+                 sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None):
         self.device = device
         self.ocr = ocr
+        self.equipment = equipment
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
         self.sleep = sleep or (lambda s: time.sleep(s))
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
@@ -90,7 +93,9 @@ class PrepareExecutor:
         if board is not None:
             occupied = {(s.zone, s.index): (s.name or "认不出的角色") for s in board if not s.empty}
         self.shop_now(boxes)
-        for a in actions:
+        pending = [a.model_copy() for a in actions]
+        while pending:
+            a = pending.pop(0)
             text = action_text(a)
             try:
                 if a.type == "buy":
@@ -171,6 +176,11 @@ class PrepareExecutor:
                         self.device.key("f")
                         self.sleep(0.3)
                     out.results.append(text)
+                elif a.type in ("compose", "equip"):
+                    done = self._equipment(a, text, out, occupied, boxes)
+                    if done is None:
+                        break
+                    _shift(pending, done)
                 elif a.type == "ready":
                     boxes = self.set_shop(out, boxes, False)
                     self._click(out, *READY_BUTTON)
@@ -190,3 +200,81 @@ class PrepareExecutor:
                 break
         out.occupied = occupied
         return out
+
+    # ---------------------------------------------------------------- 装备
+
+    def _equipment(self, a: Action, text: str, out: PrepareResult, occupied, boxes) -> int | None:
+        """合成或装备。成功返回装备栏里被用掉的编号(后面的装备会往前顺移);失败时记下原因、返回 None 停下来。"""
+        if self.equipment is None:
+            out.results.append(f"{text}:没有装备识别(知识库还没同步)")
+            return None
+        if a.item == 0 or (a.type == "compose" and a.onto == 0):
+            out.results.append(f"{action_text(a).split(' ')[0]}:这件装备已经在前面的操作里用掉了")
+            return None
+        before = self.equipment.read(self.device.grab().image)
+        item = next((i for i in before if i.index == a.item), None)
+        if item is None:
+            out.results.append(f"{text}:装备栏没有第 {a.item} 件(现在有 {len(before)} 件)")
+            out.observe = True
+            return None
+        if a.type == "compose":
+            target = next((i for i in before if i.index == a.onto), None)
+            if target is None or a.onto == a.item:
+                out.results.append(f"{text}:装备栏没有第 {a.onto} 件")
+                out.observe = True
+                return None
+            self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
+            out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
+            self.sleep(1.0)
+            ok = find_compose_confirm(self.device.grab().image)
+            if ok is None:
+                out.results.append(f"{text}({item.name or '?'}+{target.name or '?'}):没有出现合成确认,这两件可能不能合成")
+                out.observe = True
+                return None
+            self._click(out, *ok)
+            self.sleep(1.2)
+            after = self.equipment.read(self.device.grab().image)
+            if len(after) != len(before) - 1:
+                out.results.append(f"{text}:点了确认,但装备数没有变化,可能没合成成功")
+                out.observe = True
+                return None
+            keep = min(a.item, a.onto)
+            product = next((i.name for i in after if i.index == keep), None) or "认不出的装备"
+            out.results.append(f"{text}({item.name}+{target.name}):合成了 {product},现在是 {keep} 号")
+            return max(a.item, a.onto)
+        # 装备给角色
+        src = (a.zone, a.index - 1)
+        if occupied is not None and src not in occupied:
+            out.results.append(f"{text}:{slot_text(a.zone, a.index)}没有角色")
+            return None
+        layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
+        if src not in layout:
+            out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
+            return None
+        dst = layout[src]
+        self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
+        out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": dst.x, "y2": dst.y})
+        self.sleep(1.0)
+        after = self.equipment.read(self.device.grab().image)
+        if len(after) != len(before) - 1:
+            out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
+            out.observe = True
+            return None
+        who = occupied.get(src, "") if occupied is not None else ""
+        out.results.append(f"{text}:{item.name} 给了 {who or slot_text(a.zone, a.index)}")
+        if who and item.name:
+            out.equipped.append((who, item.name))
+        return a.item
+
+
+def _shift(pending: list[Action], removed: int) -> None:
+    """装备栏第 removed 件用掉后,后面的往前顺移:把还没执行的动作里引用的编号跟着改。"""
+    for a in pending:
+        for f in ("item", "onto"):
+            v = getattr(a, f)
+            if not v:
+                continue
+            if v == removed:
+                setattr(a, f, 0)    # 指向已经用掉的那件
+            elif v > removed:
+                setattr(a, f, v - 1)

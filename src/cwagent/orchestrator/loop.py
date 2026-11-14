@@ -19,13 +19,16 @@ import numpy as np
 from PIL import Image
 
 from ..brain.ledger import RunLedger
+from ..knowledge.equipment import EquipmentBook
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, to_jsonable
+from .. import paths
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value, read_progress, summarize
 from ..vision.board import Portraits, Slot, format_board
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
+from . import difficulty as difficulty_select
 from .macros import open_crystals, survey_plane
 from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
@@ -106,7 +109,7 @@ class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
                  on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
                  difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
-                 settle: bool = True):
+                 settle: bool = True, equipment: EquipmentBook | None = None):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
@@ -121,7 +124,9 @@ class Runner:
         self.episode: Episode | None = None
         self._ids = itertools.count(1)
         self._results: list[str] = []     # 上一组操作的执行结果,下一轮交给模型
-        self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw)
+        self.equipment = equipment
+        self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
+        self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader)
         self._node: str | None = None
         self._board: list[Slot] | None = None
         self._last_screen = ""
@@ -137,6 +142,7 @@ class Runner:
         self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
         self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
         self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
+        self._difficulty_tried = False                         # 难度只自动选一次,失败交给模型
 
     # ---------------------------------------------------------------- 截图
 
@@ -218,6 +224,12 @@ class Runner:
                               for b in board if not b.empty]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name})
+        if self.equipment is not None and self.equipment_reader is not None:
+            items = self.equipment_reader.read(image)
+            state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]
+            text, equip_names = self.equipment.describe(items, names)
+            lines.append(text)
+            names = names + equip_names
         if node and not self.ledger.node(node).start:
             self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
@@ -274,6 +286,14 @@ class Runner:
                 return [Action(type="click_text", text="下一步", reason="开局介绍")]
             case "home":
                 return [Action(type="click_text", text="开始「货币战争」")]
+            case "difficulty":
+                if not self._difficulty_tried:
+                    self._difficulty_tried = True
+                    if difficulty_select.select(self.device, self.ocr, self.difficulty, self.log):
+                        record["note"] = f"难度 {self.difficulty}"
+                        return [Action(type="click_text", text="开始对局", reason=f"难度已调到 {self.difficulty}")]
+                    self.log("难度没能自动选好,交给模型")
+                return None
             case "mode_select":
                 return [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
             case "settlement":
@@ -446,6 +466,8 @@ class Runner:
         if self.episode is not None:
             self.episode.done += [r for r in result.results if not r.startswith("等待")]
             self._results = result.results
+        for role, item in result.equipped:
+            self.ledger.equip(role, item)
         if result.ready:
             if self.episode is not None and self.episode.node and result.lineup():
                 self.ledger.node(self.episode.node).lineup = result.lineup()

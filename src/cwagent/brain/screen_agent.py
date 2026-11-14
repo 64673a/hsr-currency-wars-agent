@@ -22,11 +22,12 @@ PROMPTS = Path(__file__).parent / "prompts"
 MAX_ACTIONS = 12
 ZONES = ("front", "back", "bench")
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
-PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready"}
+PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose", "equip"}
 
 
 class Action(BaseModel):
-    type: str = Field(pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready)$")
+    type: str = Field(
+        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip)$")
     text: str | None = None
     nth: int = 0
     x: float | None = Field(default=None, ge=0, le=1)
@@ -42,12 +43,15 @@ class Action(BaseModel):
     to_zone: str | None = Field(default=None, pattern="^(front|back|bench)$")
     to_index: int | None = Field(default=None, ge=1, le=9)
     times: int | None = Field(default=None, ge=1, le=20)      # buy_exp:买几次
+    item: int | None = Field(default=None, ge=1, le=24)       # compose / equip:装备栏第几件
+    onto: int | None = Field(default=None, ge=1, le=24)       # compose:拖到第几件上
     reason: str = ""
 
     @model_validator(mode="after")
     def _required(self) -> "Action":
         need = {"click_text": ["text"], "click": ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"],
-                "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"]}
+                "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
+                "compose": ["item", "onto"], "equip": ["item", "zone", "index"]}
         missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "")]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
@@ -82,10 +86,11 @@ ACT_TOOL = ToolSpec(
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "buy_exp", "ready",
-                                                            "click_text", "click", "drag", "scroll", "key", "wait",
-                                                            "pause"]},
+                                                            "compose", "equip", "click_text", "click", "drag",
+                                                            "scroll", "key", "wait", "pause"]},
                         "slot": {"type": "integer"}, "zone": _SLOT, "index": {"type": "integer"},
                         "to_zone": _SLOT, "to_index": {"type": "integer"}, "times": {"type": "integer"},
+                        "item": {"type": "integer"}, "onto": {"type": "integer"},
                         "text": {"type": "string"}, "nth": {"type": "integer"},
                         "x": {"type": "number"}, "y": {"type": "number"},
                         "x2": {"type": "number"}, "y2": {"type": "number"},
@@ -283,6 +288,10 @@ def action_text(a: Action) -> str:
             return f"买经验 ×{a.times or 1}"
         case "ready":
             return "出战"
+        case "compose":
+            return f"合成装备 {a.item}号 + {a.onto}号"
+        case "equip":
+            return f"装备 {a.item}号 → {slot_text(a.zone, a.index)}"
         case "click_text":
             return f"点击「{a.text}」" + (f"(第{a.nth + 1}个)" if a.nth else "")
         case "click":
