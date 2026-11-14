@@ -32,6 +32,7 @@ from ..vision.shop import format_shop, read_shop
 from . import difficulty as difficulty_select
 from .macros import open_crystals, survey_plane
 from ..vision.boxes import item_slots
+from ..vision.equipment import cancel_point, find_compose_confirm
 from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
     DIFFICULTY_HINT,
@@ -303,6 +304,12 @@ class Runner:
                 self.prepare.set_shop(PrepareResult(), boxes, False)
                 prev = None
                 continue
+            confirm = find_compose_confirm(frame.image)
+            if confirm is not None:
+                self.device.click(*cancel_point(confirm))
+                time.sleep(0.8)
+                prev = None
+                continue
             popup = overlay_texts(boxes)
             if not popup and prev is not None and frame_diff(prev, frame.image) < STABLE_DIFF:
                 return frame, boxes
@@ -401,6 +408,11 @@ class Runner:
                 record["battle"] = {"av": av, "progress": progress}
                 return [Action(type="wait", seconds=4, reason="战斗进行中")]
             case "prepare":
+                # 残留的合成确认框会挡住所有操作(实机:确认没点下去,之后开商店、装备、出战全都无效)
+                confirm = find_compose_confirm(image)
+                if confirm is not None:
+                    x, y = cancel_point(confirm)
+                    return [Action(type="click", x=x, y=y, reason="清掉残留的合成确认框")]
                 # 进入备战时屏幕中央会播「备战阶段」横幅,动画期间点击无效
                 if find(boxes, "^备战阶段$", region=(0.3, 0.35, 0.4, 0.25)):
                     return [Action(type="wait", seconds=1.5, reason="备战阶段开场动画")]

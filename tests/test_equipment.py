@@ -220,3 +220,42 @@ def test_with_boxes_example(db):
     assert "高周波电锯(进阶装备) = 折叠小刀(装备栏1号)+ 幸运星(备战席1号的简易武装箱)" in lines
     text, names = book.describe(items, [], boxes)
     assert "先留着" in text and "高周波电锯" in names
+
+
+def test_compose_confirm_retry_then_cancel(monkeypatch):
+    """确认框点不下去时重试,最后点 ✗ 取消,不能把它留在屏幕上。"""
+    bag = Bag(["轮滑鞋", "轮滑鞋"])
+
+    class Stuck(Dev):
+        def click(self, x, y, *, button="left"):
+            self.actions.append(("click", round(x, 3), round(y, 3)))
+            if abs(x - (0.948 - 115 / 1920)) < 0.001:   # 点了 ✗
+                self.bag.confirm = None
+
+    dev = Stuck(bag)
+    monkeypatch.setattr(prep, "find_compose_confirm", lambda image: (0.948, 0.301) if bag.confirm else None)
+    ex = PrepareExecutor(dev, lambda image: [], raw=lambda a, b: "", sleep=lambda s: None, equipment=bag)
+    out = ex.run([Action(type="compose", item=2, onto=1), Action(type="ready")], [], None)
+    clicks = [a for a in dev.actions if a[0] == "click"]
+    assert len(clicks) == 4 and clicks[-1][1] == round(0.948 - 115 / 1920, 3)   # 3 次 ✓ + 1 次 ✗
+    assert out.results == ["合成装备 2号 + 1号:合成确认点不下去,已取消"] and bag.confirm is None
+
+
+def test_role_description_has_position_and_carry_stats(tmp_path):
+    from cwagent.knowledge.index import NameIndex
+
+    path = tmp_path / "k.sqlite"
+    con = sqlite3.connect(path)
+    for kind in ("portals", "augments", "spotlights", "companions", "equipment", "traits"):
+        con.execute(f"CREATE TABLE {kind} (name TEXT, data TEXT)")
+    con.execute("CREATE TABLE roles (name TEXT, data TEXT)")
+    con.execute("CREATE TABLE guides (data TEXT)")
+    role = {"cost": 3, "position": "前后台", "tags": ["辅助"], "traits": [{"name": "开拓银轨"}],
+            "skills": [{"position": "前台", "name": "人气主播", "tags": ["辅助"], "stars": [{"desc": "让队友再放一次终结技"}]}]}
+    con.execute("INSERT INTO roles VALUES ('开拓者', ?)", (json.dumps(role),))
+    board = {"front": [{"name": "开拓者", "carry": False}], "back": []}
+    con.execute("INSERT INTO guides VALUES (?)", (json.dumps({"carries": ["阿格莱雅"], "final_board": board}),))
+    con.commit()
+    con.close()
+    text = NameIndex(path).link(["开拓者"])[0].text
+    assert "定位 辅助" in text and "「人气主播」〔辅助〕" in text and "出现在 1 篇的最终阵容,其中 0 篇是主 C" in text

@@ -157,6 +157,13 @@ def find_compose_confirm(image: Image.Image) -> tuple[float, float] | None:
     return (x0 + loc[0] + t.shape[1] / 2) / 1920, (y0 + loc[1] + t.shape[0] / 2) / 1080
 
 
+CANCEL_OFFSET = 115 / 1920   # ✗ 按钮在 ✓ 左边这么远(实测 1705 与 1820 像素)
+
+
+def cancel_point(confirm: tuple[float, float]) -> tuple[float, float]:
+    return confirm[0] - CANCEL_OFFSET, confirm[1]
+
+
 def format_items(items: list[Item]) -> str:
     return ";".join(f"{i.index}号 {i.name}" + ("·特权(效果翻倍)" if i.privileged else "")
                     + (f"({i.category})" if i.category else "") if i.name

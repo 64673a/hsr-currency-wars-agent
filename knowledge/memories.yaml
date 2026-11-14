@@ -62,3 +62,19 @@
   status: approved
   confidence: medium
   source: 维护者(2026-11-14)
+
+- id: m-20261114-carry-by-role
+  kind: 教训
+  title: 主 C 要按角色定位和技能来定,开拓者是辅助
+  content: |-
+    定主 C、分输出装备前先看角色的定位标签和技能:定位是「输出」、技能直接造成伤害的才适合当主 C。
+    开拓者在货币战争里是辅助(技能「人气主播」让终结技目标再放一次终结技或获得额外回合、提高其他队员伤害),
+    不要把他当主 C 培养,也不要给他堆输出装备;他的价值在于给真正的主 C 加速、加伤害。
+    2026-11-14 实机里模型把开拓者当主 C、把反重力皮靴等装备都给了他。
+  triggers:
+    entities: [开拓者]
+  scope: [战术, 战略]
+  status: approved
+  confidence: high
+  source: 维护者(2026-11-14)
+

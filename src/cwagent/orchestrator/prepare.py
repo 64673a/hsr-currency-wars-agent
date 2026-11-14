@@ -14,7 +14,7 @@ from ..brain.screen_agent import Action, action_text, slot_text
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, slots
 from ..vision.boxes import CLOSE_POINT, read_panel
-from ..vision.equipment import EquipmentReader, find_compose_confirm
+from ..vision.equipment import EquipmentReader, cancel_point, find_compose_confirm
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import read_shop, shop_state
 
@@ -296,14 +296,26 @@ class PrepareExecutor:
                 return None
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
-            self.sleep(1.0)
+            self.sleep(1.2)
             ok = find_compose_confirm(self.device.grab().image)
             if ok is None:
                 out.results.append(f"{text}({item.name or '?'}+{target.name or '?'}):没有出现合成确认,这两件可能不能合成")
                 out.observe = True
                 return None
-            self._click(out, *ok)
-            self.sleep(1.2)
+            # 确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,最后取消,不能把它留在屏幕上
+            for _ in range(3):
+                self.sleep(0.4)
+                ok = find_compose_confirm(self.device.grab().image) or ok
+                self._click(out, *ok)
+                self.sleep(1.0)
+                if find_compose_confirm(self.device.grab().image) is None:
+                    break
+            else:
+                self._click(out, *cancel_point(ok))
+                self.sleep(0.8)
+                out.results.append(f"{text}:合成确认点不下去,已取消")
+                out.observe = True
+                return None
             after = self.equipment.read(self.device.grab().image)
             if len(after) != len(before) - 1:
                 out.results.append(f"{text}:点了确认,但装备数没有变化,可能没合成成功")
