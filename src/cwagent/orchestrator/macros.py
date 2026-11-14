@@ -172,12 +172,10 @@ def open_crystals(device, image: Image.Image, log: Callable[[str], None], *, ocr
         shot = device.grab().image
         _save(debug, "晶矿-手柄界面", shot)
         if ocr is not None and not find(ocr(shot), "^开启$", region=PROMPT_AREA):
-            log("晶矿:手柄界面里没看到「开启」提示,再推一次摇杆")
-            enter()
-            shot = device.grab().image
-            _save(debug, "晶矿-再推一次", shot)
-            if not find(ocr(shot), "^开启$", region=PROMPT_AREA):
-                log("晶矿:还是没有「开启」提示,照样按 LT+RT 试试")
+            # 多半被商店、弹窗挡住了:这时按 LT+RT 会被别的界面吞掉,甚至触发别的操作。不按,切回键鼠,下次再试
+            log("晶矿:手柄界面里没看到「开启」提示(可能被商店或弹窗挡住),这次先不按")
+            device.pad_exit()
+            return False
         device.pad_press_triggers()
         _save(debug, "晶矿-按了LT+RT", device.grab().image)
         device.pad_exit()

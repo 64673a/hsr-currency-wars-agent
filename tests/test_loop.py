@@ -279,3 +279,29 @@ def test_stuck_node_warns_then_pauses(tmp_path):
     assert [c for c in brain.calls if c[0] == "prepare"] == [("prepare", "opening", i) for i in (1, 3, 5, 7)]
     assert "第 3 次进入备战回合" in brain.hints_all[4] and "第 3 次" not in brain.hints_all[2]
     assert runner.ledger.nodes["1-8"].actions == "出战 | 出战 | 出战 | 出战"
+
+
+def test_ready_prepare_waits_for_popup(tmp_path):
+    """关键操作前等奇遇伙伴的弹窗动画过去、画面静止,商店开着就先收起。"""
+    from cwagent.orchestrator.loop import overlay_texts
+
+    base = [("备战阶段", 0.12, 0.04), ("1-1", 0.12, 0.07), ("前台区域", 0.5, 0.29), ("3/3", 0.5, 0.24),
+            ("商店", 0.845, 0.909), ("出战", 0.94, 0.69)]
+    pages = {"popup": base + [("团队规模提升", 0.5, 0.18), ("杨叔", 0.5, 0.55)], "clean": base}
+    sim = Sim(pages, "popup", lambda s, a: None)
+    grabs = {"n": 0}
+    real = sim.grab
+
+    def grab():
+        grabs["n"] += 1
+        if grabs["n"] > 2:
+            sim.state = "clean"
+        return real()
+
+    sim.grab = grab
+    runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
+    frame, boxes = runner.ready_prepare()
+    assert sim.state == "clean" and not overlay_texts(boxes) and grabs["n"] >= 3   # 弹窗在时一直等
+    assert overlay_texts(FakeOcr(sim)(sim.grab().image)) == []
+    from cwagent.vision.ocr import TextBox as TB
+    assert overlay_texts([TB("团队规模提升", 0.5, 0.18, 0.1, 0.03, 0.9), TB("后台区域", 0.5, 0.57, 0.1, 0.03, 0.9)]) == ["团队规模提升"]

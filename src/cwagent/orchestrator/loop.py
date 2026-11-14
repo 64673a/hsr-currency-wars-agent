@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -56,6 +57,9 @@ OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开�
 STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
 STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人处理
 DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
+READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
+CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
+BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$")   # 棋盘上本来就有的文字
 # 出现这些界面说明之前的回合已经结束
 CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
@@ -72,6 +76,13 @@ class RunOptions:
 def _plain(o):
     """numpy 的数字(OCR 坐标等)转成普通数字再写 JSON。"""
     return o.item() if hasattr(o, "item") else str(o)
+
+
+def overlay_texts(boxes: list[TextBox]) -> list[str]:
+    """棋盘中间不该有的文字(弹窗、奇遇伙伴动画等):两个以上汉字、又不是区域标题。"""
+    x, y, w, h = CENTER
+    return [b.text for b in boxes if x <= b.x <= x + w and y <= b.y <= y + h and not BOARD_TEXT.match(b.text)
+            and re.search(r"[\u4e00-\u9fff]{2,}", b.text)]
 
 
 def frame_diff(a: Image.Image, b: Image.Image) -> float:
@@ -245,6 +256,12 @@ class Runner:
     def _peek_items(self, n: int, boxes: list[TextBox]) -> None:
         """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。"""
         here = item_slots(boxes)
+        if any(i not in self.ledger.items for i in here):
+            ready = self.ready_prepare()
+            if ready is None:
+                return
+            boxes = ready[1]
+            here = item_slots(boxes)
         for index in list(self.ledger.items):
             if index not in here:
                 self.ledger.items.pop(index)           # 已经开掉或挪走了
@@ -271,19 +288,28 @@ class Runner:
 
     # ---------------------------------------------------------------- 固定流程
 
-    def _shop_closed(self, boxes: list[TextBox]):
-        """打完一关回到备战界面时,游戏会自动打开商店(维护者告知),手柄、拖动等操作会被商店吞掉:
-        先等这个自动打开发生完,开着就收起。返回(截图, 文字);收不起来时返回 None。"""
-        time.sleep(1.0)
-        frame = self.device.grab()
-        boxes = self.ocr(frame.image)
-        if self.prepare.shop_now(boxes):
-            boxes = self.prepare.set_shop(PrepareResult(), boxes, False)
-            frame = self.prepare.frame or frame
-            if self.prepare.shop_now(boxes):
-                self.log("固定流程:商店收不起来,先跳过")
+    def ready_prepare(self) -> tuple | None:
+        """关键操作(收集节点、开晶矿、看道具)前确认界面状态(维护者建议):是备战界面、商店收起、棋盘中间没有弹窗、
+        画面静止。打完一关回到备战界面时游戏会自动打开商店,奇遇伙伴也常在开局等时候弹出动画(如「团队规模提升」),
+        这时的点击、手柄操作都会被吞掉。最多等 READY_SECONDS 秒;等不到返回 None,交给模型看着处理。"""
+        deadline = time.monotonic() + READY_SECONDS
+        prev, popup = None, []
+        while time.monotonic() < deadline:
+            frame = self.device.grab()
+            boxes = self.ocr(frame.image)
+            if classify(boxes) != "prepare":
                 return None
-        return frame, boxes
+            if self.prepare.shop_now(boxes):
+                self.prepare.set_shop(PrepareResult(), boxes, False)
+                prev = None
+                continue
+            popup = overlay_texts(boxes)
+            if not popup and prev is not None and frame_diff(prev, frame.image) < STABLE_DIFF:
+                return frame, boxes
+            prev = frame.image
+            time.sleep(0.6)
+        self.log("界面一直没静下来" + (f"(棋盘上有:{'、'.join(popup[:4])})" if popup else "") + ",固定流程先跳过")
+        return None
 
     def macros(self, image, boxes: list[TextBox], node: str | None) -> str | None:
         """备战界面先做的固定流程(先确保商店收起)。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
@@ -293,10 +319,10 @@ class Runner:
         tries = self._crystal_tries.get(node, 0)
         if plane == self._surveyed and not (self._crystal_ok and tries < 2):
             return None   # 没有要做的
-        closed = self._shop_closed(boxes)
-        if closed is None:
+        ready = self.ready_prepare()
+        if ready is None:
             return None
-        image, boxes = closed[0].image, closed[1]
+        image, boxes = ready[0].image, ready[1]
         if plane != self._surveyed:
             self._surveyed = plane
             lines = survey_plane(self.device, self.ocr, self.log)
