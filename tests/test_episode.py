@@ -1,7 +1,7 @@
 import pytest
 
 from cwagent.brain import screen_agent
-from cwagent.brain.ledger import MAX_NODES, RunLedger
+from cwagent.brain.ledger import RunLedger
 from cwagent.brain.screen_agent import Episode, ScreenAgent
 from cwagent.config import ModelEndpoint, ModelProfile, ProviderConfig
 from cwagent.llm import LLMError, LLMResponse, Message, ToolCall
@@ -55,6 +55,21 @@ def test_episode_multiturn_and_retry(monkeypatch):
     assert ep.messages[3].raw["reasoning_content"] == "想"                     # 原样保留,下一轮传回
 
 
+def test_summary_and_cache_cut(monkeypatch):
+    """回合小结记在回合上;第一条消息带着本局经历的长度(给 Anthropic 打缓存标记),之后的消息不带。"""
+    answers = [reply({"analysis": "选左边", "actions": [{"type": "click_text", "text": "其一"}]}),
+               reply({"analysis": "确认", "summary": "选了简单的遭遇,保血", "actions": [{"type": "click_text", "text": "确认"}]},
+                     call_id="c2")]
+    monkeypatch.setattr(screen_agent, "complete", lambda *a: answers.pop(0))
+    a = agent()
+    ep = Episode(id=1, key=("encounter_choice", "1-7"), screen="encounter_choice", node="1-7", role="chooser",
+                 max_turns=4, cache_at=5)
+    a.decide(ep, "本局经历……当前界面")
+    assert ep.messages[0].cache_at == 5 and ep.summary == "" and ep.analysis == "选左边"
+    d = a.decide(ep, "新界面")
+    assert d.summary == ep.summary == "选了简单的遭遇,保血" and ep.messages[2].cache_at == 0
+
+
 def test_prepare_actions_rejected_elsewhere_and_error_restores(monkeypatch):
     answers = [reply({"analysis": "买", "actions": [{"type": "buy", "slot": 1}]}),
                reply({"analysis": "买", "actions": [{"type": "buy", "slot": 1}]}, call_id="c2")]
@@ -106,16 +121,31 @@ def test_json_mode_messages():
     assert "输出格式" in out[0].content and out[2].content.startswith("工具执行结果")
 
 
-def test_ledger_bounded():
-    led = RunLedger(difficulty="A8-1", companion="菇菇兔")
-    for i in range(30):
-        led.node(f"1-{i}").actions = "买"
-        led.event(f"选择 {i}")
+def test_ledger_history_append_only():
+    """本局经历保留整局、只往后追加:之前渲染出的部分是之后的前缀(跨回合命中缓存);当前状态放在后面。"""
+    led = RunLedger(difficulty="A8-1")
+    led.add("[1-1 备战] 操作:买 | 小结:先攒钱")
+    before = led.render_history()
+    led.guide, led.direction = "「刃攻略」", "刃 C"
+    for i in range(100):
+        led.add(f"[1-{i} 战斗] 进度 0% → 100%")
+    led.add("x" * 2000)
+    history = led.render_history()
+    assert history.startswith(before) and "[1-0 战斗]" in history and "[1-99 战斗]" in history
+    assert len(led.history[-1]) == 600
     text = led.render()
-    assert text.count("\n- 1-") == MAX_NODES and "1-29" in text and "1-0:" not in text
-    assert "选择 29" in text and "选择 0\n" not in text
+    assert text.startswith(history) and text.index("刃攻略") > len(history) and led.history_len() == len(history)
     led.set_direction("x" * 2000)
     assert len(led.direction) == 800
+
+
+def test_anthropic_cache_breakpoint_after_history():
+    from cwagent.llm.anthropic_format import _messages
+
+    out = _messages([Message(role="user", content="经历\n\n当前界面", cache_at=2)])
+    blocks = out[0]["content"]
+    assert blocks[0] == {"type": "text", "text": "经历", "cache_control": {"type": "ephemeral"}}
+    assert blocks[1]["text"] == "\n\n当前界面" and blocks[1]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_read_shop():

@@ -109,7 +109,8 @@ def test_runner_reflexes_and_episode(tmp_path):
     led = runner.ledger
     assert led.companion == "菇菇兔" and "本场对局首领" in led.intro
     assert led.direction == "主 C 走那刻夏"
-    assert led.events == ["投资环境:点击「追击概念股」;点击「确认」"]   # 回合在结算界面结束,留一行记录
+    assert led.history[-1].startswith("[开局 投资环境] 点击「追击概念股」;点击「确认」")   # 回合在结算界面结束,留一行记录
+    assert "[开局] 奇遇伙伴:菇菇兔" in led.history
     assert "菇菇兔" in brain.ledger                                    # 开场时模型看到了本局档案
     lines = (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 4 and (tmp_path / "run" / "shots" / "0001.jpg").exists()
@@ -147,7 +148,7 @@ def test_blank_and_popup_screens_skip_model(tmp_path):
     assert brain.results == ["点击「团队力量•金」", "点击「确认」"]
     assert sim.actions[-1] == ("click", 0.8, 0.9)                     # 结算界面:规则点「继续挑战」
     assert runner.episode is None
-    assert runner.ledger.events == ["投资策略:点击「团队力量•金」;点击「确认」;点击「确定」"]
+    assert runner.ledger.history[-1].startswith("[开局 投资策略] 点击「团队力量•金」;点击「确认」;点击「确定」")
 
 
 def test_prepare_semantic_actions(tmp_path):
@@ -184,7 +185,8 @@ def test_prepare_semantic_actions(tmp_path):
     assert kinds == ["click", "click", "drag", "click", "click"]      # 开商店、买、拖上场、收起商店、出战
     assert sim.actions[1] == ("click", SHOP_X[1], 0.15)
     assert runner.episode is None
-    assert runner.ledger.nodes["1-3"].actions == "买商店第 2 格(黄泉);备战席1号 → 前台1号;出战"
+    assert any(h.startswith("[1-3 备战]") and "操作:买商店第 2 格(黄泉);备战席1号 → 前台1号;出战" in h
+               for h in runner.ledger.history)
 
 
 def test_action_requires_fields():
@@ -278,7 +280,7 @@ def test_stuck_node_warns_then_pauses(tmp_path):
     assert runner.run(RunOptions(max_steps=30)) == "pause"
     assert [c for c in brain.calls if c[0] == "prepare"] == [("prepare", "opening", i) for i in (1, 3, 5, 7)]
     assert "第 3 次进入备战回合" in brain.hints_all[4] and "第 3 次" not in brain.hints_all[2]
-    assert runner.ledger.nodes["1-8"].actions == "出战 | 出战 | 出战 | 出战"
+    assert sum(h.startswith("[1-8 备战]") for h in runner.ledger.history) == 4
 
 
 def test_ready_prepare_waits_for_popup(tmp_path):

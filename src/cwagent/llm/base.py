@@ -46,6 +46,7 @@ class Message(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str = ""
     raw: Any = None
+    cache_at: int = 0      # user 消息:在这个字符位置断开,前一段打缓存标记(Anthropic;本局经历只增不改,跨回合命中)
 
 
 class LLMResponse(BaseModel):

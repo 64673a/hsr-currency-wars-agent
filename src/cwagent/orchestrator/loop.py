@@ -2,7 +2,8 @@
 
 - 过场、加载、固定界面由规则处理,不调用模型;
 - 需要判断的界面按「回合」组织(一个备战阶段或一个选择界面):回合内多轮对话,模型看得到自己之前的判断和
-  执行结果;回合结束后只在本局档案里留一行摘要(brain/ledger.py)。
+  执行结果;回合结束后对话丢弃,在本局经历里留一行(程序记录 + 模型写的回合小结),之后每个回合都能看到
+  整局的经历(brain/ledger.py)。
 """
 
 from __future__ import annotations
@@ -274,7 +275,7 @@ class Runner:
     def _set_guide(self, g: Guide) -> None:
         self._guide = g
         self.ledger.guide = card(g)
-        self.ledger.event(f"参考攻略:「{g.title}」(主 C {'、'.join(g.carries)})"[:160])
+        self.ledger.add(f"[{self._node or '开局'} 攻略] 参考攻略改为「{g.title}」(主 C {'、'.join(g.carries)})")
 
     def guide_advice(self, opening: bool, record: dict) -> str:
         """按场上、备战席、商店里的角色和投资环境给攻略打分:还没定方向时定下第一名;当前攻略的主 C 一个都没有、
@@ -465,9 +466,13 @@ class Runner:
                 name = companion_name(boxes)
                 if name and not self.ledger.companion:
                     self.ledger.companion = name
+                    self.ledger.add(f"[开局] 奇遇伙伴:{name}")
                     if self.on_companion:
                         self.on_companion(name)
-                self.ledger.intro = intro_text(boxes)[:600]
+                intro = intro_text(boxes)[:600]
+                if intro and intro != self.ledger.intro:
+                    self.ledger.intro = intro
+                    self.ledger.add(f"[开局] {intro}")
                 return [Action(type="click_text", text="下一步", reason="开局介绍")]
             case "home":
                 return [Action(type="click_text", text="开始「货币战争」")]
@@ -546,20 +551,32 @@ class Runner:
         if ep is None:
             return
         done = ";".join(ep.done)
+        if ep.screen == "environment_choice" and self.guides is not None:
+            envs = sorted(self.guides.environments, key=len, reverse=True)
+            for d in reversed(ep.done):
+                env = next((e for e in envs if e in d), None)
+                if env:
+                    self.ledger.environment = env
+                    break
+        if ep.screen == "difficulty":
+            return
+        # 本局经历里留一行:程序记录的做了什么 + 模型自己写的回合小结(没写就用它最后的判断开头)
+        if ep.summary:
+            tail = f" | 小结:{ep.summary}"
+        elif ep.analysis:
+            tail = f" | 判断:{ep.analysis[:150]}" + ("…" if len(ep.analysis) > 150 else "")
+        else:
+            tail = ""
         if ep.screen == "prepare" and ep.node:
             rec = self.ledger.node(ep.node)
-            if done:   # 同一节点开过多个回合时,保留每次做过的操作(只留最后 300 字)
-                rec.actions = (f"{rec.actions} | {done}" if rec.actions else done)[-300:]
-            rec.lineup = rec.lineup or self._lineup()
-        elif done and ep.screen not in ("difficulty",):
-            if ep.screen == "environment_choice" and self.guides is not None:
-                envs = sorted(self.guides.environments, key=len, reverse=True)
-                for d in reversed(ep.done):
-                    env = next((e for e in envs if e in d), None)
-                    if env:
-                        self.ledger.environment = env
-                        break
-            self.ledger.event(f"{ep.node or ''} {SCREEN_NAMES.get(ep.screen, ep.screen)}:{done}"[:160].strip())
+            parts = [f"进场 {rec.start}" if rec.start and not rec.logged else "",
+                     f"操作:{done[-300:]}" if done else "没有操作",
+                     f"阵容:{rec.lineup or self._lineup()}" if rec.lineup or self._lineup() else ""]
+            rec.logged, rec.lineup = True, ""
+            self.ledger.add(f"[{ep.node} 备战] " + ";".join(p for p in parts if p) + tail)
+        elif done or tail:
+            name = SCREEN_NAMES.get(ep.screen, "其他界面")
+            self.ledger.add(f"[{ep.node or '开局'} {name}] {done[-300:] or '没有操作'}{tail}")
 
     def _hints(self, screen: str, frame, boxes: list[TextBox], record: dict, opening: bool) -> tuple[str, list[str]]:
         hints, names = "", []
@@ -648,6 +665,7 @@ class Runner:
             ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
                          max_turns=self.prepare_turns if screen == "prepare" else OTHER_TURNS)
             self.episode = ep
+            ep.cache_at = self.ledger.history_len()   # 本局经历在第一条消息的最前面,只增不改
             text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names)
         else:
             text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
@@ -665,6 +683,8 @@ class Runner:
             self.ledger.set_direction(decision.run_notes)
         if decision.guide:
             self.choose_guide(decision.guide, n)
+        for note in decision.notes:   # 本局学到的,之后的回合也要知道
+            self.ledger.add(f"[{self._node or '开局'} {note.kind}] {note.title}:{note.content}")
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
         if ep.screen == "prepare":
             return self._finish_prepare(record, decision.actions, boxes, sig, screen)
@@ -739,7 +759,7 @@ class Runner:
                                       "node_result", "strategy_choice", "encounter_choice", "tea_break"):
             summary = summarize(self._curve)
             if self._curve_node:
-                self.ledger.node(self._curve_node).battle = summary
+                self.ledger.add(f"[{self._curve_node} 战斗] {summary}")
             record["battle_summary"] = f"{self._curve_node or ''} {summary}"
             self.log(f"[{n}] 上一场战斗:{record['battle_summary']}")
             self._curve, self._curve_node = [], None

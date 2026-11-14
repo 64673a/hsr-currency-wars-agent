@@ -36,12 +36,17 @@ def _messages(messages: list[Message]) -> list[dict[str, Any]]:
                     {"type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments} for c in m.tool_calls]
             out.append({"role": "assistant", "content": content})
             continue
-        block = ({"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content} if m.role == "tool"
-                 else {"type": "text", "text": m.content})
-        if out and out[-1]["role"] == "user":
-            out[-1]["content"].append(block)
+        if m.role == "tool":
+            blocks = [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content}]
+        elif 0 < m.cache_at < len(m.content):
+            blocks = [{"type": "text", "text": m.content[:m.cache_at], "cache_control": {"type": "ephemeral"}},
+                      {"type": "text", "text": m.content[m.cache_at:]}]
         else:
-            out.append({"role": "user", "content": [block]})
+            blocks = [{"type": "text", "text": m.content}]
+        if out and out[-1]["role"] == "user":
+            out[-1]["content"] += blocks
+        else:
+            out.append({"role": "user", "content": blocks})
     # 对话只往后追加:在最后一块打缓存标记,下一轮请求能命中到这里为止的前缀
     if out and out[-1]["content"]:
         out[-1]["content"][-1] = {**out[-1]["content"][-1], "cache_control": {"type": "ephemeral"}}

@@ -70,6 +70,7 @@ class ActInput(BaseModel):
     analysis: str
     actions: list[Action] = Field(min_length=1, max_length=MAX_ACTIONS)
     run_notes: str | None = None
+    summary: str | None = None
     guide: str | None = None
     notes: list[Note] = []
 
@@ -103,6 +104,9 @@ ACT_TOOL = ToolSpec(
                 },
             },
             "run_notes": {"type": "string", "description": "整体改写对局方向与计划(可选)"},
+            "summary": {"type": "string", "description": "回合小结:在结束这个回合的那次 act 里填(备战阶段带 ready 的那次、"
+                        "选择界面做出最终选择的那次),写这一回合做了什么、为什么、接下来打算什么,不超过 150 字;"
+                        "会记进本局经历,之后的回合都能看到"},
             "guide": {"type": "string", "description": "改用另一篇攻略作为方向时,填「攻略参考」里的候选编号或标题(可选)"},
             "notes": {
                 "type": "array",
@@ -140,6 +144,9 @@ class Episode:
     done: list[str] = field(default_factory=list)      # 本回合执行过的操作(给回合摘要)
     seen: set[str] = field(default_factory=set)        # 已经给过描述的游戏条目
     waiting: bool = False                              # 上一轮模型只让等待
+    cache_at: int = 0                                  # 第一条消息里本局经历的长度(在这里断开打缓存标记)
+    summary: str = ""                                  # 模型写的回合小结(最近一次)
+    analysis: str = ""                                 # 模型最近一次的判断(没写小结时代替)
 
     @property
     def last_turn(self) -> bool:
@@ -160,6 +167,7 @@ class Decision:
     turn: int = 0
     role: str = ""
     guide: str | None = None       # 模型改选的攻略(候选编号或标题)
+    summary: str | None = None     # 回合小结
 
 
 class ScreenAgent:
@@ -215,7 +223,7 @@ class ScreenAgent:
     @staticmethod
     def _ask(episode: Episode) -> str:
         if episode.screen == "prepare" and episode.last_turn:
-            return "这是本备战阶段最后一次决策:请把要做的事一次做完,以 ready 结束。"
+            return "这是本备战阶段最后一次决策:请把要做的事一次做完,以 ready 结束,并写回合小结(summary)。"
         return "请判断当前局面,调用 act 给出下一步操作。"
 
     # ---------------------------------------------------------------- 调用模型
@@ -231,7 +239,8 @@ class ScreenAgent:
                                  for i, cid in enumerate(episode.pending)]
             episode.pending = []
         else:
-            episode.messages.append(Message(role="user", content=text))
+            episode.messages.append(Message(role="user", content=text,
+                                            cache_at=0 if episode.messages else episode.cache_at))
         episode.turns += 1
         endpoint = self.endpoint(episode.role)
         base = dict(prompt=text, recalled=recalled or [], episode=episode.id, turn=episode.turns, role=episode.role)
@@ -257,8 +266,11 @@ class ScreenAgent:
                         raise ValueError(f"{'、'.join(wrong)} 只能在备战界面使用")
                     episode.pending = [call.id] + [i for i in ids if i != call.id]
                     episode.waiting = all(a.type == "wait" for a in data.actions)
+                    episode.analysis = data.analysis
+                    if data.summary:
+                        episode.summary = data.summary.strip()[:200]
                     return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
-                                    guide=data.guide, **base)
+                                    guide=data.guide, summary=data.summary, **base)
                 except ValidationError as e:
                     last_error = "; ".join(f"{'.'.join(map(str, er['loc']))}: {er['msg']}" for er in e.errors()[:5])
                 except ValueError as e:
@@ -323,4 +335,5 @@ def to_jsonable(d: Decision) -> dict[str, Any]:
             "run_notes": d.run_notes, "notes": [n.model_dump() for n in d.notes], "recalled": d.recalled,
             "error": d.error, "reasoning": r.reasoning if r else "", "usage": r.usage.model_dump() if r else None,
             "latency_s": r.latency_s if r else None, "model": r.model if r else "",
-            "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt, "guide": d.guide}
+            "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt, "guide": d.guide,
+            "summary": d.summary}
