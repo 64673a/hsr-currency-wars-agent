@@ -33,6 +33,7 @@ from .screens import (
     PREPARE_LAYOUT,
     SCREEN_NAMES,
     SPOTLIGHT_LAYOUT,
+    TEA_BREAK_HINT,
     classify,
     companion_name,
     intro_text,
@@ -352,6 +353,8 @@ class Runner:
             hints = DIFFICULTY_HINT.format(target=self.difficulty)
         elif opening and screen == "spotlight_choice":
             hints = SPOTLIGHT_LAYOUT
+        elif screen == "tea_break":
+            hints = TEA_BREAK_HINT
         if self._same >= 3:
             hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
                       "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
@@ -491,7 +494,7 @@ class Runner:
         if screen in ("run_intro", "environment_choice", "prepare", "battle"):
             self.in_run = True
         if self._curve and screen in ("prepare", "supply", "spotlight_choice", "settlement", "environment_choice",
-                                      "node_result", "strategy_choice", "encounter_choice"):
+                                      "node_result", "strategy_choice", "encounter_choice", "tea_break"):
             summary = summarize(self._curve)
             if self._curve_node:
                 self.ledger.node(self._curve_node).battle = summary

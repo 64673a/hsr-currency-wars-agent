@@ -272,7 +272,7 @@ def test_stuck_node_warns_then_pauses(tmp_path):
             return super().opening(ep, boxes, ledger=ledger, hints=hints, names=names)
 
     brain = Brain({"prepare": [[Action(type="ready")]] * 10,
-                   "other": [[Action(type="click_text", text="返回备战界面")]] * 10})
+                   "tea_break": [[Action(type="click_text", text="返回备战界面")]] * 10})
     runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     runner._surveyed, runner._crystal_ok = "1", False
     assert runner.run(RunOptions(max_steps=30)) == "pause"

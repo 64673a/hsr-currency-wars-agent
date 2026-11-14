@@ -39,6 +39,9 @@ def classify(boxes: list[TextBox]) -> str:
         return "strategy_choice"
     if find(boxes, "^遭遇节点$") or (has(boxes, "遭遇其") and has(boxes, "奖励预览")):
         return "encounter_choice"
+    # 幕后茶歇(奇遇伙伴替换奖励节点):选项页和选项里的二级页都有「返回备战界面」
+    if find(boxes, "^返回备战界面$") and find(boxes, "^(幕后茶歇|享用茶歇|醒香猫语)$|^聊一聊$|^摇一摇$"):
+        return "tea_break"
     if has(boxes, "备战阶段"):
         return "prepare"
     # 商店展开时会挡住顶部的「备战阶段」
@@ -59,7 +62,7 @@ def classify(boxes: list[TextBox]) -> str:
 ROLES = {
     "prepare": "tactical",
     "environment_choice": "strategic", "strategy_choice": "strategic", "spotlight_choice": "strategic",
-    "encounter_choice": "chooser", "supply": "chooser",
+    "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
 }
 
 
@@ -69,7 +72,8 @@ def role_of(screen: str) -> str:
 
 SCREEN_NAMES = {
     "prepare": "备战", "environment_choice": "投资环境", "strategy_choice": "投资策略", "spotlight_choice": "主角光环",
-    "encounter_choice": "遭遇节点", "supply": "补给", "difficulty": "难度选择", "other": "其他界面",
+    "encounter_choice": "遭遇节点", "supply": "补给", "tea_break": "幕后茶歇", "difficulty": "难度选择",
+    "other": "其他界面",
 }
 
 
@@ -121,6 +125,10 @@ PREPARE_LAYOUT = """备战界面(程序已经打开商店):
 - sell:卖掉某格的角色。refresh:刷新商店,刷新后程序会停下,把新商店给你看。buy_exp:买经验,times 为次数。
 - ready:出战(程序会先收起商店)。一个备战阶段以 ready 结束。
 - 装备、晶矿等其他操作仍用 click / drag,坐标见「界面文字」;点角色会在右侧弹出详情。"""
+
+
+TEA_BREAK_HINT = """幕后茶歇(流程见规则卡):选一个选项后,选项右边会出现「确认」按钮,点确认才算选定;
+之后出现帽子画面时点击空白处继续。选定之前不要点「返回」或「返回备战界面」。"""
 
 
 DIFFICULTY_HINT = """目标难度:{target}(「A8」是职级分组,后面的数字是组内等级)。

@@ -156,3 +156,17 @@ def test_battle_progress_with_icon_and_banner():
     from cwagent.orchestrator.screens import classify
 
     assert classify([TextBox("X1-3 0%", 0.385, 0.025, 0.05, 0.02, 0.9)]) == "battle"
+
+
+def test_tea_break_screens():
+    from cwagent.orchestrator.screens import classify, role_of
+
+    def boxes(*texts):
+        return [TextBox(t, 0.5, 0.1 * i, 0.1, 0.03, 0.9) for i, t in enumerate(texts)]
+
+    # 2026-11-14 实机记录里的两页
+    assert classify(boxes("W1-8", "返回备战界面", "68", "幕后茶歇", "醒香猫语", "享用茶歇", "聊一聊", "摇一摇")) == "tea_break"
+    assert classify(boxes("W1-8", "返回备战界面", "享用茶歇", "美餐时间", "回复20小队生命值", "返回")) == "tea_break"
+    # 茶歇节点的备战界面仍是备战(右侧按钮是「幕后茶歇」)
+    assert classify(boxes("备战阶段", "返回幕后茶歇", "1-8", "幕后茶歇", "商店")) == "prepare"
+    assert role_of("tea_break") == "chooser"
