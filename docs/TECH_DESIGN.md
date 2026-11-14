@@ -813,8 +813,27 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理 |
 | `POST /api/models/{name}/test` | 连通性测试 |
 | `GET /api/config` `PUT /api/config` | 运行参数 |
+| `GET /api/live` | 实时画面是否可用(不可用时附原因,如正在下载) |
+| `POST /api/live/whep` `DELETE /api/live/whep/{session}` | 实时画面的 WebRTC 信令(WHEP),转发给本机的 MediaMTX |
 
 SSE 事件类型:`run_status`(开始 / 暂停 / 结束 / 报错)、`step`(一条完整的 TraceStep,截图以 URL 给出)、`awaiting_approval`、`log`。
+
+### 13.1 实时画面(2026-11-14 已在 Windows 实机验证)
+
+对局页显示游戏的实时画面,局域网内 1080p60。agent 自己的截图走 6.1,和这条链路互不相干。
+
+```
+ffmpeg gfxcapture(Windows Graphics Capture,按 StarRail.exe 抓窗口;窗口被挡住也能抓,不能最小化)
+  → 显存里的 BGRA 帧直接给硬件编码器(h264_nvenc / h264_amf;都不可用时 hwdownload 后 libx264)
+  → RTSP 127.0.0.1:8554 → MediaMTX → WebRTC(媒体走 UDP 8189)→ 浏览器 <video>
+```
+
+- **按需**:MediaMTX 有观众时才拉起 ffmpeg(`runOnDemand`),最后一个观众离开 15 秒后停止;页面切到后台时前端主动断开。
+- **只开一个口**:MediaMTX 的 HTTP 和 RTSP 都只监听本机,浏览器的 WHEP 信令经后端转发;对局域网只开放 UDP 8189(防火墙规则按 `mediamtx.exe` 路径放行,限本地子网)。
+- **安装**:ffmpeg(BtbN 8.1 GPL 构建,8.1 起才有 gfxcapture)和 MediaMTX(固定 v1.21.3,它的配置遇到不认识的字段会报错)不随仓库分发。`cwagent serve` 启动时缺少就在后台下载到 `data/tools/`,管理员身份下先加防火墙规则再启动(否则第一次监听端口会弹防火墙提示,被取消后系统会建优先级更高的阻止规则);`cwagent stream setup` 手动重装;README 写明手动安装步骤。
+- **进程**:MediaMTX 绑在 Windows 作业对象上(`KILL_ON_JOB_CLOSE`),serve 被强制结束时它和 ffmpeg 一起退出。
+- **编码参数**:不用 B 帧(WebRTC 不支持),关键帧间隔 2 秒,CBR 20 Mbps(`config.yaml` 的 `stream` 段可调帧率、码率、编码器)。NVENC 收 RGB 输入时自行转 YUV 并在码流里标 BT.601 有限范围,浏览器显示颜色正确;`scale_d3d11` 在这台机器上建纹理失败,不用。
+- **实测**(RTX 5060 Ti,Windows 和 Mac 都走 Wi-Fi):经后端转发的完整链路收到 1920x1080、约 60fps,丢包 0,首帧 1.5–2.5 秒(含拉起 ffmpeg)。端到端延迟没有测。AMF 和 libx264 两条路径没有实机验证。
 
 ---
 
@@ -835,7 +854,7 @@ React + Vite + TypeScript,放在仓库 `web/` 目录;`npm run build` 产出 `web
 
 | 页面 | 内容 |
 |---|---|
-| **观战** | 左:当前截图;中:由 GameState 画出的板面(前台 / 后台 / 备战席 / 商店 / 背包,角色用官方头像)、金币 / 生命 / 等级 / 阶段;右:模型的 `analysis`、思考内容(可折叠)、动作队列及每个动作的理由和执行结果。底部:金币和生命随阶段变化的曲线。顶部:对局控制(开始时选档案和难度、暂停、停止)和 `--approve` 的确认按钮。通过 SSE 实时更新 |
+| **观战** | 左:游戏实时画面(13.1),回看时切换为当时的截图;中:由 GameState 画出的板面(前台 / 后台 / 备战席 / 商店 / 背包,角色用官方头像)、金币 / 生命 / 等级 / 阶段;右:模型的 `analysis`、思考内容(可折叠)、动作队列及每个动作的理由和执行结果。底部:金币和生命随阶段变化的曲线。顶部:对局控制(开始时选档案和难度、暂停、停止)和 `--approve` 的确认按钮。通过 SSE 实时更新 |
 | **对局记录** | 历史对局表(时间、档案、难度、结果、到达阶段、步数、token);点进去是逐步回放:时间线选步,显示当时的截图、状态、完整提示词、思考、输出、校验结果 |
 | **模型对比** | 选一局和一段决策步、选若干档案,发起离线回放;按步并排显示各模型的 `analysis`、思考和动作,标出动作不同的步。另一个标签页显示实机评测汇总表和图 |
 | **知识库** | 分标签浏览角色、羁绊(含档位)、装备(含配方)、投资策略、投资环境、主角光环、奇遇、指引卡;可搜索;记忆的浏览、添加、审核(采纳 / 驳回 / 编辑)和检索预览;显示当前数据的赛季版本和同步时间,带同步按钮 |
@@ -867,6 +886,7 @@ hsr-currency-wars-agent/
 │   ├── orchestrator/             # loop / recovery / run_control
 │   ├── replay/                   # trace / replayer / evaluator / collector
 │   ├── server/                   # FastAPI 应用、路由、事件流
+│   ├── stream/                   # 实时画面:MediaMTX 进程管理、WHEP 信令转发、外部程序下载(13.1)
 │   └── cli.py
 ├── web/                          # 前端
 ├── data/                         # knowledge.sqlite / templates / fixtures / export(大文件不入 git)
@@ -889,7 +909,8 @@ hsr-currency-wars-agent/
 | `cwagent replay <run> --models A,B` | 离线回放对比 | 任意 |
 | `cwagent review <run>` | 复盘,生成记忆草稿和投票 | 任意 |
 | `cwagent memory list / add / approve / reject / export / preview` | 管理记忆,预览检索结果 | 任意 |
-| `cwagent serve` | 启动后端和前端页面 | 任意 |
+| `cwagent serve` | 启动后端和前端页面(Windows 上同时启动实时画面) | 任意 |
+| `cwagent stream setup [--force]` | 下载 ffmpeg 和 MediaMTX、添加防火墙规则 | Windows |
 
 **现状**:仓库目前只有本文档和 uv 项目骨架(`pyproject.toml` 的依赖随功能逐步加入),业务代码尚未开始。
 

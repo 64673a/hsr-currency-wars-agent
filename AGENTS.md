@@ -4,7 +4,7 @@
 
 - 让 LLM 自主游玩《崩坏:星穹铁道》货币战争 S2「入画奇航」的 agent。
 - 权威设计文档:`docs/TECH_DESIGN.md`。开始任何工作前先读它;第 1.6 节是已确定的设计决策,不要擅自改。
-- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)、截图采集(`cwagent collect`,已在 Windows 实测)、区域校对(`cwagent regions check`)、记忆系统的存储与检索(`cwagent memory`)、后端接口(`cwagent serve`)、前端(`web/`,对局页、知识库页、设置页)。已能在 Windows 上自动打完整局(规则卡 + 通用界面决策),正在补感知(棋盘角色识别、HUD 数字)。
+- 现状:正在做第一个里程碑(M0)。已完成:配置管理(厂商 + 模型档案两层)、LLM 接入层(两种格式、模型列表、连通性测试)、知识同步(`cwagent knowledge sync`)、截图模块(`capture/`)、截图采集(`cwagent collect`,已在 Windows 实测)、区域校对(`cwagent regions check`)、记忆系统的存储与检索(`cwagent memory`)、后端接口(`cwagent serve`)、前端(`web/`,对局页、知识库页、设置页)、对局页的实时画面(`stream/`,ffmpeg gfxcapture + NVENC 经 MediaMTX 以 WebRTC 推流,设计文档 13.1)。已能在 Windows 上自动打完整局(规则卡 + 通用界面决策),正在补感知(棋盘角色识别、HUD 数字)。
 - 流程不能写死:投资环境、投资策略、奇遇伙伴都会改变节点结构和出现的界面(设计文档 2.3)。奇遇伙伴数据官方接口没有,也无法事先采集全:对局中遇到一个记一个(本机 `data/companions.local.yaml`),核对后导出到 `knowledge/companions.yaml`(`cwagent companions`)。
 - 记忆系统(设计文档 5.4):公共记忆在 `knowledge/memories.yaml`(随仓库发布),本机学到的在 `data/memory.sqlite`。维护者口头告诉你的游戏经验,整理成记忆写进 `knowledge/memories.yaml`,并注明来源和是否已核实。
 - 运行形态:agent 作为一个服务运行在装有游戏的 Windows 上,像 March7thAssistant 一样直接定位游戏窗口截图、发送键鼠。
@@ -25,6 +25,7 @@
 - 只用 uv 管理的 Python(`[tool.uv] python-preference = "only-managed"`),版本固定在 `.python-version`(`3.12.13`)。用 `uv sync` 建环境,`uv run` 运行。
 - **为什么固定到补丁号**:uv 会建一个次版本号目录联接(如 `cpython-3.12-windows-x86_64-none`)指向真实安装目录,而 Windows 上管理员进程穿不过普通用户建的联接(os error 448)。agent 需要以管理员身份运行(游戏是提权进程),固定补丁号时 `.venv` 直接指向真实目录,不受影响。升级 Python 时改 `.python-version` 里的完整版本号。
 - 依赖随功能逐步加入,完整清单见设计文档第 15 节。
+- 外部程序(不是 Python 包的)不入库,也不要求用户事先装好:像 ffmpeg、MediaMTX 那样在第一次用到时自动下载到 `data/tools/`,同时在 README 的「需要的第三方程序」里写明用途、版本和手动安装步骤(国内用户可能下载不了 GitHub)。
 
 ## 在 Windows 上运行与调试
 
