@@ -150,14 +150,37 @@ def has_crystals(image: Image.Image, log: Callable[[str], None] | None = None) -
     return True
 
 
-def open_crystals(device, image: Image.Image, log: Callable[[str], None]) -> bool | None:
-    """打开晶矿。返回:True 打开了,False 试了没变化,None 没有晶矿。"""
+PROMPT_AREA = (0.62, 0.08, 0.3, 0.42)   # 手柄界面里晶矿上的「开启 LT + RT」提示
+
+
+def _save(debug: Path | None, name: str, image: Image.Image) -> None:
+    if debug is not None:
+        debug.mkdir(parents=True, exist_ok=True)
+        image.convert("RGB").save(debug / f"{time.strftime('%H%M%S')}-{name}.jpg", quality=80)
+
+
+def open_crystals(device, image: Image.Image, log: Callable[[str], None], *, ocr: Ocr | None = None,
+                  debug: Path | None = None) -> bool | None:
+    """打开晶矿。返回:True 打开了,False 试了没变化,None 没有晶矿。每一步截图存到 debug 目录,方便排查。"""
     if not has_crystals(image, log):
         return None
     before = orb_amount(image)
-    pad = getattr(device, "pad_open_crystals", None)
-    if pad is not None and pad():
+    _save(debug, "晶矿-开之前", image)
+    enter = getattr(device, "pad_enter", None)
+    if enter is not None and enter():
         how = "手柄"
+        shot = device.grab().image
+        _save(debug, "晶矿-手柄界面", shot)
+        if ocr is not None and not find(ocr(shot), "^开启$", region=PROMPT_AREA):
+            log("晶矿:手柄界面里没看到「开启」提示,再推一次摇杆")
+            enter()
+            shot = device.grab().image
+            _save(debug, "晶矿-再推一次", shot)
+            if not find(ocr(shot), "^开启$", region=PROMPT_AREA):
+                log("晶矿:还是没有「开启」提示,照样按 LT+RT 试试")
+        device.pad_press_triggers()
+        _save(debug, "晶矿-按了LT+RT", device.grab().image)
+        device.pad_exit()
     else:
         how = "鼠标"
         error = getattr(getattr(device, "pad", None), "error", "")
@@ -166,6 +189,7 @@ def open_crystals(device, image: Image.Image, log: Callable[[str], None]) -> boo
         device.drag_path(ORB_PATH, duration=1.5)
         time.sleep(1.5)
     after_image = device.grab().image
+    _save(debug, "晶矿-开之后", after_image)
     after, diff = orb_amount(after_image), empty_diff(after_image)
     opened = diff <= EMPTY_DIFF or after < ORB_MIN
     if opened and diff > EMPTY_DIFF:

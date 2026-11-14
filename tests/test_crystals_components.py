@@ -49,9 +49,15 @@ class Dev:
     def __init__(self, pad_ok):
         self.pad_ok, self.calls = pad_ok, []
 
-    def pad_open_crystals(self):
+    def pad_enter(self):
         self.calls.append("pad")
         return self.pad_ok
+
+    def pad_press_triggers(self):
+        self.calls.append("lt+rt")
+
+    def pad_exit(self):
+        self.calls.append("back")
 
     def drag_path(self, points, *, duration=1.5):
         self.calls.append(("path", len(points)))
@@ -65,7 +71,7 @@ def test_open_crystals_pad_then_mouse(learned, monkeypatch):
     logs = []
     dev = Dev(True)
     assert macros.open_crystals(dev, with_orbs(empty_screen()), logs.append) is True
-    assert dev.calls == ["pad"] and "手柄" in logs[-1]
+    assert dev.calls == ["pad", "lt+rt", "back"] and "手柄" in logs[-1]
     dev = Dev(False)                     # 没有手柄驱动:一笔划过所有晶矿位置
     assert macros.open_crystals(dev, with_orbs(empty_screen()), logs.append) is True
     assert dev.calls == ["pad", ("path", len(macros.ORB_PATH))] and "鼠标" in logs[-1]

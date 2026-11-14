@@ -283,7 +283,7 @@ class Runner:
             return "收集本位面的节点序列"
         tries = self._crystal_tries.get(node, 0)
         if self._crystal_ok and tries < 2:
-            opened = open_crystals(self.device, image, self.log)
+            opened = open_crystals(self.device, image, self.log, ocr=self.ocr, debug=self.trace.root / "debug")
             if opened is None:
                 return None
             self._crystal_tries[node] = tries + 1

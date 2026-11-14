@@ -78,8 +78,8 @@ class Gamepad:
     def available(self) -> bool:
         return self._ensure()
 
-    def open_crystals(self) -> bool:
-        """推一下摇杆切到手柄界面,再同时按 LT、RT 打开全部晶矿。切回键鼠由调用方动鼠标完成。"""
+    def nudge(self) -> bool:
+        """推一下摇杆:游戏收到手柄输入后切到手柄界面(晶矿上显示「开启 LT + RT」)。"""
         if not self._ensure():
             return False
         pad = self._pad
@@ -89,6 +89,11 @@ class Gamepad:
         pad.reset()
         pad.update()
         time.sleep(1.0)
+        return True
+
+    def press_triggers(self) -> None:
+        """同时按 LT、RT:打开全部晶矿。"""
+        pad = self._pad
         pad.left_trigger(value=255)
         pad.right_trigger(value=255)
         pad.update()
@@ -96,6 +101,11 @@ class Gamepad:
         pad.reset()
         pad.update()
         time.sleep(1.5)
+
+    def open_crystals(self) -> bool:
+        if not self.nudge():
+            return False
+        self.press_triggers()
         return True
 
     def close(self) -> None:

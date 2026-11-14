@@ -195,19 +195,22 @@ class WindowsDevice:
         finally:
             _send(_mouse(BUTTONS["left"][1]))
 
-    def pad_open_crystals(self) -> bool:
-        """用虚拟手柄开全部晶矿,再动鼠标切回键鼠界面。没有手柄驱动时返回 False。"""
-        global _last_sent
+    def pad_enter(self) -> bool:
+        """推一下虚拟手柄的摇杆,让游戏切到手柄界面。没有手柄驱动时返回 False。"""
         self._guard()
         self._screen_point(0.5, 0.5)   # 确保游戏在前台
-        if not self.pad.open_crystals():
-            return False
-        _last_sent = ctypes.windll.kernel32.GetTickCount()   # 手柄输入不算「有人在用电脑」
-        self.move(0.5, 0.5)            # 棋盘中间的空处,只移动不点击
+        return self.pad.nudge()
+
+    def pad_press_triggers(self) -> None:
+        self._guard()
+        self.pad.press_triggers()
+
+    def pad_exit(self) -> None:
+        """动一下鼠标,游戏热切换回键鼠界面(移到棋盘中间的空处,只移动不点击)。"""
+        self.move(0.5, 0.5)
         time.sleep(0.1)
         self.move(0.503, 0.5)
         time.sleep(1.0)
-        return True
 
     def scroll(self, x: float, y: float, notches: int) -> None:
         self._guard()
