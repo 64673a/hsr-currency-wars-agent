@@ -22,12 +22,12 @@ PROMPTS = Path(__file__).parent / "prompts"
 MAX_ACTIONS = 12
 ZONES = ("front", "back", "bench")
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
-PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose", "equip"}
+PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose", "equip", "open"}
 
 
 class Action(BaseModel):
     type: str = Field(
-        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip)$")
+        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open)$")
     text: str | None = None
     nth: int = 0
     x: float | None = Field(default=None, ge=0, le=1)
@@ -51,7 +51,7 @@ class Action(BaseModel):
     def _required(self) -> "Action":
         need = {"click_text": ["text"], "click": ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
-                "compose": ["item", "onto"], "equip": ["item", "zone", "index"]}
+                "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"]}
         missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "")]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
@@ -86,7 +86,7 @@ ACT_TOOL = ToolSpec(
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "buy_exp", "ready",
-                                                            "compose", "equip", "click_text", "click", "drag",
+                                                            "compose", "equip", "open", "click_text", "click", "drag",
                                                             "scroll", "key", "wait", "pause"]},
                         "slot": {"type": "integer"}, "zone": _SLOT, "index": {"type": "integer"},
                         "to_zone": _SLOT, "to_index": {"type": "integer"}, "times": {"type": "integer"},
@@ -292,6 +292,8 @@ def action_text(a: Action) -> str:
             return f"合成装备 {a.item}号 + {a.onto}号"
         case "equip":
             return f"装备 {a.item}号 → {slot_text(a.zone, a.index)}"
+        case "open":
+            return f"打开{slot_text(a.zone, a.index)}的道具"
         case "click_text":
             return f"点击「{a.text}」" + (f"(第{a.nth + 1}个)" if a.nth else "")
         case "click":

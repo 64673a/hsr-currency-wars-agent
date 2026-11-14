@@ -218,12 +218,17 @@ class Runner:
                 if learned:
                     self.log(f"从商店记下了立绘:{'、'.join(learned)}")
             board = self.portraits.read(image, shop_open=shop)
+            for s in board:
+                # 备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色
+                if s.zone == "bench" and any(b.text == "开启" and abs(b.x - s.x) < 0.035 and abs(b.y - s.y) < 0.065
+                                             for b in boxes):
+                    s.name, s.stars, s.score = "道具(可开启)", 0, max(s.score, 0.01)
             self._board = board
             state["board"] = [{"zone": b.zone, "index": b.index, "x": round(b.x, 3), "y": round(b.y, 3),
                                "name": b.name, "stars": b.stars, "score": round(b.score, 2)}
                               for b in board if not b.empty]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
-            names = sorted({b.name for b in board if b.name})
+            names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
         if self.equipment is not None and self.equipment_reader is not None:
             items = self.equipment_reader.read(image)
             state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]

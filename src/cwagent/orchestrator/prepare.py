@@ -21,6 +21,7 @@ SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位
 READY_BUTTON = (0.946, 0.694)     # 「出战」,商店收起时
 SHOP_CARD_Y = 0.15
 GAP = 0.5
+ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
 
 
 @dataclass
@@ -120,15 +121,31 @@ class PrepareExecutor:
                         if free:
                             occupied[("bench", free[0])] = name or "新买的角色"
                     out.results.append(f"{text}" + (f"({name})" if name else ""))
-                elif a.type in ("move", "sell"):
+                elif a.type in ("move", "sell", "open"):
                     src = (a.zone, a.index - 1)
                     if occupied is not None and src not in occupied:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是空的")
+                        continue
+                    is_item = occupied is not None and occupied[src].startswith(ITEM_PREFIX)
+                    if a.type != "open" and is_item:
+                        out.results.append(f"{text}:{slot_text(a.zone, a.index)}是道具,不是角色,不能上场或出售;用 open 打开")
+                        continue
+                    if a.type == "open" and occupied is not None and not is_item:
+                        out.results.append(f"{text}:{slot_text(a.zone, a.index)}不是可开启的道具")
                         continue
                     layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
                     if src not in layout:
                         out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
                         continue
+                    if a.type == "open":
+                        p = layout[src]
+                        self._click(out, p.x, p.y)
+                        self.sleep(1.2)
+                        out.results.append(f"{text}(停下来看得到了什么)")
+                        if occupied is not None:
+                            occupied.pop(src, None)
+                        out.observe = True
+                        break
                     if a.type == "move":
                         dst = (a.to_zone, a.to_index - 1)
                         if dst not in layout:
@@ -175,6 +192,7 @@ class PrepareExecutor:
                     for _ in range(a.times or 1):
                         self.device.key("f")
                         self.sleep(0.3)
+                    self.sleep(0.8)   # 升级有动画,紧接着点商店会点不上(2026-11-14 实机)
                     out.results.append(text)
                 elif a.type in ("compose", "equip"):
                     done = self._equipment(a, text, out, occupied, boxes)

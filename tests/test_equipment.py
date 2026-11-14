@@ -146,3 +146,30 @@ def test_privilege_v_mark(templates):
     draw.line((cx + 17, cy + 16, cx + 23, cy + 29, cx + 30, cy + 16), fill=(235, 245, 255), width=3)   # 右下角的 V
     items = r.read(img)
     assert [(i.name, i.privileged) for i in items] == [("轮滑鞋", False), ("反重力皮靴", True)]
+
+
+def test_items_on_bench_open_but_not_move():
+    from cwagent.vision.board import Slot
+
+    class D:
+        def __init__(self):
+            self.actions = []
+
+        def click(self, x, y, *, button="left"):
+            self.actions.append(("click", round(x, 3), round(y, 3)))
+
+        def drag(self, *a, **k):
+            self.actions.append(("drag",))
+
+        def grab(self):
+            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    dev = D()
+    ex = PrepareExecutor(dev, lambda image: [], raw=lambda a, b: "", sleep=lambda s: None)
+    board = [Slot("bench", 0, 0.2285, 0.845, "道具(可开启)", None, 0.66), Slot("bench", 1, 0.2935, 0.845, "花火", None, 0.9, 1)]
+    out = ex.run([Action(type="move", zone="bench", index=1, to_zone="back", to_index=1),
+                  Action(type="open", zone="bench", index=2),
+                  Action(type="open", zone="bench", index=1), Action(type="ready")], [], board)
+    assert "是道具,不是角色" in out.results[0] and "不是可开启的道具" in out.results[1]
+    assert out.results[2].startswith("打开备战席1号的道具") and out.observe and len(out.results) == 3   # 打开后停下
+    assert dev.actions == [("click", 0.229, 0.845)]
