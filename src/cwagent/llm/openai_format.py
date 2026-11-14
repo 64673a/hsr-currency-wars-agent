@@ -7,12 +7,28 @@ import re
 from typing import Any
 
 from ..config import ModelEndpoint
-from .base import LLMResponse, ToolCall, ToolSpec, Usage, deep_merge
+from .base import LLMResponse, Message, ToolCall, ToolSpec, Usage, deep_merge
 
 _THINK = re.compile(r"^\s*<think>(.*?)</think>\s*", re.S)
 
 
-def build_request(profile: ModelEndpoint, system: str, user: str,
+def _message(m: Message) -> dict[str, Any]:
+    if m.role == "user":
+        return {"role": "user", "content": m.content}
+    if m.role == "tool":
+        return {"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content}
+    if isinstance(m.raw, dict):  # 原样传回,含 reasoning_content(DeepSeek 思考模式带工具时必须传回)
+        return m.raw
+    out: dict[str, Any] = {"role": "assistant", "content": m.content}
+    if m.tool_calls:
+        out["tool_calls"] = [{"id": c.id, "type": "function",
+                              "function": {"name": c.name,
+                                           "arguments": c.raw_arguments or json.dumps(c.arguments, ensure_ascii=False)}}
+                             for c in m.tool_calls]
+    return out
+
+
+def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
                   tools: list[ToolSpec] | None) -> tuple[str, dict[str, str], dict[str, Any]]:
     url = profile.base_url.rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
@@ -21,7 +37,7 @@ def build_request(profile: ModelEndpoint, system: str, user: str,
     headers.update(profile.extra_headers)
     body: dict[str, Any] = {
         "model": profile.model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "messages": [{"role": "system", "content": system}, *(_message(m) for m in messages)],
     }
     if profile.max_tokens:
         body["max_tokens"] = profile.max_tokens
@@ -94,4 +110,5 @@ def parse_response(data: dict[str, Any]) -> LLMResponse:
                     reasoning_tokens=completion_details.get("reasoning_tokens") or 0),
         stop_reason=choice.get("finish_reason") or "",
         model=data.get("model", ""),
+        message_raw={k: v for k, v in message.items() if v is not None},
     )

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import ModelEndpoint
-from .base import LLMResponse, ToolCall, ToolSpec, Usage, deep_merge
+from .base import LLMResponse, Message, ToolCall, ToolSpec, Usage, deep_merge
 
 DEFAULT_MAX_TOKENS = 16000
 
@@ -24,7 +24,31 @@ def endpoint(base_url: str) -> str:
     return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
 
 
-def build_request(profile: ModelEndpoint, system: str, user: str,
+def _messages(messages: list[Message]) -> list[dict[str, Any]]:
+    """转成 Anthropic 的消息列表:工具结果是 user 消息里的 tool_result 块,相邻的 user / tool 合并成一条。"""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if m.role == "assistant":
+            if isinstance(m.raw, list):  # 原样传回,含 thinking 块及其签名
+                content = m.raw
+            else:
+                content = ([{"type": "text", "text": m.content}] if m.content else []) + [
+                    {"type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments} for c in m.tool_calls]
+            out.append({"role": "assistant", "content": content})
+            continue
+        block = ({"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content} if m.role == "tool"
+                 else {"type": "text", "text": m.content})
+        if out and out[-1]["role"] == "user":
+            out[-1]["content"].append(block)
+        else:
+            out.append({"role": "user", "content": [block]})
+    # 对话只往后追加:在最后一块打缓存标记,下一轮请求能命中到这里为止的前缀
+    if out and out[-1]["content"]:
+        out[-1]["content"][-1] = {**out[-1]["content"][-1], "cache_control": {"type": "ephemeral"}}
+    return out
+
+
+def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
                   tools: list[ToolSpec] | None) -> tuple[str, dict[str, str], dict[str, Any]]:
     headers = {"Content-Type": "application/json", "anthropic-version": profile.anthropic_version}
     if profile.api_key:
@@ -35,7 +59,7 @@ def build_request(profile: ModelEndpoint, system: str, user: str,
         "max_tokens": profile.max_tokens or DEFAULT_MAX_TOKENS,
         # 系统提示词稳定不变,打上缓存标记
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        "messages": [{"role": "user", "content": user}],
+        "messages": _messages(messages),
     }
     if tools:
         body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters}
@@ -72,4 +96,5 @@ def parse_response(data: dict[str, Any]) -> LLMResponse:
                     cache_write_tokens=usage.get("cache_creation_input_tokens") or 0),
         stop_reason=data.get("stop_reason") or "",
         model=data.get("model", ""),
+        message_raw=data.get("content") or [],
     )

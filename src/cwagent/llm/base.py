@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,23 @@ class Usage(BaseModel):
     reasoning_tokens: int = 0   # 输出中用于思考的部分(接口提供时才有)
 
 
+class Message(BaseModel):
+    """多轮对话里的一条消息。
+
+    - user:content 是文字;
+    - assistant:模型的回复。raw 保存接口返回的原始内容(OpenAI 格式的 message 对象、Anthropic 格式的内容块),
+      下一轮原样传回:DeepSeek 等思考模型在带工具的多轮对话里要求传回 reasoning_content,Anthropic 要求传回
+      thinking 块;
+    - tool:某次工具调用的执行结果,tool_call_id 对应 assistant 消息里的 ToolCall.id。
+    """
+
+    role: Literal["user", "assistant", "tool"]
+    content: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str = ""
+    raw: Any = None
+
+
 class LLMResponse(BaseModel):
     text: str = ""
     reasoning: str = ""
@@ -41,6 +58,10 @@ class LLMResponse(BaseModel):
     latency_s: float = 0.0
     attempts: int = 1
     raw: dict[str, Any] = Field(default_factory=dict)
+    message_raw: Any = None   # 回复消息本身的原始内容,见 Message.raw
+
+    def as_message(self) -> Message:
+        return Message(role="assistant", content=self.text, tool_calls=self.tool_calls, raw=self.message_raw)
 
 
 class LLMError(Exception):

@@ -19,6 +19,7 @@ const ROLES: { key: RoleKey; label: string }[] = [
   { key: 'strategic', label: '战略' },
   { key: 'tactical', label: '备战' },
   { key: 'chooser', label: '三选一' },
+  { key: 'navigator', label: '导航' },
   { key: 'review', label: '复盘' },
 ];
 

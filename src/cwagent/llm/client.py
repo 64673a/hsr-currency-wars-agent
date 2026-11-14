@@ -12,7 +12,7 @@ import httpx
 
 from ..config import ModelEndpoint
 from . import anthropic_format, json_mode, openai_format
-from .base import LLMError, LLMResponse, ToolSpec
+from .base import LLMError, LLMResponse, Message, ToolSpec
 
 _ADAPTERS = {"openai": openai_format, "anthropic": anthropic_format}
 MAX_ERROR_BODY = 2000
@@ -31,16 +31,36 @@ def _retry_after(resp: httpx.Response) -> float | None:
             return None
 
 
-def complete(profile: ModelEndpoint, system: str, user: str, tools: list[ToolSpec] | None = None, *,
-             http: httpx.Client | None = None, max_retries: int = 4,
+def _json_mode_messages(messages: list[Message], tools: list[ToolSpec]) -> list[Message]:
+    """不支持原生工具调用时:工具结果改成 user 消息,助手消息只保留文字;第一条 user 消息后附上输出格式说明。"""
+    out: list[Message] = []
+    for m in messages:
+        if m.role == "tool":
+            out.append(Message(role="user", content=f"工具执行结果:\n{m.content}"))
+        elif m.role == "assistant":
+            out.append(Message(role="assistant", content=m.content))
+        else:
+            out.append(m)
+    first = next(i for i, m in enumerate(out) if m.role == "user")
+    out[first] = Message(role="user", content=out[first].content + "\n" + json_mode.instructions(tools))
+    return out
+
+
+def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
+             tools: list[ToolSpec] | None = None, *, http: httpx.Client | None = None, max_retries: int = 4,
              sleep: Callable[[float], None] = time.sleep) -> LLMResponse:
-    """调用一次模型。429、5xx 和网络错误按指数退避重试;其他 4xx 直接抛出 LLMError。"""
+    """调用一次模型。messages 是一段 user 文字或多轮消息列表。
+
+    429、5xx 和网络错误按指数退避重试;其他 4xx 直接抛出 LLMError。
+    """
     adapter = _ADAPTERS[profile.format]
     tools = tools or []
     native = profile.tool_mode == "native"
+    if isinstance(messages, str):
+        messages = [Message(role="user", content=messages)]
     if tools and not native:
-        user = user + "\n" + json_mode.instructions(tools)
-    url, headers, body = adapter.build_request(profile, system, user, tools if native else None)
+        messages = _json_mode_messages(messages, tools)
+    url, headers, body = adapter.build_request(profile, system, messages, tools if native else None)
 
     own = http is None
     client = http or httpx.Client(timeout=httpx.Timeout(profile.timeout_seconds, connect=15.0),

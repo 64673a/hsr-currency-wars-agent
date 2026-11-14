@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .. import paths
 from ..brain.screen_agent import ScreenAgent, load_rules
-from ..config import AppConfig
+from ..config import AppConfig, ModelEndpoint
 from ..knowledge.companions import CompanionBook
 from ..knowledge.index import NameIndex
 from ..memory import MemoryStore
@@ -30,16 +30,33 @@ def load_portraits() -> Portraits | None:
     return Portraits(paths.templates_dir(), names)
 
 
+def endpoints(cfg: AppConfig, model: str | None) -> dict[str, ModelEndpoint]:
+    """各决策层用哪个模型。指定了模型(网页上选的)时,备战、战略、三选一都用它,便于对比模型;
+    没指定时按 config.yaml 的 roles。导航层配置了就用配置的(找路不需要强模型)。"""
+    main = cfg.endpoint(model) if model else cfg.role_endpoint("tactical")
+    out = {"default": main}
+    if not model:
+        for role in ("strategic", "chooser"):
+            if getattr(cfg.roles, role):
+                out[role] = cfg.endpoint(getattr(cfg.roles, role))
+    if cfg.roles.navigator:
+        out["navigator"] = cfg.endpoint(cfg.roles.navigator)
+    return out
+
+
 def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print) -> tuple[Runner, Path]:
-    endpoint = cfg.endpoint(model) if model else cfg.role_endpoint("tactical")
+    eps = endpoints(cfg, model)
+    endpoint = eps["default"]
     memories = [m for m, _ in MemoryStore().all()]
-    brain = ScreenAgent(endpoint, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"))
+    brain = ScreenAgent(eps, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"))
     run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{endpoint.name}"
     trace = Trace(run_dir)
     book = CompanionBook()
     runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
-                    on_companion=lambda name: book.record(name, screenshot=str(run_dir / "shots")))
+                    on_companion=lambda name: book.record(name, screenshot=str(run_dir / "shots")),
+                    prepare_turns=cfg.agent.max_tactical_calls_per_stage)
     trace.meta(profile=endpoint.name, model=endpoint.model, difficulty=cfg.agent.difficulty,
+               roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
     return runner, run_dir
 

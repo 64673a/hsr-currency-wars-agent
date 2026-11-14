@@ -10,6 +10,14 @@ from ..vision.ocr import TextBox, find, has
 def classify(boxes: list[TextBox]) -> str:
     if has(boxes, "点击空白处继续"):
         return "tap_continue"
+    if has(boxes, "点击空白加速"):
+        return "battle_end"
+    if has(boxes, "可出战角色人数未达上限"):
+        return "deploy_confirm"
+    if find(boxes, "^继续挑战$") and find(boxes, "挑战成功|挑战结束|获得金币总览"):
+        return "node_result"
+    if has(boxes, "对局未完成") or find(boxes, "^返回货币战争$"):
+        return "previous_run"
     if has(boxes, "本场对局首领") and find(boxes, "^下一步$"):
         return "run_intro"
     if has(boxes, "是否中断挑战"):
@@ -26,6 +34,10 @@ def classify(boxes: list[TextBox]) -> str:
         return "supply"
     if has(boxes, "选择一个角色获得主角光环"):
         return "spotlight_choice"
+    if has(boxes, "请选择投资策略"):
+        return "strategy_choice"
+    if find(boxes, "^遭遇节点$") or (has(boxes, "遭遇其") and has(boxes, "奖励预览")):
+        return "encounter_choice"
     if has(boxes, "备战阶段"):
         return "prepare"
     # 商店展开时会挡住顶部的「备战阶段」
@@ -40,6 +52,39 @@ def classify(boxes: list[TextBox]) -> str:
     if has(boxes, "^开始对局$") and has(boxes, "敌人难度"):
         return "difficulty"
     return "other"
+
+
+# 需要模型判断的界面交给哪个决策层的模型(config.yaml 的 roles;没配的用对局选的模型)
+ROLES = {
+    "prepare": "tactical",
+    "environment_choice": "strategic", "strategy_choice": "strategic", "spotlight_choice": "strategic",
+    "encounter_choice": "chooser", "supply": "chooser",
+}
+
+
+def role_of(screen: str) -> str:
+    return ROLES.get(screen, "navigator")   # 难度选择、没见过的界面:只是找路,用导航层(可配便宜、少思考的模型)
+
+
+SCREEN_NAMES = {
+    "prepare": "备战", "environment_choice": "投资环境", "strategy_choice": "投资策略", "spotlight_choice": "主角光环",
+    "encounter_choice": "遭遇节点", "supply": "补给", "difficulty": "难度选择", "other": "其他界面",
+}
+
+
+def meaningful(boxes: list[TextBox]) -> list[TextBox]:
+    """去掉 UID、延迟数字、单个字符这些不说明界面内容的文字。"""
+    return [b for b in boxes if len(b.text) > 1 and not re.match(r"^(UID|\d+ms$)", b.text)]
+
+
+def intro_text(boxes: list[TextBox]) -> str:
+    """开局介绍界面的文字(首领、怪物词条、奇遇伙伴),按行拼起来记进本局档案。"""
+    rows: dict[int, list[TextBox]] = {}
+    for b in meaningful(boxes):
+        if b.text in ("下一步",):
+            continue
+        rows.setdefault(round(b.y * 40), []).append(b)
+    return "\n".join(" ".join(b.text for b in sorted(r, key=lambda b: b.x)) for _, r in sorted(rows.items()))
 
 
 def companion_name(boxes: list[TextBox]) -> str | None:
@@ -66,14 +111,15 @@ def similar(a: set[str], b: set[str]) -> float:
     return len(a & b) / max(1, len(a | b))
 
 
-# 备战阶段的布局(归一化坐标,1920x1080 客户区实测,商店收起时)
-PREPARE_LAYOUT = """备战界面操作(坐标可直接用于 click / drag):
+# 备战阶段的说明(1920x1080 客户区实测)
+PREPARE_LAYOUT = """备战界面(程序已经打开商店):
+- 用 buy / sell / move / refresh / buy_exp / ready 操作,坐标由程序换算;格子编号见下方「程序识别的局面」,从左到右从 1 开始。
 - 顶部爱心图标后的数字是小队生命值,不是金币。
-- 每格的坐标和格子里是谁见下方「程序识别的局面」;商店展开时棋盘会缩小下移,以识别结果里的坐标为准。
-- 上场:从备战席 drag 到前台或后台的空格;下场:从格子 drag 回备战席空位;同名角色不能同时上场两个。
-- 商店:点右下「商店」打开、「收起」关闭。打开后顶部 5 张卡,中心 (0.255,0.15) (0.396,0.15) (0.535,0.15) (0.676,0.15) (0.816,0.15),点击卡片即购买,角色进入备战席第一个空位;卡片左下是名字、右下是价格。
-- 刷新商店按 d,购买经验按 f;点角色会在右侧弹出详情(含「出售」按钮)。
-- 「出战」(0.946,0.694):先收起商店再点,开始本节点战斗。"""
+- buy:买商店第几格(1~5),角色进入备战席第一个空位。
+- move:把角色从一个格子移到另一个格子(上场、下场、换位),目标最好是空格。同名角色不能同时上场两个。
+- sell:卖掉某格的角色。refresh:刷新商店,刷新后程序会停下,把新商店给你看。buy_exp:买经验,times 为次数。
+- ready:出战(程序会先收起商店)。一个备战阶段以 ready 结束。
+- 装备、晶矿等其他操作仍用 click / drag,坐标见「界面文字」;点角色会在右侧弹出详情。"""
 
 
 DIFFICULTY_HINT = """目标难度:{target}(「A8」是职级分组,后面的数字是组内等级)。

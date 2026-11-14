@@ -103,6 +103,7 @@ class Roles(BaseModel):
     strategic: str | None = None
     chooser: str | None = None
     review: str | None = None
+    navigator: str | None = None   # 没见过的界面、难度选择等找路的界面,可配便宜、少思考的模型
 
 
 class AgentSettings(BaseModel):

@@ -1,7 +1,13 @@
-"""主循环:截图 → 识别界面 → 规则或模型决定 → 执行 → 记录。设计见 docs/TECH_DESIGN.md 第 10 节。"""
+"""主循环:截图(等画面稳定)→ 识别界面 → 规则或模型决定 → 执行 → 记录。设计见 docs/TECH_DESIGN.md 第 10 节。
+
+- 过场、加载、固定界面由规则处理,不调用模型;
+- 需要判断的界面按「回合」组织(一个备战阶段或一个选择界面):回合内多轮对话,模型看得到自己之前的判断和
+  执行结果;回合结束后只在本局档案里留一行摘要(brain/ledger.py)。
+"""
 
 from __future__ import annotations
 
+import itertools
 import json
 import threading
 import time
@@ -9,27 +15,41 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
+from ..brain.ledger import RunLedger
+from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, to_jsonable
 from ..device import UserInterrupt
-from ..brain.screen_agent import Action, Decision, ScreenAgent, action_text, to_jsonable
 from ..vision.battle import has_marker, read_action_value, read_progress, summarize
-from ..vision.board import Portraits, format_board, shop_is_open
+from ..vision.board import Portraits, Slot, format_board, shop_is_open
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
+from ..vision.shop import format_shop, read_shop
 from .macros import open_crystals, survey_plane
+from .prepare import PrepareExecutor
 from .screens import (
     DIFFICULTY_HINT,
     PREPARE_LAYOUT,
+    SCREEN_NAMES,
     SPOTLIGHT_LAYOUT,
     classify,
     companion_name,
+    intro_text,
+    meaningful,
     node_of,
+    role_of,
     similar,
     text_signature,
 )
 
-ACTION_GAP = 0.7  # 每个操作之后等画面响应
+ACTION_GAP = 0.7      # 每个操作之后等画面响应
+STABLE_GAP = 0.3      # 判断画面是否稳定:隔这么久再截一张比较
+STABLE_TRIES = 6
+STABLE_DIFF = 3.0     # 缩略灰度图逐像素平均差(0~255)低于这个值算稳定
+OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开一个回合(清掉对话)
+# 出现这些界面说明之前的回合已经结束
+CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
 
 @dataclass
@@ -44,6 +64,11 @@ class RunOptions:
 def _plain(o):
     """numpy 的数字(OCR 坐标等)转成普通数字再写 JSON。"""
     return o.item() if hasattr(o, "item") else str(o)
+
+
+def frame_diff(a: Image.Image, b: Image.Image) -> float:
+    small = [np.asarray(im.convert("L").resize((96, 54)), dtype=np.int16) for im in (a, b)]
+    return float(np.abs(small[0] - small[1]).mean())
 
 
 class Trace:
@@ -77,7 +102,8 @@ class Trace:
 class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
                  on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
-                 difficulty: str = "A8-1", portraits: Portraits | None = None):
+                 difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
+                 settle: bool = True):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
@@ -86,52 +112,78 @@ class Runner:
         self.portraits = portraits
         self.on_companion = on_companion
         self.log = log
-        self.run_notes = ""
-        self.history: list[str] = []
+        self.prepare_turns = prepare_turns
+        self.settle_frames = settle
+        self.ledger = RunLedger(difficulty=difficulty)
+        self.episode: Episode | None = None
+        self._ids = itertools.count(1)
+        self._results: list[str] = []     # 上一组操作的执行结果,下一轮交给模型
+        self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw)
+        self._node: str | None = None
+        self._board: list[Slot] | None = None
+        self._last_screen = ""
         self._last_sig: set[str] = set()
         self._waits = 0
+        self._quits = 0
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
         self._curve: list[tuple[int | None, int | None]] = []  # 当前这场战斗的(剩余行动值, 进度)采样
         self._curve_node: str | None = None
-        self.last_battle = ""                                  # 上一场战斗的摘要,给下一次决策
-        self.plane_nodes = ""                                  # 本位面的节点序列(进入新位面时程序收集)
         self._surveyed: str | None = None                      # 已经收集过节点的位面
         self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
         self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
 
+    # ---------------------------------------------------------------- 截图
+
+    def settle(self):
+        """等画面稳定再返回(过场动画、界面切换中途不识别)。一直在动的画面(战斗)最多等 STABLE_TRIES 次。"""
+        frame = self.device.grab()
+        if not self.settle_frames or self._last_screen == "battle":
+            return frame
+        for _ in range(STABLE_TRIES):
+            time.sleep(STABLE_GAP)
+            nxt = self.device.grab()
+            if frame_diff(frame.image, nxt.image) < STABLE_DIFF:
+                return nxt
+            frame = nxt
+        return frame
+
     # ---------------------------------------------------------------- 执行
+
+    def _raw(self, a: Action, boxes: list[TextBox]) -> str:
+        """执行一个坐标类操作,返回结果说明。"""
+        if a.type == "click_text":
+            matches = [b for b in boxes if b.text == a.text] or [b for b in boxes if a.text and a.text in b.text]
+            if len(matches) <= a.nth:
+                return f"{action_text(a)}:界面上没找到这段文字"
+            b = matches[a.nth]
+            self.device.click(b.x, b.y)
+            self._marks.append({"type": "click", "x": float(b.x), "y": float(b.y)})
+        elif a.type == "click":
+            self.device.click(a.x, a.y)
+            self._marks.append({"type": "click", "x": a.x, "y": a.y})
+        elif a.type == "drag":
+            self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
+            self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
+        elif a.type == "scroll":
+            x, y = (a.x if a.x is not None else 0.5), (a.y if a.y is not None else 0.5)
+            self.device.scroll(x, y, a.notches or -3)
+            self._marks.append({"type": "scroll", "x": x, "y": y})
+        elif a.type == "key":
+            self.device.key(a.key)
+        elif a.type == "wait":
+            time.sleep(min(a.seconds or 3, 60))
+        else:
+            return f"{action_text(a)}:这里不能用"
+        time.sleep(ACTION_GAP)
+        return action_text(a)
 
     def execute(self, actions: list[Action], boxes: list[TextBox]) -> list[str]:
         results = []
-        self._marks = []
         for a in actions:
             try:
-                if a.type == "click_text":
-                    matches = [b for b in boxes if b.text == a.text] or [b for b in boxes if a.text and a.text in b.text]
-                    if len(matches) <= a.nth:
-                        results.append(f"{action_text(a)}:界面上没找到这段文字")
-                        continue
-                    b = matches[a.nth]
-                    self.device.click(b.x, b.y)
-                    self._marks.append({"type": "click", "x": float(b.x), "y": float(b.y)})
-                elif a.type == "click":
-                    self.device.click(a.x, a.y)
-                    self._marks.append({"type": "click", "x": a.x, "y": a.y})
-                elif a.type == "drag":
-                    self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
-                    self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
-                elif a.type == "scroll":
-                    x, y = (a.x if a.x is not None else 0.5), (a.y if a.y is not None else 0.5)
-                    self.device.scroll(x, y, a.notches or -3)
-                    self._marks.append({"type": "scroll", "x": x, "y": y})
-                elif a.type == "key":
-                    self.device.key(a.key)
-                elif a.type == "wait":
-                    time.sleep(min(a.seconds or 3, 60))
-                results.append(action_text(a))
-                time.sleep(ACTION_GAP)
+                results.append(self._raw(a, boxes))
             except UserInterrupt:
                 raise
             except Exception as e:  # noqa: BLE001 - 单个操作失败记录下来,交给下一步重新判断
@@ -141,24 +193,37 @@ class Runner:
     # ---------------------------------------------------------------- 局面识别
 
     def perceive(self, image, boxes: list[TextBox], node: str | None) -> tuple[str, dict, list[str]]:
-        """备战界面:读数字和阵容。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
+        """备战界面:读数字、阵容和商店。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
         hud = read_hud(image, boxes, self.ocr, node=node)
         state: dict = {"hud": hud.as_dict()}
         lines = [hud.text()]
         names: list[str] = []
+        shop = shop_is_open(boxes)
+        if shop:
+            lines.append("商店(从左到右):" + format_shop(read_shop(boxes)))
+        self._board = None
         if self.portraits is not None:
-            shop = shop_is_open(boxes)
             if shop:
                 learned = self.portraits.learn_from_shop(image, boxes)
                 if learned:
                     self.log(f"从商店记下了立绘:{'、'.join(learned)}")
             board = self.portraits.read(image, shop_open=shop)
+            self._board = board
             state["board"] = [{"zone": b.zone, "index": b.index, "x": round(b.x, 3), "y": round(b.y, 3),
                                "name": b.name, "stars": b.stars, "score": round(b.score, 2)}
                               for b in board if not b.empty]
-            lines.append("阵容(「认不出」表示有角色但没认出是谁,可以点开看详情):\n" + format_board(board))
+            lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name})
+        if node and not self.ledger.node(node).start:
+            self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
+
+    def _lineup(self) -> str:
+        if not self._board:
+            return ""
+        zones = {"front": "前台", "back": "后台"}
+        return ";".join(f"{label} " + "、".join(s.name or "?" for s in self._board if s.zone == z and not s.empty)
+                        for z, label in zones.items())
 
     # ---------------------------------------------------------------- 固定流程
 
@@ -171,7 +236,7 @@ class Runner:
             self._surveyed = plane
             lines = survey_plane(self.device, self.ocr, self.log)
             if lines:
-                self.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
+                self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             return "收集本位面的节点序列"
         tries = self._crystal_tries.get(node, 0)
@@ -186,118 +251,239 @@ class Runner:
             return "划开晶矿" if opened else "尝试划开晶矿(没变化)"
         return None
 
+    def reflex(self, screen: str, image, boxes: list[TextBox], record: dict, sig: set[str]) -> list[Action] | None:
+        """不需要模型的界面:返回要做的操作;需要模型判断时返回 None。"""
+        if screen != "quit_dialog":
+            self._quits = 0
+        match screen:
+            case "tap_continue":
+                return [Action(type="click", x=0.5, y=0.62, reason="点击空白处继续")]
+            case "battle_end":
+                return [Action(type="click", x=0.5, y=0.83, reason="点击空白加速")]
+            case "run_intro":
+                name = companion_name(boxes)
+                if name and not self.ledger.companion:
+                    self.ledger.companion = name
+                    if self.on_companion:
+                        self.on_companion(name)
+                self.ledger.intro = intro_text(boxes)[:600]
+                return [Action(type="click_text", text="下一步", reason="开局介绍")]
+            case "home":
+                return [Action(type="click_text", text="开始「货币战争」")]
+            case "mode_select":
+                return [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
+            case "settlement":
+                record["note"] = "对局结束"
+                return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
+            case "node_result":
+                return [Action(type="click_text", text="继续挑战", reason="节点结算")]
+            case "deploy_confirm":
+                # 模型已经决定出战(没上满人);勾上「本局不再提示」,以后不再弹
+                return [Action(type="click_text", text="本局不再提示"), Action(type="click_text", text="确认")]
+            case "previous_run":
+                if find(boxes, "^返回货币战争$"):
+                    return [Action(type="click_text", text="返回货币战争", reason="上一局的结算")]
+                return [Action(type="click_text", text="下一页", reason="上一局的结算")]
+            case "quit_dialog":
+                # 误按 Esc 弹出的中断确认:两个按钮都会离开对局,再按一次 Esc 关掉(2026-11-14 记录里这样关掉过)
+                self._quits += 1
+                if self._quits > 3:
+                    return [Action(type="pause", reason="中断确认框关不掉,请人处理")]
+                return [Action(type="key", key="escape", reason="关掉中断确认框")]
+            case "battle":
+                av, progress = read_action_value(image, self.ocr), read_progress(boxes)
+                self._curve.append((av, progress))
+                self._curve_node = record["node"] or self._curve_node
+                record["battle"] = {"av": av, "progress": progress}
+                return [Action(type="wait", seconds=4, reason="战斗进行中")]
+            case "other":
+                if len(meaningful(boxes)) < 2:
+                    return [Action(type="wait", seconds=1.5, reason="过场或加载中")]
+                ep = self.episode
+                if ep is not None and ep.waiting and similar(sig, self._last_sig) > 0.6 and self._waits < 10:
+                    self._waits += 1
+                    return [Action(type="wait", seconds=3, reason="画面与上一步相似,继续等待")]
+        return None
+
+    # ---------------------------------------------------------------- 回合
+
+    def _key(self, screen: str, sig: set[str]) -> tuple:
+        ep = self.episode
+        if screen == "other":
+            # 模型操作后弹出的界面(角色详情、确认框……)仍属于原来的回合
+            return ep.key if ep is not None and ep.pending else ("other", frozenset(sig))
+        return (screen, self._node)
+
+    def close_episode(self) -> None:
+        ep, self.episode = self.episode, None
+        self._results = []
+        if ep is None:
+            return
+        done = ";".join(ep.done)
+        if ep.screen == "prepare" and ep.node:
+            rec = self.ledger.node(ep.node)
+            rec.actions = done[:300]
+            rec.lineup = rec.lineup or self._lineup()
+        elif done and ep.screen not in ("difficulty",):
+            self.ledger.event(f"{ep.node or ''} {SCREEN_NAMES.get(ep.screen, ep.screen)}:{done}"[:160].strip())
+
+    def _hints(self, screen: str, frame, boxes: list[TextBox], record: dict, opening: bool) -> tuple[str, list[str]]:
+        hints, names = "", []
+        if screen == "prepare":
+            hints = PREPARE_LAYOUT if opening else ""
+            try:
+                seen, record["state"], names = self.perceive(frame.image, boxes, self._node)
+                hints += "\n\n## 程序识别的局面\n" + seen
+            except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
+                self.log(f"[{record['step']}] 局面识别出错:{type(e).__name__}: {e}")
+        elif opening and screen == "difficulty":
+            hints = DIFFICULTY_HINT.format(target=self.difficulty)
+        elif opening and screen == "spotlight_choice":
+            hints = SPOTLIGHT_LAYOUT
+        if self._same >= 3:
+            hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
+                      "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
+        return hints.strip(), names
+
+    def decide(self, n: int, frame, boxes: list[TextBox], screen: str, record: dict, sig: set[str]) -> str:
+        key = self._key(screen, sig)
+        if self.episode is not None and self.episode.key != key:
+            self.close_episode()
+        ep = self.episode
+        if ep is not None and ep.turns >= ep.max_turns:
+            if ep.screen == "prepare" and screen == "prepare":
+                self.log(f"[{n}] 本备战阶段的决策次数用完,直接出战")
+                return self._finish_prepare(record, [Action(type="ready", reason="决策次数用完")], boxes, sig, screen)
+            self.close_episode()
+            ep = None
+
+        if ep is None and screen == "prepare":
+            try:
+                did = self.macros(frame.image, boxes, self._node)
+            except UserInterrupt:
+                raise
+            except Exception as e:  # noqa: BLE001 - 固定流程出错就交给模型
+                did = None
+                self.log(f"[{n}] 固定流程出错:{type(e).__name__}: {e}")
+            if did:
+                record["actions"] = [did]
+                if did.startswith("收集") and self.ledger.plane_nodes:
+                    record["plane_nodes"] = self.ledger.plane_nodes
+                self._last_sig = sig
+                self.trace.write(record)
+                return screen
+            if not shop_is_open(boxes):
+                # 先打开商店,让模型第一眼就看到能买什么
+                b = find(boxes, "^商店$")
+                self.device.click(*(b.x, b.y) if b else (0.845, 0.909))
+                time.sleep(0.8)
+                frame = self.device.grab()
+                boxes = self.ocr(frame.image)
+                record["shot"] = self.trace.shot(n, frame.image)
+                record["texts"] = [str(b) for b in boxes]
+
+        opening = ep is None
+        hints, names = self._hints(screen, frame, boxes, record, opening)
+        if opening:
+            ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
+                         max_turns=self.prepare_turns if screen == "prepare" else OTHER_TURNS)
+            self.episode = ep
+            text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names)
+        else:
+            text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
+                                                    names=names), []
+        decision = self.brain.decide(ep, text, recalled)
+        record["decision"] = to_jsonable(decision)
+        if decision.error:
+            self.log(f"[{n}] 决策失败:{decision.error}")
+            time.sleep(3)
+            record["actions"] = ["等待 3s(决策失败,稍后重试)"]
+            self._last_sig = sig
+            self.trace.write(record)
+            return screen
+        if decision.run_notes:
+            self.ledger.set_direction(decision.run_notes)
+        self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
+        if ep.screen == "prepare":
+            return self._finish_prepare(record, decision.actions, boxes, sig, screen)
+        return self.finish(record, screen, decision.actions, boxes, sig)
+
+    def _finish_prepare(self, record: dict, actions: list[Action], boxes: list[TextBox], sig: set[str],
+                        screen: str) -> str:
+        if any(a.type == "pause" for a in actions):
+            return self.finish(record, screen, actions, boxes, sig)
+        self._marks = []
+        result = self.prepare.run(actions, boxes, self._board)
+        record["actions"] = result.results
+        marks = result.marks + self._marks
+        if marks:
+            record["marks"] = marks
+        if self.episode is not None:
+            self.episode.done += [r for r in result.results if not r.startswith("等待")]
+            self._results = result.results
+        if result.ready:
+            if self.episode is not None and self.episode.node and result.lineup():
+                self.ledger.node(self.episode.node).lineup = result.lineup()
+            self.close_episode()
+        self._same = 0
+        self._last_sig = sig
+        self.trace.write(record)
+        return screen
+
     # ---------------------------------------------------------------- 一步
 
-    def step(self, n: int) -> str:
-        frame = self.device.grab()
-        boxes = self.ocr(frame.image)
-        screen = classify(boxes)
-        # 战斗中文字有时只认出零星几个:左侧行动值条目能读出数字就算战斗(备战界面的羁绊图标也是金色六边形,只认图标会误判)
-        if screen == "other" and has_marker(frame.image) and read_action_value(frame.image, self.ocr) is not None:
-            screen = "battle"
-        record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen, "node": node_of(boxes),
-                        "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
-        sig = text_signature(boxes)
-        if screen in ("run_intro", "environment_choice", "prepare", "battle"):
-            self.in_run = True
-        if self._curve and screen in ("prepare", "supply", "spotlight_choice", "settlement", "environment_choice"):
-            self.last_battle = f"{self._curve_node or ''} " + summarize(self._curve)
-            record["battle_summary"] = self.last_battle
-            self.history.append(f"[战斗] {self.last_battle}")
-            self.log(f"[{n}] 上一场战斗:{self.last_battle}")
-            self._curve, self._curve_node = [], None
-        actions: list[Action] = []
-        decision: Decision | None = None
-
-        if screen == "tap_continue":
-            actions = [Action(type="click", x=0.5, y=0.62, reason="点击空白处继续")]
-        elif screen == "run_intro":
-            name = companion_name(boxes)
-            if name:
-                self.run_notes = (self.run_notes + f"\n奇遇伙伴:{name}").strip()
-                if self.on_companion:
-                    self.on_companion(name)
-            actions = [Action(type="click_text", text="下一步", reason="开局介绍")]
-        elif screen == "home":
-            actions = [Action(type="click_text", text="开始「货币战争」")]
-        elif screen == "mode_select":
-            actions = [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
-        elif screen == "settlement":
-            record["note"] = "对局结束"
-            if find(boxes, "^下一步$"):
-                actions = [Action(type="click_text", text="下一步", reason="离开结算界面")]
-        elif screen == "battle":
-            av, progress = read_action_value(frame.image, self.ocr), read_progress(boxes)
-            self._curve.append((av, progress))
-            self._curve_node = record["node"] or self._curve_node
-            record["battle"] = {"av": av, "progress": progress}
-            actions = [Action(type="wait", seconds=4, reason="战斗进行中")]
-        elif screen == "other" and self._waits and similar(sig, self._last_sig) > 0.6 and self._waits < 30:
-            actions = [Action(type="wait", seconds=4, reason="画面与上一步相似,继续等待")]
-            self._waits += 1
-        else:
-            if screen == "prepare":
-                try:
-                    did = self.macros(frame.image, boxes, record["node"])
-                except UserInterrupt:
-                    raise
-                except Exception as e:  # noqa: BLE001 - 固定流程出错就交给模型
-                    did = None
-                    self.log(f"[{n}] 固定流程出错:{type(e).__name__}: {e}")
-                if did:
-                    record["actions"] = [did]
-                    if did.startswith("收集") and self.plane_nodes:
-                        record["plane_nodes"] = self.plane_nodes
-                    self.history.append(f"[{screen}] {did}")
-                    self._last_sig = sig
-                    self.trace.write(record)
-                    return screen
-            hints = PREPARE_LAYOUT if screen == "prepare" else ""
-            if self.plane_nodes and screen in ("prepare", "supply"):
-                hints += f"\n\n## 本位面的节点(程序在位面开始时收集)\n{self.plane_nodes}"
-            if self.last_battle and screen in ("prepare", "supply", "spotlight_choice"):
-                hints += f"\n\n## 上一场战斗(程序记录的行动值和进度)\n{self.last_battle}"
-            names: list[str] = []
-            if screen == "prepare":
-                try:
-                    seen, record["state"], names = self.perceive(frame.image, boxes, record["node"])
-                    hints += "\n\n## 程序识别的局面\n" + seen
-                except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
-                    self.log(f"[{n}] 局面识别出错:{type(e).__name__}: {e}")
-            if screen == "difficulty":
-                hints = DIFFICULTY_HINT.format(target=self.difficulty)
-            elif screen == "spotlight_choice":
-                hints = SPOTLIGHT_LAYOUT
-            if self._same >= 3:
-                hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
-                          "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
-            decision = self.brain.decide(boxes, screen=screen, run_notes=self.run_notes, history=self.history,
-                                         hints=hints, names=names)
-            record["decision"] = to_jsonable(decision)
-            if decision.error:
-                self.log(f"[{n}] 决策失败:{decision.error}")
-                actions = [Action(type="wait", seconds=3, reason="决策失败,稍后重试")]
-            else:
-                actions = decision.actions
-                if decision.run_notes:
-                    self.run_notes = decision.run_notes[:800]
-                self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
-            self._waits = 1 if actions and all(a.type == "wait" for a in actions) else 0
-
+    def finish(self, record: dict, screen: str, actions: list[Action], boxes: list[TextBox], sig: set[str]) -> str:
         if any(a.type == "pause" for a in actions):
             record["actions"] = [action_text(a) for a in actions]
             self.trace.write(record)
             return "pause"
         waiting = bool(actions) and all(a.type == "wait" for a in actions)
         self._same = self._same + 1 if (not waiting and similar(sig, self._last_sig) > 0.85) else 0
+        if not waiting:
+            self._waits = 0
+        self._marks = []
         results = self.execute(actions, boxes) if actions else []
         record["actions"] = results
         if self._marks:
             record["marks"] = self._marks
-        self.history.append(f"[{screen}] " + ";".join(results))
+        if "decision" in record and self.episode is not None:
+            self.episode.done += [r for r in results if not r.startswith("等待")]
+            self._results = results
         self._last_sig = sig
         self.trace.write(record)
         return screen
+
+    def step(self, n: int) -> str:
+        frame = self.settle()
+        boxes = self.ocr(frame.image)
+        screen = classify(boxes)
+        # 战斗中文字有时只认出零星几个:左侧行动值条目能读出数字就算战斗(备战界面的羁绊图标也是金色六边形,只认图标会误判)
+        if screen == "other" and has_marker(frame.image) and read_action_value(frame.image, self.ocr) is not None:
+            screen = "battle"
+        node = node_of(boxes)
+        if node:
+            self._node = node
+        record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen, "node": node,
+                        "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
+        sig = text_signature(boxes)
+        if screen in ("run_intro", "environment_choice", "prepare", "battle"):
+            self.in_run = True
+        if self._curve and screen in ("prepare", "supply", "spotlight_choice", "settlement", "environment_choice",
+                                      "node_result", "strategy_choice", "encounter_choice"):
+            summary = summarize(self._curve)
+            if self._curve_node:
+                self.ledger.node(self._curve_node).battle = summary
+            record["battle_summary"] = f"{self._curve_node or ''} {summary}"
+            self.log(f"[{n}] 上一场战斗:{record['battle_summary']}")
+            self._curve, self._curve_node = [], None
+        self._last_screen = screen
+
+        actions = self.reflex(screen, frame.image, boxes, record, sig)
+        if actions is not None:
+            if screen in CLOSES:
+                self.close_episode()
+            return self.finish(record, screen, actions, boxes, sig)
+        return self.decide(n, frame, boxes, screen, record, sig)
 
     def run(self, opts: RunOptions) -> str:
         started = time.monotonic()

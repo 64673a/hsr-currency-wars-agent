@@ -92,7 +92,7 @@ export interface TestResult {
   usage?: { input_tokens: number; output_tokens: number };
 }
 
-export type RoleKey = 'strategic' | 'tactical' | 'chooser' | 'review';
+export type RoleKey = 'strategic' | 'tactical' | 'chooser' | 'navigator' | 'review';
 
 export interface Settings {
   roles: Record<RoleKey, string | null>;
