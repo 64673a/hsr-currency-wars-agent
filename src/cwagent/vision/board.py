@@ -22,8 +22,8 @@ from PIL import Image
 
 from .ocr import TextBox
 
-# 每格卡片的中心和大小(归一化)。前台、后台每排居中、等距,格子数会变:后台一般 6 格,有的局是 7 格
-# (2026-11-14 实机,原因待核实,可能和奇遇伙伴的「团队规模提升」有关),按画面判断(detect_counts)。
+# 每格卡片的中心和大小(归一化)。前台、后台每排居中、等距。前台固定 4 格;后台 6 格起,每个佩佩 / 叽米、
+# 每个财富宝钻多一格,最多 9 格(M7A 的规则;2026-11-14 实机见过 6 格和 7 格),格子数见 detect_counts。
 FRONT_Y = 0.372
 FRONT_SIZE = (0.062, 0.116)
 BACK_Y = 0.615
@@ -41,8 +41,8 @@ ROW_X = {   # (zone, 商店展开): (整排中心, 格距)
     ("front", True): (0.5003, 0.0603), ("back", True): (0.5000, 0.0592),
 }
 DEFAULT_COUNTS = {"front": 4, "back": 6}
-COUNT_CHOICES = {"front": (4, 5), "back": (6, 7)}   # 相邻两种格子数奇偶不同,按格子的位置区分得很清楚
-COUNT_MIN = 0.5      # 分数低于这个(弹窗、动画挡住棋盘)就沿用上次的判断
+BACK_COUNTS = range(6, 10)
+COUNT_MIN = 0.5      # 分数低于这个(弹窗、动画挡住棋盘)就看不出奇偶
 
 # 商店 5 张卡:立绘区域(卡片上半部,特性条之上)和名字所在的行
 SHOP_X = (0.2550, 0.3960, 0.5350, 0.6760, 0.8160)
@@ -99,34 +99,51 @@ def slots(shop_open: bool = False, counts: dict[str, int] | None = None) -> list
     return out
 
 
-def detect_counts(img: np.ndarray, shop_open: bool = False) -> dict[str, int | None]:
-    """前台、后台各有几格。每张卡(有角色的卡面、空格的框)底边都是一段横向边缘,格子之间断开:
-    取卡片底边一带每列的纵向梯度,比较各种格子数下「格子里」和「格缝、两端外侧」的强弱。
-    实测(2026-11-14,92 张备战截图):对的格子数约 1.5~2.8,奇偶不对的 ≤0.1。看不出来时为 None。"""
+def back_hint(level: int | None, deployed: str | None) -> int | None:
+    """按界面数字推后台格子数:团队规模上限 = 等级 + 财富宝钻数,「已上场/上限」的上限还要加上佩佩数,
+    后台格子 = 6 + 佩佩数 + 宝钻数 = 6 + (上限 − 等级)(M7A)。"""
+    m = re.fullmatch(r"\d+/(\d+)", deployed or "")
+    if level is None or m is None:
+        return None
+    n = 6 + int(m.group(1)) - level
+    return n if n in BACK_COUNTS else None
+
+
+def back_scores(img: np.ndarray, shop_open: bool = False) -> dict[int, float]:
+    """后台各种格子数和画面的吻合程度。每张卡(有角色的卡面、空格的框)底边都是一段横向边缘,格子之间断开:
+    取卡片底边一带每列的纵向梯度,比较「格子里」和「格缝、两端外侧」的强弱。
+    实测(2026-11-14,88 张备战截图):奇偶对的约 1.5~2.8,奇偶不对的 ≤0.1;同奇偶的(6 和 8)分不开,
+    格子数要靠 back_hint。"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32)
     H, W = gray.shape
-    out: dict[str, int | None] = {}
-    for zone in ("front", "back"):
-        w, h = _size(zone, shop_open)
-        bottom = _row_y(zone, shop_open) + h / 2
-        band = gray[int((bottom - 0.015) * H):int((bottom + 0.015) * H)]
-        prof = np.abs(cv2.Sobel(band, cv2.CV_32F, 0, 1, ksize=3)).max(axis=0)
+    w, h = _size("back", shop_open)
+    bottom = _row_y("back", shop_open) + h / 2
+    band = gray[int((bottom - 0.015) * H):int((bottom + 0.015) * H)]
+    prof = np.abs(cv2.Sobel(band, cv2.CV_32F, 0, 1, ksize=3)).max(axis=0)
+    pitch = ROW_X[("back", shop_open)][1]
 
-        def mean(x0: float, x1: float) -> float:
-            a, b = int(x0 * W), int(x1 * W)
-            return float(prof[max(0, a):max(a + 1, b)].mean())
+    def mean(x0: float, x1: float) -> float:
+        a, b = int(x0 * W), int(x1 * W)
+        return float(prof[max(0, a):max(a + 1, b)].mean())
 
-        scores = {}
-        for n in COUNT_CHOICES[zone]:
-            xs = row_x(zone, shop_open, n)
-            pitch = ROW_X[(zone, shop_open)][1]
-            inner = [mean(x - w * 0.35, x + w * 0.35) for x in xs]
-            gaps = [mean((a + b) / 2 - 0.002, (a + b) / 2 + 0.002) for a, b in zip(xs, xs[1:])]
-            gaps += [mean(x - w * 0.35, x + w * 0.35) for x in (xs[0] - pitch, xs[-1] + pitch)]
-            scores[n] = float(np.log(np.mean(inner) + 1) - np.log(np.mean(gaps) + 1))
-        best = max(scores, key=lambda n: scores[n])
-        out[zone] = best if scores[best] >= COUNT_MIN else None
-    return out
+    scores = {}
+    for n in BACK_COUNTS:
+        xs = row_x("back", shop_open, n)
+        inner = [mean(x - w * 0.35, x + w * 0.35) for x in xs]
+        gaps = [mean((a + b) / 2 - 0.002, (a + b) / 2 + 0.002) for a, b in zip(xs, xs[1:])]
+        gaps += [mean(x - w * 0.35, x + w * 0.35) for x in (xs[0] - pitch, xs[-1] + pitch)]
+        scores[n] = float(np.log(np.mean(inner) + 1) - np.log(np.mean(gaps) + 1))
+    return scores
+
+
+def back_count(img: np.ndarray, shop_open: bool, hint: int | None, last: int) -> int:
+    """后台几格:界面数字推出来的(没有就用上次的),再用画面核对奇偶;奇偶对不上时取相邻两种里和画面更吻合的。"""
+    scores = back_scores(img, shop_open)
+    base = hint if hint is not None else last
+    even, odd = max(scores[6], scores[8]), max(scores[7], scores[9])
+    if max(even, odd) < COUNT_MIN or abs(even - odd) < COUNT_MIN or (base % 2 == 0) == (even > odd):
+        return base
+    return max((n for n in (base - 1, base + 1) if n in BACK_COUNTS), key=lambda n: scores[n])
 
 
 def _size(zone: str, shop_open: bool = False) -> tuple[float, float]:
@@ -308,9 +325,9 @@ class Portraits:
 
     # ---------------------------------------------------------------- 阵容
 
-    def read(self, image: Image.Image, *, shop_open: bool = False) -> list[Slot]:
+    def read(self, image: Image.Image, *, shop_open: bool = False, back_hint: int | None = None) -> list[Slot]:
         img = _bgr(image.resize((1920, 1080)) if image.size != (1920, 1080) else image)
-        self.counts.update({z: n for z, n in detect_counts(img, shop_open).items() if n})
+        self.counts["back"] = back_count(img, shop_open, back_hint, self.counts["back"])
         out = []
         for s in slots(shop_open, self.counts):
             w, h = _size(s.zone, shop_open)

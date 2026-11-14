@@ -26,7 +26,7 @@ from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_
 from .. import paths
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value, read_progress, summarize
-from ..vision.board import Portraits, Slot, format_board
+from ..vision.board import Portraits, Slot, back_hint, format_board
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
@@ -59,6 +59,7 @@ OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开�
 STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
 STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人处理
 DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
+ENV_GUIDES = 2             # 投资环境界面每个环境列几篇攻略
 READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$")   # 棋盘上本来就有的文字
@@ -242,7 +243,7 @@ class Runner:
                 learned = self.portraits.learn_from_shop(image, boxes)
                 if learned:
                     self.log(f"从商店记下了立绘:{'、'.join(learned)}")
-            board = self.portraits.read(image, shop_open=shop)
+            board = self.portraits.read(image, shop_open=shop, back_hint=back_hint(hud.level, hud.deployed))
             self.prepare.counts = dict(self.portraits.counts)
             for s in board:
                 # 备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色
@@ -319,6 +320,28 @@ class Runner:
                                                                              for m in shop):
             lines.append("候选 1 比当前方向匹配得多,可以考虑转向。")
         return "\n".join(lines)
+
+    def environment_advice(self, boxes: list[TextBox]) -> str:
+        """投资环境界面:每个看得到的环境列出适合它的热门攻略,让模型把环境和开局方向一起考虑(trail-cli 的做法)。"""
+        if self.guides is None:
+            return ""
+        envs = sorted(self.guides.environments, key=len, reverse=True)
+        seen: list[str] = []
+        for b in sorted(boxes, key=lambda b: b.x):
+            env = next((e for e in envs if e in b.text), None)
+            if env and env not in seen:
+                seen.append(env)
+        self._candidates, lines = [], []
+        for env in seen:
+            for g in sorted((g for g in self.guides.guides if env in g.environments),
+                            key=lambda g: g.use_count, reverse=True)[:ENV_GUIDES]:
+                self._candidates.append(g)
+                lines.append(f"- {env}:候选 {len(self._candidates)}「{g.title}」主 C {'、'.join(g.carries)}"
+                             + (f";节奏 {'、'.join(g.tempo)}" if g.tempo else ""))
+        if not lines:
+            return ""
+        return ("各投资环境适合的热门攻略(可以把投资环境和开局方向一起考虑;想定下方向就在 guide 字段填候选编号,"
+                "不填就由程序在第一个备战阶段按阵容挑):\n" + "\n".join(lines))
 
     def choose_guide(self, key: str, n: int) -> None:
         key = key.strip().removeprefix("候选").strip()
@@ -557,6 +580,9 @@ class Runner:
             hints = DIFFICULTY_HINT.format(target=self.difficulty)
         elif opening and screen == "spotlight_choice":
             hints = SPOTLIGHT_LAYOUT
+        elif opening and screen == "environment_choice":
+            advice = self.environment_advice(boxes)
+            hints = "## 攻略参考\n" + advice if advice else ""
         elif screen == "tea_break":
             hints = TEA_BREAK_HINT
         if self._same >= 3:

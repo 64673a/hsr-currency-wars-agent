@@ -86,14 +86,16 @@ def test_identify_by_m7a_avatar(tmp_path):
 
 @pytest.mark.parametrize("name, shop_open, back", [
     ("back7.jpg", False, 7), ("back7-shop.jpg", True, 7), ("back6.jpg", False, 6), ("back6-shop.jpg", True, 6)])
-def test_detect_counts(name, shop_open, back):
-    """实机截图(960x540,只留棋盘一带):后台有 6 格的局,也有 7 格的局。"""
-    from cwagent.vision.board import detect_counts
+def test_back_count(name, shop_open, back):
+    """实机截图(960x540,只留棋盘一带):后台有 6 格的局,也有 7 格的局。界面数字读不出时按画面核对奇偶。"""
+    from cwagent.vision.board import back_count, back_hint
 
     crop = Image.open(Path(__file__).parent / "fixtures" / "board" / name).convert("RGB")
     frame = Image.new("RGB", (960, 540))
     frame.paste(crop, (int(0.2 * 960), int(0.3 * 540)))
     img = cv2.cvtColor(np.asarray(frame.resize((1920, 1080))), cv2.COLOR_RGB2BGR)
-    counts = detect_counts(img, shop_open)
-    assert counts == {"front": 4, "back": back}
-    assert len([s for s in slots(shop_open, counts) if s.zone == "back"]) == back
+    assert back_count(img, shop_open, None, 6) == back          # 上次以为 6 格
+    assert back_count(img, shop_open, None, 7) == back          # 上次以为 7 格
+    assert back_count(img, shop_open, back, 6) == back
+    assert back_hint(4, "5/5") == 7 and back_hint(5, "5/5") == 6 and back_hint(None, "5/5") is None
+    assert len([s for s in slots(shop_open, {"back": back}) if s.zone == "back"]) == back

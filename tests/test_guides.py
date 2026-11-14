@@ -78,3 +78,16 @@ def test_environment_recorded_from_choice(tmp_path, advisor):
     r.episode.done = ["点击「二手市场」", "点击「人才储备」", "点击「确认」"]
     r.close_episode()
     assert r.ledger.environment == "人才储备"
+
+
+def test_environment_advice_lists_guides(tmp_path, advisor):
+    from cwagent.vision.ocr import TextBox
+
+    r = make_runner(tmp_path, advisor)
+    boxes = [TextBox("人才储备", 0.5, 0.3, 0.1, 0.03, 0.9), TextBox("二手市场", 0.2, 0.3, 0.1, 0.03, 0.9)]
+    text = r.environment_advice(boxes)
+    assert "人才储备:候选 1「刃攻略」主 C 刃" in text and "二手市场" not in text
+    r.choose_guide("1", 1)
+    assert r._guide.id == "c" and r._guide_pinned
+    r.guide_advice(True, {})                       # 第一个备战阶段不再自动换
+    assert r._guide.id == "c"
