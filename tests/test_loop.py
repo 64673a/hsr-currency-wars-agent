@@ -249,3 +249,33 @@ def test_user_interrupt_stops_run(tmp_path):
     sim.click = boom
     runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     assert runner.run(RunOptions(max_steps=5)) == "interrupted"
+
+
+def test_stuck_node_warns_then_pauses(tmp_path):
+    """同一节点反复开备战回合(例如每次都被别的界面打断):第 3 次提醒,第 5 次暂停。"""
+    pages = {"prep": [("备战阶段", 0.12, 0.04), ("1-8", 0.12, 0.07), ("收起", 0.845, 0.909)],
+             "tea": [("幕后茶歇", 0.5, 0.15), ("享用茶歇", 0.8, 0.6), ("返回备战界面", 0.9, 0.06)]}
+
+    def rules(state, a):
+        if a == ("click", 0.946, 0.694):
+            return "tea"
+        if a == ("click", 0.9, 0.06):
+            return "prep"
+        return None
+
+    sim = Sim(pages, "prep", rules)
+
+    class Brain(FakeBrain):
+        def opening(self, ep, boxes, *, ledger, hints="", names=None):
+            self.hints = getattr(self, "hints_all", []) + [hints]
+            self.hints_all = self.hints
+            return super().opening(ep, boxes, ledger=ledger, hints=hints, names=names)
+
+    brain = Brain({"prepare": [[Action(type="ready")]] * 10,
+                   "other": [[Action(type="click_text", text="返回备战界面")]] * 10})
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
+    runner._surveyed, runner._crystal_ok = "1", False
+    assert runner.run(RunOptions(max_steps=30)) == "pause"
+    assert [c for c in brain.calls if c[0] == "prepare"] == [("prepare", "opening", i) for i in (1, 3, 5, 7)]
+    assert "第 3 次进入备战回合" in brain.hints_all[4] and "第 3 次" not in brain.hints_all[2]
+    assert runner.ledger.nodes["1-8"].actions == "出战 | 出战 | 出战 | 出战"

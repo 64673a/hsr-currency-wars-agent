@@ -189,6 +189,10 @@ export interface StepDecision {
   latency_s: number | null;
   model: string;
   usage: { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number } | null;
+  episode?: number;
+  turn?: number;
+  role?: string;
+  prompt?: string;
 }
 
 export interface StepState {

@@ -24,6 +24,8 @@ export function screenName(screen?: string) {
   return screen ? (SCREENS[screen] ?? screen) : '';
 }
 
+const ROLES: Record<string, string> = { tactical: '备战', strategic: '战略', chooser: '三选一', navigator: '导航' };
+
 function tokens(n?: number) {
   if (!n) return '0';
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -178,6 +180,7 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
 
       {d && (
         <p className={styles.usage}>
+          {d.episode ? `回合 ${d.episode} 第 ${d.turn} 轮 · ${ROLES[d.role ?? ''] ?? d.role} · ` : ''}
           {d.model || run?.model} · {d.latency_s?.toFixed(1)} s · 输入 {tokens(d.usage?.input_tokens)}
           {d.usage?.cache_read_tokens ? `(缓存 ${tokens(d.usage.cache_read_tokens)})` : ''} · 输出 {tokens(d.usage?.output_tokens)}
         </p>
@@ -189,9 +192,15 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
           <p className={styles.foldText}>{d.reasoning}</p>
         </details>
       )}
+      {d?.prompt && (
+        <details className={styles.fold}>
+          <summary>{d.turn === 1 ? '发给模型的内容' : '交给模型的执行结果和新界面'}</summary>
+          <p className={styles.foldMono}>{d.prompt}</p>
+        </details>
+      )}
       {notes && (
         <details className={styles.fold} open>
-          <summary>本局笔记</summary>
+          <summary>对局方向与计划</summary>
           <p className={styles.foldText}>{notes}</p>
         </details>
       )}

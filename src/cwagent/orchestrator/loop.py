@@ -48,6 +48,8 @@ STABLE_GAP = 0.3      # 判断画面是否稳定:隔这么久再截一张比较
 STABLE_TRIES = 6
 STABLE_DIFF = 3.0     # 缩略灰度图逐像素平均差(0~255)低于这个值算稳定
 OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开一个回合(清掉对话)
+STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
+STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人处理
 # 出现这些界面说明之前的回合已经结束
 CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
@@ -133,6 +135,7 @@ class Runner:
         self._surveyed: str | None = None                      # 已经收集过节点的位面
         self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
         self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
+        self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
 
     # ---------------------------------------------------------------- 截图
 
@@ -326,7 +329,8 @@ class Runner:
         done = ";".join(ep.done)
         if ep.screen == "prepare" and ep.node:
             rec = self.ledger.node(ep.node)
-            rec.actions = done[:300]
+            if done:   # 同一节点开过多个回合时,保留每次做过的操作(只留最后 300 字)
+                rec.actions = (f"{rec.actions} | {done}" if rec.actions else done)[-300:]
             rec.lineup = rec.lineup or self._lineup()
         elif done and ep.screen not in ("difficulty",):
             self.ledger.event(f"{ep.node or ''} {SCREEN_NAMES.get(ep.screen, ep.screen)}:{done}"[:160].strip())
@@ -335,6 +339,10 @@ class Runner:
         hints, names = "", []
         if screen == "prepare":
             hints = PREPARE_LAYOUT if opening else ""
+            if find(boxes, "^幕后茶歇$", region=(0.85, 0.64, 0.15, 0.1)):
+                hints += "\n- 这个节点是「幕后茶歇」:右侧按钮是「幕后茶歇」而不是「出战」,ready 会进入茶歇。"
+            if find(boxes, "前置流程未结束"):
+                hints += "\n- 界面提示「前置流程未结束」:可能还有没做完的流程(例如幕后茶歇里的选择),先回去做完。"
             try:
                 seen, record["state"], names = self.perceive(frame.image, boxes, self._node)
                 hints += "\n\n## 程序识别的局面\n" + seen
@@ -387,7 +395,17 @@ class Runner:
                     self.log(f"[{n}] 没能打开商店")
 
         opening = ep is None
+        opens = 0
+        if opening and screen == "prepare" and self._node:
+            opens = self._opens[self._node] = self._opens.get(self._node, 0) + 1
+            if opens >= STUCK_PAUSE:
+                self.log(f"[{n}] 节点 {self._node} 已经开了 {opens} 个备战回合还没推进,暂停")
+                return self.finish(record, screen, [Action(type="pause", reason=f"节点 {self._node} 反复卡住")],
+                                   boxes, sig)
         hints, names = self._hints(screen, frame, boxes, record, opening)
+        if opens >= STUCK_WARN:
+            hints += (f"\n\n注意:这是节点 {self._node} 第 {opens} 次进入备战回合,前面的回合都没能推进"
+                      "(本局档案里有这个节点做过的操作)。先从界面提示文字弄清卡在哪里,换一种做法;实在不行用 pause 请人处理。")
         if opening:
             ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
                          max_turns=self.prepare_turns if screen == "prepare" else OTHER_TURNS)
