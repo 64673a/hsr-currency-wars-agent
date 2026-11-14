@@ -2,7 +2,8 @@
 
 - 先声明 DPI 感知,否则高缩放比例下窗口坐标和截图会被系统缩放;
 - 按进程名 StarRail.exe 找窗口,找不到时按窗口类 UnityWndClass + 标题匹配;
-- 截图截的是屏幕上客户区所在的区域,游戏窗口被遮挡时会截到遮挡物,所以每帧都带上「是否在前台」。
+- 截图优先用 PrintWindow 让窗口自己把客户区画出来,不受遮挡和叠在上面的通知、桌面挂件影响;
+  失败时退回 mss 截屏幕上客户区所在的区域,这只在游戏在前台时才可靠,每帧都带上「是否在前台」。
 """
 
 from __future__ import annotations
@@ -183,8 +184,61 @@ def focus(hwnd) -> bool:
     return _GetForegroundWindow() == hwnd
 
 
+class _BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_int32), ("biHeight", ctypes.c_int32),
+                ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", ctypes.c_int32), ("biYPelsPerMeter", ctypes.c_int32),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+
+_gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+_GetDC = _proto(_user32, "GetDC", wt.HDC, wt.HWND)
+_ReleaseDC = _proto(_user32, "ReleaseDC", ctypes.c_int, wt.HWND, wt.HDC)
+_PrintWindow = _proto(_user32, "PrintWindow", wt.BOOL, wt.HWND, wt.HDC, wt.UINT)
+_CreateCompatibleDC = _proto(_gdi32, "CreateCompatibleDC", wt.HDC, wt.HDC)
+_DeleteDC = _proto(_gdi32, "DeleteDC", wt.BOOL, wt.HDC)
+_CreateDIBSection = _proto(_gdi32, "CreateDIBSection", wt.HBITMAP, wt.HDC, ctypes.POINTER(_BITMAPINFOHEADER),
+                           wt.UINT, ctypes.POINTER(ctypes.c_void_p), wt.HANDLE, wt.DWORD)
+_SelectObject = _proto(_gdi32, "SelectObject", wt.HGDIOBJ, wt.HDC, wt.HGDIOBJ)
+_DeleteObject = _proto(_gdi32, "DeleteObject", wt.BOOL, wt.HGDIOBJ)
+_GdiFlush = _proto(_gdi32, "GdiFlush", wt.BOOL)
+
+PW_CLIENTONLY_RENDERFULLCONTENT = 0x1 | 0x2
+
+
+def print_window(hwnd, width: int, height: int) -> Image.Image | None:
+    """让窗口把客户区画到内存位图里(PrintWindow + PW_RENDERFULLCONTENT),失败返回 None。
+
+    截的是窗口自己的内容,不受遮挡和叠在上面的通知、弹窗影响;窗口最小化时截不到。
+    做法参考 March7thAssistant 的后台截图(module/automation/screenshot.py)。
+    """
+    info = _BITMAPINFOHEADER(biSize=ctypes.sizeof(_BITMAPINFOHEADER), biWidth=width, biHeight=-height,  # 负数:自上而下
+                             biPlanes=1, biBitCount=32, biCompression=0)
+    bits = ctypes.c_void_p()
+    screen = _GetDC(hwnd)
+    mem = _CreateCompatibleDC(screen)
+    bmp = _CreateDIBSection(mem, ctypes.byref(info), 0, ctypes.byref(bits), None, 0)
+    try:
+        if not mem or not bmp:
+            return None
+        old = _SelectObject(mem, bmp)
+        ok = _PrintWindow(hwnd, mem, PW_CLIENTONLY_RENDERFULLCONTENT)
+        _GdiFlush()
+        _SelectObject(mem, old)
+        if not ok:
+            return None
+        data = ctypes.string_at(bits, width * height * 4)
+        return Image.frombuffer("RGB", (width, height), data, "raw", "BGRX", 0, 1).copy()
+    finally:
+        if bmp:
+            _DeleteObject(bmp)
+        if mem:
+            _DeleteDC(mem)
+        _ReleaseDC(hwnd, screen)
+
+
 class GameWindowSource:
-    """截取游戏窗口客户区。每次截图都重新读取窗口位置,窗口被拖动后也能截对。"""
+    """截取游戏窗口客户区(PrintWindow 为主,mss 兜底)。每次截图都重新读取窗口位置,窗口被拖动后也能截对。"""
 
     def __init__(self, exe: str = GAME_EXE):
         import threading
@@ -227,9 +281,18 @@ class GameWindowSource:
         return info
 
     def grab(self) -> Frame:
+        info = self.window()
+        image = print_window(info.hwnd, info.width, info.height)
+        if image is not None and (image.getbbox() is not None or not info.foreground):
+            return Frame(image=image, timestamp=time.time(), foreground=info.foreground, source=info.title)
+        if not info.foreground:
+            raise CaptureError("窗口截图失败,游戏又不在前台,截屏幕会截到挡在上面的窗口")
+        # 窗口截图失败或全黑(个别显卡驱动下可能如此)时,游戏在前台就截屏幕上的这块区域
+        return Frame(image=self._grab_screen(info), timestamp=time.time(), foreground=True, source=info.title)
+
+    def _grab_screen(self, info: WindowInfo) -> Image.Image:
         import mss
 
-        info = self.window()
         region = {"left": info.left, "top": info.top, "width": info.width, "height": info.height}
         try:
             shot = self._sct().grab(region)
@@ -239,8 +302,7 @@ class GameWindowSource:
                 shot = self._sct(fresh=True).grab(region)
             except mss.exception.ScreenShotError as e:
                 raise CaptureError(f"截图失败(可能有 UAC 提示或锁屏):{e}") from None
-        image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-        return Frame(image=image, timestamp=time.time(), foreground=info.foreground, source=info.title)
+        return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 
 
 # ---------------------------------------------------------------- 全局热键
