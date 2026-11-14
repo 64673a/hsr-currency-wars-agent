@@ -48,8 +48,8 @@ def companion_name(boxes: list[TextBox]) -> str | None:
 
 def node_of(boxes: list[TextBox]) -> str | None:
     """顶部 HUD 的节点号(如 1-9)。"""
-    b = find(boxes, r"^[1-3]-\d{1,2}", region=(0, 0, 0.6, 0.14))
-    m = re.match(r"[1-3]-\d{1,2}", b.text) if b else None
+    b = find(boxes, r"^[1-3]-\d{1,2}(?![\d%])", region=(0, 0, 0.6, 0.14))
+    m = re.match(r"[1-3]-\d{1,2}(?![\d%])", b.text) if b else None
     return m.group(0) if m else None
 
 

@@ -15,7 +15,7 @@ from ..config import ConfigStore
 
 RUN_ID = re.compile(r"^[\w.-]+$")
 LIVE_SECONDS = 90  # steps.jsonl 在这段时间内有写入、且没有结束时间,就算进行中
-NODE = re.compile(r"[1-3]-\d{1,2}")
+NODE = re.compile(r"[1-3]-\d{1,2}(?![\d%])")  # 战斗时节点号和进度会连在一起(如「1-30%」),这种不算
 
 
 def _node_from_texts(texts: list[str]) -> str | None:
@@ -75,11 +75,12 @@ class RunStore:
                     node = n
                 if r.get("decision"):
                     decisions += 1
-                texts = " ".join(r.get("texts", []))
-                if "挑战失败" in texts:
-                    outcome = "失败"
-                elif "挑战成功" in texts and r.get("screen") == "settlement":
-                    outcome = "通关"
+                if r.get("screen") == "settlement":  # 单场战斗输了也会显示「挑战失败」,只看整局结算
+                    texts = " ".join(r.get("texts", []))
+                    if "挑战失败" in texts:
+                        outcome = "失败"
+                    elif "挑战成功" in texts:
+                        outcome = "通关"
             info = {"steps": steps, "node": node, "outcome": outcome, "decisions": decisions}
             self._cache[d.name] = (key, info)
         live = (not meta.get("ended_at") and not info["outcome"]

@@ -158,9 +158,10 @@ def test_runs_and_play(tmp_path):
     rows = [
         {"step": 1, "screen": "prepare", "shot": "shots/0001.jpg", "texts": ["(0.245,0.072) 1-9", "(0.5,0.5) 出战"],
          "decision": {"analysis": "出战"}, "actions": ["点击「出战」"]},
-        {"step": 2, "screen": "settlement", "node": None, "texts": ["(0.5,0.2) 挑战失败"], "actions": []},
+        {"step": 2, "screen": "other", "texts": ["(0.245,0.07) 1-30%", "(0.5,0.2) 挑战失败"], "actions": []},
+        {"step": 3, "screen": "settlement", "node": None, "texts": ["(0.5,0.2) 挑战失败"], "actions": []},
     ]
-    (d / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n{\"step\": 3",
+    (d / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n{\"step\": 4",
                                    encoding="utf-8")
     (d / "meta.json").write_text(json.dumps({"profile": "deepseek-flash", "ended_at": "x", "result": "settlement"}),
                                  encoding="utf-8")
@@ -170,10 +171,10 @@ def test_runs_and_play(tmp_path):
     client = TestClient(app)
 
     [run] = client.get("/api/runs").json()
-    assert run["id"] == d.name and run["steps"] == 2 and run["node"] == "1-9"
+    assert run["id"] == d.name and run["steps"] == 3 and run["node"] == "1-9"
     assert run["outcome"] == "失败" and run["decisions"] == 1 and run["live"] is False
     steps = client.get(f"/api/runs/{d.name}/steps", params={"after": 0}).json()
-    assert [s["step"] for s in steps] == [1, 2] and steps[0]["node"] == "1-9"
+    assert [s["step"] for s in steps] == [1, 2, 3] and steps[0]["node"] == "1-9" and steps[1]["node"] is None
     assert client.get(f"/api/runs/{d.name}/steps", params={"after": 1}).json()[0]["step"] == 2
     assert client.get(f"/api/runs/{d.name}/shots/0001.jpg").content == b"jpg"
     assert client.get(f"/api/runs/{d.name}/shots/..%2Fmeta.json").status_code == 404
