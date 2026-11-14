@@ -1,6 +1,7 @@
 import { BookOpen, MonitorPlay, Settings2 } from 'lucide-react';
 import { useEffect, useState, type ComponentType } from 'react';
 
+import SegmentedControl from '@/components/arc/segmented-control/segmented-control';
 import { api, type KnowledgeMeta } from '@/lib/api';
 import { ToastHost } from '@/lib/toast';
 import KnowledgePage from '@/pages/knowledge/KnowledgePage';
@@ -16,6 +17,25 @@ const ALL: Page[] = [
   { path: '#/settings', label: '设置', icon: Settings2 },
 ];
 
+const THEMES = [
+  { value: 'light', label: '日间' },
+  { value: 'dark', label: '夜间' },
+];
+
+// 主题只存在这个浏览器里;index.html 在渲染前已经按上次的选择设好了 data-theme
+function useTheme() {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? 'light');
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('cw-theme', theme);
+    } catch {
+      // 隐私模式下存不了,只影响下次打开
+    }
+  }, [theme]);
+  return [theme, setTheme] as const;
+}
+
 function readPath() {
   const hash = window.location.hash.split('?')[0];
   return ALL.some((p) => p.path === hash) ? hash : '#/play';
@@ -24,6 +44,7 @@ function readPath() {
 export default function App() {
   const [path, setPath] = useState('#/play');
   const [status, setStatus] = useState<{ knowledge: KnowledgeMeta; models: number } | null>(null);
+  const [theme, setTheme] = useTheme();
 
   useEffect(() => {
     setPath(readPath());
@@ -51,6 +72,7 @@ export default function App() {
               </a>
             ))}
           </nav>
+          <SegmentedControl label="外观" options={THEMES} value={theme} onValueChange={setTheme} fullWidth className={styles.theme} />
           <div className={styles.status}>
             <div className={styles.statusLine}>
               <span>知识库</span>

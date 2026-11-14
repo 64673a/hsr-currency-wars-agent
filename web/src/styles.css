@@ -3,6 +3,8 @@
   --font-geist: "Geist Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   --font-inter: "Inter Variable", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
 }
+/* Arc 的组件按 border-box 写尺寸(shadcn 项目默认有这条重置),少了它输入框会溢出、控件高度不一 */
+*, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
   margin: 0;

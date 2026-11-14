@@ -50,10 +50,13 @@
 - 用法以组件源码里导出的 Props 类型为准;不要改 `components/arc/` 里的组件内部,布局写在各页面的 CSS Modules 里。
 - 规范要点:只用语义 CSS 变量(`--surface`、`--border`、`--text-secondary`、`--accent` 等);字重只用 400/500;不用全大写、眉标、渐变和发光;
   每个页面只有一个主按钮(`Button` 默认是 primary,其他按钮显式写 `variant`);前台操作在原地确认,提示条只用于后台任务。
-- 深色主题、紫色强调色:`index.html` 的 `<html data-theme="dark" data-accent="violet">`。只考虑电脑端,不做手机适配。
+- 默认日间(浅色)主题,侧栏底部可切到夜间;选择存在浏览器的 `localStorage`(`cw-theme`),`index.html` 在渲染前设好 `data-theme`。强调色紫色(`data-accent="violet"`)。
+  两种主题都要能看:颜色只用 Arc 的语义变量,不写死。
+- 只考虑电脑端,优先主流 PC 分辨率(浏览器宽 1366–2560),不做手机和窄屏适配。
 - **文案规则(维护者要求)**:页面只呈现能帮助用户完成当前任务、理解当前数据或决定下一步操作的信息。
   - 不在页面、面板、表单、弹窗里写常驻的业务规则说明;规则通过控件限制(范围、禁用、隐藏)、字段级校验、提交前确认和失败反馈体现。
   - 删除重复标题、重复按钮含义、实现细节(文件路径、接口格式、存储位置)、接口约束,以及对当前操作没有帮助的解释。
   - 输入格式用占位符示意,不写字段说明;不能执行的操作直接隐藏,而不是禁用后再写原因。
-- 共用布局在 `web/src/lib/page.module.css`(页面容器、区块、成组的行)。
+- 共用布局在 `web/src/lib/page.module.css`(页面容器、区块、成组的行、表单网格)。页面容器统一左对齐,宽度用 `narrow` / `wide` 区分。
+- `web/src/styles.css` 里的全局 `box-sizing: border-box` 不能删:Arc 组件按 border-box 写尺寸,少了它输入框会溢出、控件高度不一。
 - 开发:`uv run cwagent serve` 起后端,`cd web && npm run dev` 起 Vite(代理 `/api`、`/templates` 到 8770)。

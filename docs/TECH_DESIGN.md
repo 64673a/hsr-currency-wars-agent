@@ -827,7 +827,7 @@ React + Vite + TypeScript,放在仓库 `web/` 目录;`npm run build` 产出 `web
 组件库:**Arc**(https://uiarc.dev)。shadcn 风格,组件源码通过注册表复制进项目(`web/src/components/arc/`),样式是 CSS Modules + 语义 CSS 变量,不依赖 Tailwind;依赖 Radix、motion、lucide-react。
 
 - 安装:`web/components.json` 里登记 `"registries": {"@uiarc": "https://uiarc.dev/r/{name}.json"}`,再 `npx shadcn@latest add @uiarc/<名称>`;设计变量 `components/arc/foundation.css` 在入口导入一次;
-- 主题:深色(`data-theme="dark"`)+ 紫色强调色(`data-accent="violet"`),字体 Geist(大标题)和 Inter(正文),中文回退到系统字体;
+- 主题:默认日间(浅色),可切换夜间(`data-theme`,选择存在浏览器里)+ 紫色强调色(`data-accent="violet"`),字体 Geist(大标题)和 Inter(正文),中文回退到系统字体;
 - 写法遵循 Arc 的规范(https://uiarc.dev/r/skills/arc/SKILL.md):中性底色、强调色只用于选中和重点数据、层级靠字号与间距、每页一个主按钮、每种状态(加载、空、出错)都有设计;
 - 只考虑电脑端。
 

@@ -46,6 +46,8 @@ def test_status_and_knowledge(env):
     data = client.get("/api/knowledge/roles", params={"q": "甲"}).json()
     assert data["total"] == 1 and data["items"][0]["icon"] == "/templates/roles/1001.png"
     assert client.get("/api/knowledge/roles/1002").json()["icon"].startswith("https://")  # 没有本地图标时用远程地址
+    listed = {i["id"]: i["icon"] for i in client.get("/api/knowledge/roles").json()["items"]}
+    assert listed["1002"].startswith("https://")  # 列表也一样
     assert client.get("/api/knowledge/traits/200402").json()["layers"][0]["count"] == 2
     assert client.get("/api/knowledge/nope").status_code == 404
     assert client.get("/api/knowledge/roles/9999").status_code == 404

@@ -205,11 +205,11 @@ function KindList({ kind, name, total, synced }: { kind: string; name: string; t
 
   const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
   return (
-    <div className={page.section} style={{ marginTop: 16 }}>
-      <div className={styles.toolbar}>
+    <div className={page.section}>
+      <div className={`${styles.toolbar} ${page.quietLabel}`}>
         <SearchField
           label={`搜索${name}`}
-          placeholder="名称、描述、羁绊…"
+          placeholder={`搜索${name}`}
           value={q}
           onValueChange={(v) => {
             setQ(v);

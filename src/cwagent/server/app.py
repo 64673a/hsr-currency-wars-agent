@@ -196,7 +196,8 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
             return {"total": 0, "items": [], "synced": False}
         total, items = kdb.list(kind, q=q, limit=limit, offset=offset)
         for item in items:
-            item["icon"] = icon_url(kind, item["id"])
+            # 本机没下载模板图标时用官方图片地址
+            item["icon"] = icon_url(kind, item["id"]) or (kdb.get(kind, item["id"]) or {}).get("icon", "")
         return {"total": total, "items": items, "synced": True}
 
     @app.get("/api/knowledge/{kind}/{entry_id}")

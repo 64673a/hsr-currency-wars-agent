@@ -1,20 +1,20 @@
 /* 对局页:左边对局列表,中间截图与步骤,右边这一步的判断 */
-.page { width: 100%; max-width: 1840px; margin-inline: auto; padding: 28px 32px 48px; display: grid; gap: 24px; box-sizing: border-box; }
+/* 开局控件带标签,标题和控件按底边对齐,标题行高等于控件高度,文字落在同一条中线上 */
 .header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
-.title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--leading-display); }
+.title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--control-height-md); }
 
 .controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .modelSelect { width: 220px; }
 .difficulty { width: 120px; }
 .rounds { width: 140px; }
-.round { align-self: center; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.round { line-height: var(--control-height-md); font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .controlsError { flex-basis: 100%; }
 
 .skeleton { height: 480px; border-radius: var(--radius-surface); }
-.body { display: grid; grid-template-columns: 232px minmax(0, 1fr) minmax(340px, 420px); gap: 20px; align-items: start; }
+.body { display: grid; grid-template-columns: 200px minmax(0, 1fr) clamp(300px, 24vw, 420px); gap: 20px; align-items: start; }
 
 /* 对局列表 */
-.runs { position: sticky; top: 24px; display: grid; gap: 2px; max-height: calc(100vh - 140px); overflow-y: auto; padding-right: 4px; }
+.runs { position: sticky; top: 24px; display: grid; align-content: start; gap: 2px; max-height: calc(100vh - 48px); overflow-y: auto; padding-right: 4px; }
 .run { display: grid; gap: 3px; width: 100%; padding: 10px 12px; border: 0; border-radius: var(--radius-control); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background var(--duration-fast) var(--ease-standard); }
 .run:hover { background: var(--surface-muted); }
 .run[aria-current="true"] { background: var(--accent-subtle); }
@@ -26,6 +26,7 @@
 .stage { display: grid; gap: 12px; min-width: 0; }
 .shot { position: relative; margin: 0; aspect-ratio: 16 / 9; border: 1px solid var(--border); border-radius: var(--radius-panel); overflow: hidden; background: var(--surface-muted); }
 .shot img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.noShot { position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--text-sm); color: var(--text-muted); }
 .shotSkeleton { aspect-ratio: 16 / 9; border-radius: var(--radius-panel); }
 .overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .markRing { fill: none; stroke: var(--accent); stroke-width: 4; }
@@ -39,8 +40,8 @@
 .stepCount { min-width: 72px; text-align: right; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
 /* 步骤列表 */
-.timeline { display: grid; gap: 10px; }
-.stepList { max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.timeline { display: grid; gap: 10px; justify-items: start; }
+.stepList { width: 100%; max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
 .stepRow { display: grid; grid-template-columns: 40px 64px 44px 72px minmax(0, 1fr); align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 6px 14px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
 .stepRow + .stepRow { border-top: 1px solid var(--border-subtle); }
 .stepRow:hover { background: var(--surface-muted); }
@@ -52,7 +53,7 @@
 .stepText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 右侧:这一步的判断 */
-.panel { position: sticky; top: 24px; max-height: calc(100vh - 140px); overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); box-sizing: border-box; }
+.panel { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
 .panelSkeleton { height: 320px; }
 .detail { display: grid; gap: 18px; }
 .detailHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

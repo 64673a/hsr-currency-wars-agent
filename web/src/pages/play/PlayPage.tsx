@@ -11,6 +11,7 @@ import SegmentedControl from '@/components/arc/segmented-control/segmented-contr
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import { api, enc, errorText, type ModelProfile, type PlayStatus, type RunSummary, type StepRecord } from '@/lib/api';
+import page from '@/lib/page.module.css';
 import { useToast } from '@/lib/toast';
 
 import styles from './play.module.css';
@@ -195,8 +196,15 @@ export default function PlayPage() {
     [steps, filter],
   );
 
+  // 只滚步骤列表,不带动整页(scrollIntoView 会把窗口也滚过去)
   useEffect(() => {
-    listRef.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    const row = list?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!list || !row) return;
+    const box = list.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.top < box.top) list.scrollTop -= box.top - r.top;
+    else if (r.bottom > box.bottom) list.scrollTop += r.bottom - box.bottom;
   }, [cursor, filter]);
 
   const go = (i: number) => {
@@ -214,7 +222,7 @@ export default function PlayPage() {
   }, [steps, cursor]);
 
   return (
-    <div className={styles.page}>
+    <div className={`${page.page} ${page.wide}`}>
       <header className={styles.header}>
         <h1 className={styles.title}>对局</h1>
         {status?.available && (status.running || !liveId) && <StartControls status={status} onChange={refresh} />}

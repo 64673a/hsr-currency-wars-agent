@@ -37,7 +37,11 @@ export function ShotView({ runId, step }: { runId: string; step: StepRecord }) {
   const marks = step.marks ?? [];
   return (
     <figure className={styles.shot}>
-      {step.shot && <img src={`/api/runs/${enc(runId)}/shots/${step.shot.replace(/^shots\//, '')}`} alt={`第 ${step.step} 步截图`} />}
+      {step.shot ? (
+        <img src={`/api/runs/${enc(runId)}/shots/${step.shot.replace(/^shots\//, '')}`} alt={`第 ${step.step} 步截图`} />
+      ) : (
+        <span className={styles.noShot}>这一步没有截图</span>
+      )}
       {marks.length > 0 && (
         <svg className={styles.overlay} viewBox={`0 0 ${W} ${H}`} aria-hidden="true">
           <defs>
@@ -117,11 +121,13 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
   return (
     <div className={styles.detail}>
       <div className={styles.detailHead}>
-        <Badge size="sm" color={d ? 'violet' : undefined}>{screenName(step.screen)}</Badge>
+        {step.screen && (
+          <Badge size="sm" color={d ? 'violet' : undefined}>
+            {screenName(step.screen)}
+          </Badge>
+        )}
         {step.node && <span className={styles.detailNode}>{step.node}</span>}
-        <span className={styles.detailMeta}>
-          第 {step.step} 步 · {step.ts}
-        </span>
+        <span className={styles.detailMeta}>{[`第 ${step.step} 步`, step.ts].filter(Boolean).join(' · ')}</span>
       </div>
 
       {step.error && <Alert tone="danger" title="这一步出错">{step.error}</Alert>}

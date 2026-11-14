@@ -130,7 +130,9 @@ export default function SettingsPage() {
             </Button>
           )}
         </div>
-        {providers !== null && models.length === 0 ? (
+        {providers === null ? (
+          <Skeleton lines={2} />
+        ) : models.length === 0 ? (
           <Alert tone="info" title="还没有模型档案" />
         ) : (
           <div className={page.group}>
@@ -141,8 +143,7 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {settings && <RolesSection settings={settings} models={models} onSaved={setSettings} />}
-      {settings && <ParamsSection settings={settings} onSaved={setSettings} />}
+      {settings && <ConfigForm settings={settings} models={models} onSaved={setSettings} />}
 
       {editProvider && (
         <ProviderDialog
@@ -256,128 +257,115 @@ function TestLine({ result }: { result: TestResult }) {
   );
 }
 
-function useSave(onSaved: (s: Settings) => void) {
+// 各环节的模型、运行参数和网页服务同属一份配置,一起编辑、一起保存
+function ConfigForm({ settings, models, onSaved }: { settings: Settings; models: ModelProfile[]; onSaved: (s: Settings) => void }) {
+  const id = useId();
+  const [s, setS] = useState(settings);
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [error, setError] = useState('');
-  async function save(next: Settings) {
+  const [confirmLan, setConfirmLan] = useState(false);
+  const [serverChanged, setServerChanged] = useState(false);
+  const dirty = JSON.stringify(s) !== JSON.stringify(settings);
+  const update = (next: Settings) => {
+    setS(next);
+    setState('idle');
+  };
+  const agent = (patch: Partial<Settings['agent']>) => update({ ...s, agent: { ...s.agent, ...patch } });
+  const options = [{ value: '__default', label: `默认(${models[0]?.name ?? '无'})` }, ...models.map((m) => ({ value: m.name, label: m.name }))];
+  const exposes = (x: Settings) => !['127.0.0.1', 'localhost'].includes(x.server.host.trim());
+
+  async function commit() {
+    setConfirmLan(false);
+    setServerChanged(JSON.stringify(s.server) !== JSON.stringify(settings.server));
     setState('saving');
     try {
-      onSaved(await api<Settings>('/api/config', { method: 'PUT', body: next }));
+      const saved = await api<Settings>('/api/config', { method: 'PUT', body: s });
+      onSaved(saved);
+      setS(saved);
       setState('saved');
     } catch (e) {
       setError(errorText(e));
       setState('error');
     }
   }
-  return { state, error, save, reset: () => setState('idle') };
-}
-
-function RolesSection({ settings, models, onSaved }: { settings: Settings; models: ModelProfile[]; onSaved: (s: Settings) => void }) {
-  const id = useId();
-  const [roles, setRoles] = useState(settings.roles);
-  const { state, error, save, reset } = useSave(onSaved);
-  const dirty = JSON.stringify(roles) !== JSON.stringify(settings.roles);
-  const options = [{ value: '__default', label: `默认(${models[0]?.name ?? '无'})` }, ...models.map((m) => ({ value: m.name, label: m.name }))];
 
   return (
-    <section className={page.section} aria-labelledby={`${id}-roles`}>
-      <h2 id={`${id}-roles`} className={page.heading}>各环节使用的模型</h2>
-      <div className={page.fields2}>
-        {ROLES.map((r) => (
-          <Select
-            key={r.key}
-            label={r.label}
-            options={options}
-            value={roles[r.key] ?? '__default'}
-            onValueChange={(v) => {
-              setRoles({ ...roles, [r.key]: v === '__default' ? null : v });
-              reset();
-            }}
-          />
-        ))}
-      </div>
-      {state === 'error' && <Alert tone="danger" title="没有保存">{error}</Alert>}
-      <div className={page.actions}>
-        <Button size="sm" variant="secondary" loading={state === 'saving'} disabled={!dirty && state !== 'error'} onClick={() => save({ ...settings, roles })}>
-          {state === 'saved' && !dirty ? '已保存' : '保存'}
-        </Button>
-      </div>
-    </section>
-  );
-}
-
-function ParamsSection({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
-  const id = useId();
-  const [s, setS] = useState(settings);
-  const { state, error, save, reset } = useSave(onSaved);
-  const dirty = JSON.stringify(s) !== JSON.stringify(settings);
-  const [confirmLan, setConfirmLan] = useState(false);
-  const [serverChanged, setServerChanged] = useState(false);
-  const update = (next: Settings) => {
-    setS(next);
-    reset();
-  };
-  const exposes = (x: Settings) => !['127.0.0.1', 'localhost'].includes(x.server.host.trim());
-  async function commit() {
-    setConfirmLan(false);
-    setServerChanged(JSON.stringify(s.server) !== JSON.stringify(settings.server));
-    await save(s);
-  }
-
-  return (
-    <section className={page.section} aria-labelledby={`${id}-params`}>
-      <h2 id={`${id}-params`} className={page.heading}>运行参数</h2>
-      <div className={page.group}>
-        <div className={page.row}>
-          <span id={`${id}-guides`} className={page.rowTitle}>参考官方阵容</span>
-          <Switch aria-labelledby={`${id}-guides`} checked={s.agent.use_guides} onCheckedChange={(on) => update({ ...s, agent: { ...s.agent, use_guides: on } })} />
+    <>
+      <section className={page.section} aria-labelledby={`${id}-roles`}>
+        <h2 id={`${id}-roles`} className={page.heading}>各环节使用的模型</h2>
+        <div className={page.fields2}>
+          {ROLES.map((r) => (
+            <Select
+              key={r.key}
+              label={r.label}
+              options={options}
+              value={s.roles[r.key] ?? '__default'}
+              onValueChange={(v) => update({ ...s, roles: { ...s.roles, [r.key]: v === '__default' ? null : v } })}
+            />
+          ))}
         </div>
-      </div>
-      <div className={page.fields2}>
-        <NumberField
-          label="每个备战阶段最多决策"
-          suffix=" 次"
-          min={1}
-          max={20}
-          value={s.agent.max_tactical_calls_per_stage}
-          onValueChange={(v) => update({ ...s, agent: { ...s.agent, max_tactical_calls_per_stage: v } })}
-        />
-        <NumberField
-          label="单局时长上限"
-          suffix=" 分钟"
-          min={10}
-          max={600}
-          step={10}
-          value={s.agent.max_run_minutes}
-          onValueChange={(v) => update({ ...s, agent: { ...s.agent, max_run_minutes: v } })}
-        />
-        <NumberField
-          label="知识同步抓取的阵容数"
-          suffix=" 套"
-          min={0}
-          max={2000}
-          step={50}
-          value={s.knowledge.max_lineups}
-          onValueChange={(v) => update({ ...s, knowledge: { ...s.knowledge, max_lineups: v } })}
-        />
-      </div>
-      <div className={page.fields2}>
-        <Input
-          label="网页监听地址"
-          value={s.server.host}
-          onChange={(e) => update({ ...s, server: { ...s.server, host: e.target.value } })}
-        />
-        <NumberField
-          label="网页端口"
-          min={1024}
-          max={65535}
-          locale="zh-CN"
-          formatOptions={{ useGrouping: false }}
-          value={s.server.port}
-          onValueChange={(v) => update({ ...s, server: { ...s.server, port: v } })}
-        />
-      </div>
-      {state === 'error' && <Alert tone="danger" title="没有保存">{error}</Alert>}
+      </section>
+
+      <section className={page.section} aria-labelledby={`${id}-params`}>
+        <h2 id={`${id}-params`} className={page.heading}>运行参数</h2>
+        <div className={page.fields2}>
+          <NumberField
+            label="每个备战阶段最多决策"
+            suffix=" 次"
+            min={1}
+            max={20}
+            value={s.agent.max_tactical_calls_per_stage}
+            onValueChange={(v) => agent({ max_tactical_calls_per_stage: v })}
+          />
+          <NumberField
+            label="单局时长上限"
+            suffix=" 分钟"
+            min={10}
+            max={600}
+            step={10}
+            value={s.agent.max_run_minutes}
+            onValueChange={(v) => agent({ max_run_minutes: v })}
+          />
+          <NumberField
+            label="知识同步抓取的阵容数"
+            suffix=" 套"
+            min={0}
+            max={2000}
+            step={50}
+            value={s.knowledge.max_lineups}
+            onValueChange={(v) => update({ ...s, knowledge: { ...s.knowledge, max_lineups: v } })}
+          />
+          <div className={page.field}>
+            <span id={`${id}-guides`} className={page.fieldLabel}>参考官方阵容</span>
+            <div className={page.switchControl}>
+              <Switch aria-labelledby={`${id}-guides`} checked={s.agent.use_guides} onCheckedChange={(on) => agent({ use_guides: on })} />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={page.section} aria-labelledby={`${id}-server`}>
+        <h2 id={`${id}-server`} className={page.heading}>网页服务</h2>
+        <div className={page.fields2}>
+          <Input label="监听地址" value={s.server.host} onChange={(e) => update({ ...s, server: { ...s.server, host: e.target.value } })} />
+          <NumberField
+            label="端口"
+            min={1024}
+            max={65535}
+            locale="zh-CN"
+            formatOptions={{ useGrouping: false }}
+            value={s.server.port}
+            onValueChange={(v) => update({ ...s, server: { ...s.server, port: v } })}
+          />
+        </div>
+        {state === 'error' && <Alert tone="danger" title="没有保存">{error}</Alert>}
+        <div className={page.actions}>
+          <Button loading={state === 'saving'} disabled={!dirty && state !== 'error'} onClick={() => (exposes(s) && !exposes(settings) ? setConfirmLan(true) : commit())}>
+            {state === 'saved' && !dirty ? (serverChanged ? '已保存,重启后生效' : '已保存') : '保存'}
+          </Button>
+        </div>
+      </section>
+
       <Dialog open={confirmLan} onOpenChange={setConfirmLan}>
         <DialogContent title="允许局域网访问?" description="同一网络里的任何设备都能打开网页并控制 agent。">
           <div className={page.actions}>
@@ -388,11 +376,6 @@ function ParamsSection({ settings, onSaved }: { settings: Settings; onSaved: (s:
           </div>
         </DialogContent>
       </Dialog>
-      <div className={page.actions}>
-        <Button loading={state === 'saving'} disabled={!dirty && state !== 'error'} onClick={() => (exposes(s) && !exposes(settings) ? setConfirmLan(true) : commit())}>
-          {state === 'saved' && !dirty ? (serverChanged ? '已保存,重启后生效' : '已保存') : '保存'}
-        </Button>
-      </div>
-    </section>
+    </>
   );
 }

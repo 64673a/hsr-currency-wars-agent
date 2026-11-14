@@ -1,7 +1,13 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark" data-accent="violet">
+<html lang="zh-CN" data-theme="light" data-accent="violet">
   <head>
     <meta charset="UTF-8" />
+    <!-- 渲染前读出上次选的主题,默认日间,避免先闪一下 -->
+    <script>
+      try {
+        if (localStorage.getItem('cw-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+      } catch {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>货币战争 Agent</title>
   </head>

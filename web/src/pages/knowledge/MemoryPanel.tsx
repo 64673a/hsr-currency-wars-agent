@@ -62,74 +62,76 @@ export default function MemoryPanel() {
 
   const shown = (items ?? []).filter((m) => filter === 'all' || m.status === filter);
   return (
-    <div className={page.section} style={{ marginTop: 16 }}>
-      <div className={page.sectionHead}>
-        <SegmentedControl label="按状态筛选" options={FILTERS} value={filter} onValueChange={setFilter} />
-        <Button size="sm" variant="secondary" onClick={() => setEditing('new')}>
-          添加记忆
-        </Button>
-      </div>
-      {error && <Alert tone="danger" title="读取失败">{error}</Alert>}
-      {items === null ? (
-        <Skeleton lines={5} />
-      ) : shown.length === 0 ? (
-        <EmptyState title="没有记忆" description={filter === 'draft' ? '没有待审核的记忆。' : '还没有这类记忆。'} />
-      ) : (
-        <div className={page.group}>
-          {shown.map((m) => {
-            const t = m.triggers;
-            const trig = [...t.entities, ...t.nodes.map((n) => `节点 ${n}`), ...t.screens.map((s) => `界面 ${s}`)];
-            const harmful = m.stats.hurt > m.stats.helped && m.stats.hurt >= 2;
-            return (
-              <div key={m.id} className={page.row}>
-                <div className={page.rowText}>
-                  <span className={page.rowTitle}>
-                    {m.title}
-                    <Badge size="sm" tone={STATUS_TONE[m.status]} dot>
-                      {MEMORY_STATUS[m.status]}
-                    </Badge>
-                    <Badge size="sm">{m.kind}</Badge>
-                    {harmful && (
-                      <Badge size="sm" tone="danger">
-                        有害票偏多
-                      </Badge>
-                    )}
-                  </span>
-                  <p className={styles.memoryContent}>{m.content}</p>
-                  <p className={page.rowHint}>
-                    {trig.join('、') || '通用'} · {CONFIDENCE[m.confidence]} · {m.origin === '公共' ? '公共' : '本机'} · 用过 {m.stats.injected} 次
-                  </p>
-                </div>
-                <div className={page.rowActions}>
-                  {m.status === 'draft' && (
-                    <>
-                      <Button size="sm" variant="secondary" loading={busy === m.id + 'approved'} onClick={() => setStatus(m, 'approved')}>
-                        采纳
-                      </Button>
-                      <Button size="sm" variant="ghost" loading={busy === m.id + 'rejected'} onClick={() => setStatus(m, 'rejected')}>
-                        驳回
-                      </Button>
-                    </>
-                  )}
-                  {m.status === 'approved' && (
-                    <Button size="sm" variant="ghost" loading={busy === m.id + 'archived'} onClick={() => setStatus(m, 'archived')}>
-                      归档
-                    </Button>
-                  )}
-                  {(m.status === 'archived' || m.status === 'rejected') && (
-                    <Button size="sm" variant="ghost" loading={busy === m.id + 'approved'} onClick={() => setStatus(m, 'approved')}>
-                      恢复
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => setEditing(m)}>
-                    编辑
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
+    <div className={styles.memory}>
+      <div className={page.section}>
+        <div className={styles.memoryBar}>
+          <SegmentedControl label="按状态筛选" options={FILTERS} value={filter} onValueChange={setFilter} />
+          <Button size="sm" variant="secondary" onClick={() => setEditing('new')}>
+            添加记忆
+          </Button>
         </div>
-      )}
+        {error && <Alert tone="danger" title="读取失败">{error}</Alert>}
+        {items === null ? (
+          <Skeleton lines={5} />
+        ) : shown.length === 0 ? (
+          <EmptyState title="没有记忆" description={filter === 'draft' ? '没有待审核的记忆。' : '还没有这类记忆。'} />
+        ) : (
+          <div className={page.group}>
+            {shown.map((m) => {
+              const t = m.triggers;
+              const trig = [...t.entities, ...t.nodes.map((n) => `节点 ${n}`), ...t.screens.map((s) => `界面 ${s}`)];
+              const harmful = m.stats.hurt > m.stats.helped && m.stats.hurt >= 2;
+              return (
+                <div key={m.id} className={page.row}>
+                  <div className={page.rowText}>
+                    <span className={page.rowTitle}>
+                      {m.title}
+                      <Badge size="sm" tone={STATUS_TONE[m.status]} dot>
+                        {MEMORY_STATUS[m.status]}
+                      </Badge>
+                      <Badge size="sm">{m.kind}</Badge>
+                      {harmful && (
+                        <Badge size="sm" tone="danger">
+                          有害票偏多
+                        </Badge>
+                      )}
+                    </span>
+                    <p className={styles.memoryContent}>{m.content}</p>
+                    <p className={page.rowHint}>
+                      {trig.join('、') || '通用'} · {CONFIDENCE[m.confidence]} · {m.origin === '公共' ? '公共' : '本机'} · 用过 {m.stats.injected} 次
+                    </p>
+                  </div>
+                  <div className={page.rowActions}>
+                    {m.status === 'draft' && (
+                      <>
+                        <Button size="sm" variant="secondary" loading={busy === m.id + 'approved'} onClick={() => setStatus(m, 'approved')}>
+                          采纳
+                        </Button>
+                        <Button size="sm" variant="ghost" loading={busy === m.id + 'rejected'} onClick={() => setStatus(m, 'rejected')}>
+                          驳回
+                        </Button>
+                      </>
+                    )}
+                    {m.status === 'approved' && (
+                      <Button size="sm" variant="ghost" loading={busy === m.id + 'archived'} onClick={() => setStatus(m, 'archived')}>
+                        归档
+                      </Button>
+                    )}
+                    {(m.status === 'archived' || m.status === 'rejected') && (
+                      <Button size="sm" variant="ghost" loading={busy === m.id + 'approved'} onClick={() => setStatus(m, 'approved')}>
+                        恢复
+                      </Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(m)}>
+                      编辑
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       <PreviewSection />
       {editing && (
         <MemoryDialog
@@ -169,16 +171,16 @@ function PreviewSection() {
   }
 
   return (
-    <section className={page.section} aria-labelledby={`${id}-preview`} style={{ marginTop: 16 }}>
+    <section className={page.section} aria-labelledby={`${id}-preview`}>
       <h2 id={`${id}-preview`} className={page.heading}>检索预览</h2>
       <div className={styles.previewGrid}>
         <Input label="局面里的名字" placeholder="绯英, 经济严重过热" value={entities} onChange={(e) => setEntities(e.target.value)} />
         <Input label="节点类型" placeholder="reward" value={nodes} onChange={(e) => setNodes(e.target.value)} />
         <Select label="决策层" options={['不限', '战略', '战术', '选择', '事件'].map((v) => ({ value: v, label: v }))} value={layer} onValueChange={setLayer} />
       </div>
-      <div className={page.row} style={{ padding: 0, minHeight: 0 }}>
-        <span className={page.rowTitle}>
-          <Switch aria-label="包含待审核草稿" checked={draft} onCheckedChange={setDraft} />
+      <div className={styles.previewBar}>
+        <span id={`${id}-draft`} className={styles.switchLine}>
+          <Switch aria-labelledby={`${id}-draft`} checked={draft} onCheckedChange={setDraft} />
           包含待审核草稿
         </span>
         <Button size="sm" variant="secondary" loading={loading} onClick={run}>
@@ -190,7 +192,7 @@ function PreviewSection() {
           <>
             <div className={page.group}>
               {result.items.map((r) => (
-                <div key={r.id} className={page.row} style={{ minHeight: 52 }}>
+                <div key={r.id} className={`${page.row} ${styles.hitRow}`}>
                   <span className={page.rowTitle}>{r.title}</span>
                   <span className={page.rowHint}>
                     命中 {r.reasons.join('、')} · 得分 {r.score.toFixed(2)}
@@ -247,7 +249,7 @@ function MemoryDialog({ memory, onClose, onSaved }: { memory: Memory | null; onC
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent title={memory ? '编辑记忆' : '添加记忆'}>
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div className={page.fields}>
           <SegmentedControl
             label="类别"
             options={['机制', '打法', '教训'].map((v) => ({ value: v, label: v }))}

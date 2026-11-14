@@ -297,7 +297,16 @@ function Guide({ d }: { d: Item }) {
         <dt>合成顺序</dt>
         <dd>{d.equip_order.compose.join(' → ') || '—'}</dd>
         <dt>攻略码</dt>
-        <dd>{d.share_code ? <CopyButton value={d.share_code} label={d.share_code} /> : '—'}</dd>
+        <dd>
+          {d.share_code ? (
+            <span className={styles.code}>
+              <span>{d.share_code}</span>
+              <CopyButton value={d.share_code} label="复制攻略码" iconOnly />
+            </span>
+          ) : (
+            '—'
+          )}
+        </dd>
       </dl>
       {d.description && (
         <Block title="作者思路">
