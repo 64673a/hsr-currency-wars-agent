@@ -45,6 +45,8 @@ def py(*args, **kw) -> str:
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):   # CI 机器的控制台是 cp1252,打印中文会报错
+        stream.reconfigure(encoding="utf-8", errors="replace")
     if sys.platform != "win32":
         sys.exit("便携包只能在 Windows 上组装")
     if not (ROOT / "web" / "dist" / "index.html").exists():
