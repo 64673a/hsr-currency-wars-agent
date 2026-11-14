@@ -46,6 +46,13 @@ def companion_name(boxes: list[TextBox]) -> str | None:
     return below[0].text if below else None
 
 
+def node_of(boxes: list[TextBox]) -> str | None:
+    """顶部 HUD 的节点号(如 1-9)。"""
+    b = find(boxes, r"^[1-3]-\d{1,2}", region=(0, 0, 0.6, 0.14))
+    m = re.match(r"[1-3]-\d{1,2}", b.text) if b else None
+    return m.group(0) if m else None
+
+
 def text_signature(boxes: list[TextBox]) -> set[str]:
     return {re.sub(r"\d+", "#", b.text) for b in boxes}
 

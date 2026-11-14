@@ -3,13 +3,10 @@
 .brand { display: grid; gap: 2px; padding: 0 12px; white-space: nowrap; }
 .brandName { font-family: var(--font-display); font-size: var(--text-xl); font-weight: 500; letter-spacing: var(--tracking-display); }
 .brandSub { font-size: var(--text-xs); color: var(--text-muted); }
-.nav { display: grid; gap: 20px; }
-.navGroup { display: grid; gap: 2px; }
-.navLabel { padding: 0 12px 6px; font-size: var(--text-xs); color: var(--text-muted); }
+.nav { display: grid; gap: 2px; }
 .navItem { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 12px; border-radius: 12px; color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
 .navItem:hover { background: var(--surface-muted); color: var(--foreground); }
 .navItem[aria-current="page"] { background: var(--accent-subtle); color: var(--accent-strong); }
-.navSoon { margin-left: auto; font-size: var(--text-xs); color: var(--text-muted); }
 .status { margin-top: auto; display: grid; gap: 4px; padding: 14px 12px 0; border-top: 1px solid var(--border-subtle); font-size: var(--text-xs); color: var(--text-muted); }
 .statusLine { display: flex; justify-content: space-between; gap: 8px; }
 .statusValue { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
@@ -18,8 +15,7 @@
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; flex-direction: row; align-items: center; gap: 16px; padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
   .brand { padding: 0 4px 0 0; }
-  .brandSub, .navLabel, .status, .navSoon { display: none; }
+  .brandSub, .status { display: none; }
   .nav { display: flex; gap: 4px; }
-  .navGroup { display: flex; gap: 4px; }
   .navItem { white-space: nowrap; }
 }

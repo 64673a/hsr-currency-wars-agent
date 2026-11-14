@@ -1,6 +1,6 @@
 """后端接口(FastAPI)。设计见 docs/TECH_DESIGN.md 第 13 节。
 
-M0 提供:状态、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆。前端构建产物(web/dist)由这里托管。
+提供:状态、对局控制与记录、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆。前端构建产物(web/dist)由这里托管。
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from ..config import (
 from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
 from .jobs import Job
+from .runs import PlayController, RunStore
 
 # 知识库类别 -> 模板图标目录
 ICON_DIRS = {"roles": "roles", "traits": "traits", "equipment": "equipment", "augments": "augments",
@@ -62,6 +63,12 @@ class StatusIn(BaseModel):
     status: str
 
 
+class PlayIn(BaseModel):
+    model: str | None = None
+    difficulty: str | None = None
+    max_steps: int = 700
+
+
 class PreviewIn(BaseModel):
     entities: list[str] = []
     texts: list[str] = []
@@ -77,13 +84,16 @@ def _bad(e: Exception, status: int = 400) -> HTTPException:
 
 def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path | None = None,
                memory_store: MemoryStore | None = None, templates_dir: Path | None = None,
-               web_dist: Path | None = None, sync_fn: Callable[..., Any] | None = None) -> FastAPI:
+               web_dist: Path | None = None, sync_fn: Callable[..., Any] | None = None,
+               runs_dir: Path | None = None, device_factory: Callable[[], Any] | None | str = "default") -> FastAPI:
     store = config_store or ConfigStore()
     kdb = KnowledgeDB(knowledge_path or paths.knowledge_db())
     memories = memory_store or MemoryStore()
     tpl_dir = templates_dir or paths.templates_dir()
     dist = web_dist or paths.web_dist()
     sync_job = Job("knowledge-sync")
+    runs = RunStore(runs_dir or paths.runs_dir())
+    player = PlayController(store, runs, device_factory)
     if sync_fn is None:
         from ..knowledge.sync import sync as sync_fn  # noqa: PLW0127
 
@@ -101,7 +111,49 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     def status() -> dict[str, Any]:
         cfg = load_config()
         return {"version": __version__, "knowledge": kdb.meta(), "sync": {"running": sync_job.status()["running"]},
-                "providers": len(cfg.providers), "models": len(cfg.models), "run": None}
+                "providers": len(cfg.providers), "models": len(cfg.models), "run": player.status()}
+
+    # ------------------------------------------------------------ 对局
+
+    @app.get("/api/play")
+    def play_status() -> dict[str, Any]:
+        return player.status()
+
+    @app.post("/api/play/start")
+    def play_start(body: PlayIn) -> dict[str, Any]:
+        try:
+            return player.start(model=body.model, difficulty=body.difficulty, max_steps=body.max_steps)
+        except (RuntimeError, ConfigError) as e:
+            raise _bad(e, 409) from None
+
+    @app.post("/api/play/stop")
+    def play_stop() -> dict[str, Any]:
+        return player.stop()
+
+    @app.get("/api/runs")
+    def run_list() -> list[dict[str, Any]]:
+        return runs.list()
+
+    @app.get("/api/runs/{run_id}")
+    def run_get(run_id: str) -> dict[str, Any]:
+        try:
+            return runs.summary(runs.dir(run_id))
+        except KeyError:
+            raise HTTPException(404, f"对局 {run_id} 不存在") from None
+
+    @app.get("/api/runs/{run_id}/steps")
+    def run_steps(run_id: str, after: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000)) -> list[dict[str, Any]]:
+        try:
+            return runs.steps(run_id, after=after, limit=limit)
+        except KeyError:
+            raise HTTPException(404, f"对局 {run_id} 不存在") from None
+
+    @app.get("/api/runs/{run_id}/shots/{name}")
+    def run_shot(run_id: str, name: str) -> FileResponse:
+        try:
+            return FileResponse(runs.shot(run_id, name), headers={"Cache-Control": "max-age=86400"})
+        except KeyError:
+            raise HTTPException(404, "截图不存在") from None
 
     # ------------------------------------------------------------ 知识库
 

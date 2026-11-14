@@ -146,3 +146,39 @@ def test_without_knowledge(tmp_path):
     assert client.get("/api/status").json()["knowledge"] == {}
     assert "前端还没有构建" in client.get("/").json()["message"]
 
+
+
+def test_runs_and_play(tmp_path):
+    import json
+
+    runs = tmp_path / "runs"
+    d = runs / "20261114-092016_deepseek-flash"
+    (d / "shots").mkdir(parents=True)
+    (d / "shots" / "0001.jpg").write_bytes(b"jpg")
+    rows = [
+        {"step": 1, "screen": "prepare", "shot": "shots/0001.jpg", "texts": ["(0.245,0.072) 1-9", "(0.5,0.5) 出战"],
+         "decision": {"analysis": "出战"}, "actions": ["点击「出战」"]},
+        {"step": 2, "screen": "settlement", "node": None, "texts": ["(0.5,0.2) 挑战失败"], "actions": []},
+    ]
+    (d / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n{\"step\": 3",
+                                   encoding="utf-8")
+    (d / "meta.json").write_text(json.dumps({"profile": "deepseek-flash", "ended_at": "x", "result": "settlement"}),
+                                 encoding="utf-8")
+    app = create_app(config_store=ConfigStore(tmp_path / "c.yaml"), knowledge_path=tmp_path / "none.sqlite",
+                     templates_dir=tmp_path / "tpl", web_dist=tmp_path / "dist", runs_dir=runs,
+                     memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"), device_factory=None)
+    client = TestClient(app)
+
+    [run] = client.get("/api/runs").json()
+    assert run["id"] == d.name and run["steps"] == 2 and run["node"] == "1-9"
+    assert run["outcome"] == "失败" and run["decisions"] == 1 and run["live"] is False
+    steps = client.get(f"/api/runs/{d.name}/steps", params={"after": 0}).json()
+    assert [s["step"] for s in steps] == [1, 2] and steps[0]["node"] == "1-9"
+    assert client.get(f"/api/runs/{d.name}/steps", params={"after": 1}).json()[0]["step"] == 2
+    assert client.get(f"/api/runs/{d.name}/shots/0001.jpg").content == b"jpg"
+    assert client.get(f"/api/runs/{d.name}/shots/..%2Fmeta.json").status_code == 404
+    assert client.get("/api/runs/nope/steps").status_code == 404
+
+    play = client.get("/api/play").json()
+    assert play["available"] is False and play["running"] is False
+    assert client.post("/api/play/start", json={}).status_code == 409

@@ -139,3 +139,65 @@ export interface Memory {
 
 export const MEMORY_STATUS: Record<Memory['status'], string> = { draft: '待审核', approved: '已采纳', rejected: '已驳回', archived: '已归档' };
 export const CONFIDENCE: Record<Memory['confidence'], string> = { high: '已核实', medium: '有依据未核实', low: '推测' };
+
+// ---------------------------------------------------------------- 对局
+
+export interface PlayStatus {
+  available: boolean;
+  running: boolean;
+  stopping: boolean;
+  run_id: string | null;
+  profile: string | null;
+  difficulty: string | null;
+  result: string | null;
+  error: string | null;
+  log: string[];
+}
+
+export interface RunSummary {
+  id: string;
+  profile: string;
+  model: string;
+  difficulty: string;
+  started_at: string;
+  ended_at: string | null;
+  result: string | null;
+  live: boolean;
+  steps: number;
+  node: string | null;
+  outcome: string | null;
+  decisions: number;
+}
+
+export interface StepMark {
+  type: 'click' | 'drag' | 'scroll';
+  x: number;
+  y: number;
+  x2?: number;
+  y2?: number;
+}
+
+export interface StepDecision {
+  analysis: string;
+  actions: { type: string; text?: string; reason?: string }[];
+  run_notes: string | null;
+  reasoning: string;
+  error: string;
+  latency_s: number | null;
+  model: string;
+  usage: { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number } | null;
+}
+
+export interface StepRecord {
+  step: number;
+  ts?: string;
+  screen?: string;
+  node?: string | null;
+  shot?: string;
+  texts?: string[];
+  decision?: StepDecision;
+  actions?: string[];
+  marks?: StepMark[];
+  note?: string;
+  error?: string;
+}

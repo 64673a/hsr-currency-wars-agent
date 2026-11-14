@@ -1,47 +1,28 @@
-import { BookOpen, GitCompareArrows, History, MonitorPlay, Settings2 } from 'lucide-react';
+import { BookOpen, MonitorPlay, Settings2 } from 'lucide-react';
 import { useEffect, useState, type ComponentType } from 'react';
 
 import { api, type KnowledgeMeta } from '@/lib/api';
 import { ToastHost } from '@/lib/toast';
 import KnowledgePage from '@/pages/knowledge/KnowledgePage';
-import Placeholder from '@/pages/Placeholder';
+import PlayPage from '@/pages/play/PlayPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 
 import styles from './shell.module.css';
 
-type Page = { path: string; label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }>; soon?: boolean };
-const GROUPS: { label: string; pages: Page[] }[] = [
-  {
-    label: '对局',
-    pages: [
-      { path: '#/watch', label: '观战', icon: MonitorPlay, soon: true },
-      { path: '#/runs', label: '对局记录', icon: History, soon: true },
-      { path: '#/compare', label: '模型对比', icon: GitCompareArrows, soon: true },
-    ],
-  },
-  {
-    label: '数据',
-    pages: [
-      { path: '#/knowledge', label: '知识库', icon: BookOpen },
-      { path: '#/settings', label: '设置', icon: Settings2 },
-    ],
-  },
+type Page = { path: string; label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }> };
+const ALL: Page[] = [
+  { path: '#/play', label: '对局', icon: MonitorPlay },
+  { path: '#/knowledge', label: '知识库', icon: BookOpen },
+  { path: '#/settings', label: '设置', icon: Settings2 },
 ];
-const ALL = GROUPS.flatMap((g) => g.pages);
-
-const PLACEHOLDERS: Record<string, { title: string; description: string }> = {
-  '#/watch': { title: '观战', description: '暂未开放' },
-  '#/runs': { title: '对局记录', description: '暂未开放' },
-  '#/compare': { title: '模型对比', description: '暂未开放' },
-};
 
 function readPath() {
   const hash = window.location.hash.split('?')[0];
-  return ALL.some((p) => p.path === hash) ? hash : '#/knowledge';
+  return ALL.some((p) => p.path === hash) ? hash : '#/play';
 }
 
 export default function App() {
-  const [path, setPath] = useState('#/knowledge');
+  const [path, setPath] = useState('#/play');
   const [status, setStatus] = useState<{ knowledge: KnowledgeMeta; models: number } | null>(null);
 
   useEffect(() => {
@@ -55,7 +36,6 @@ export default function App() {
     api<{ knowledge: KnowledgeMeta; models: number }>('/api/status').then(setStatus).catch(() => setStatus(null));
   }, [path]);
 
-  const placeholder = PLACEHOLDERS[path];
   return (
     <ToastHost>
       <div className={styles.shell}>
@@ -64,17 +44,11 @@ export default function App() {
             <span className={styles.brandName}>货币战争</span>
           </div>
           <nav className={styles.nav} aria-label="主导航">
-            {GROUPS.map((g) => (
-              <div key={g.label} className={styles.navGroup}>
-                <span className={styles.navLabel}>{g.label}</span>
-                {g.pages.map(({ path: p, label, icon: Icon, soon }) => (
-                  <a key={p} href={p} className={styles.navItem} aria-current={p === path ? 'page' : undefined}>
-                    <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-                    {label}
-                    {soon && <span className={styles.navSoon}>规划中</span>}
-                  </a>
-                ))}
-              </div>
+            {ALL.map(({ path: p, label, icon: Icon }) => (
+              <a key={p} href={p} className={styles.navItem} aria-current={p === path ? 'page' : undefined}>
+                <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
+                {label}
+              </a>
             ))}
           </nav>
           <div className={styles.status}>
@@ -93,7 +67,7 @@ export default function App() {
         <main className={styles.main}>
           {path === '#/settings' && <SettingsPage />}
           {path === '#/knowledge' && <KnowledgePage />}
-          {placeholder && <Placeholder {...placeholder} />}
+          {path === '#/play' && <PlayPage />}
         </main>
       </div>
     </ToastHost>

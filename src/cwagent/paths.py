@@ -56,3 +56,7 @@ def companions_file() -> Path:
 
 def web_dist() -> Path:
     return root() / "web" / "dist"
+
+
+def runs_dir() -> Path:
+    return root() / "runs"

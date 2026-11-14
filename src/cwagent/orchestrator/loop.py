@@ -19,6 +19,7 @@ from .screens import (
     SPOTLIGHT_LAYOUT,
     classify,
     companion_name,
+    node_of,
     similar,
     text_signature,
 )
@@ -48,6 +49,13 @@ class Trace:
         img.save(self.root / name, quality=72)
         return name
 
+    def meta(self, **fields) -> None:
+        """合并写入 meta.json(模型、难度、开始与结束时间、结果)。"""
+        path = self.root / "meta.json"
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        data.update(fields)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
     def write(self, record: dict) -> None:
         self._f.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._f.flush()
@@ -73,11 +81,13 @@ class Runner:
         self._waits = 0
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
+        self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
 
     # ---------------------------------------------------------------- 执行
 
     def execute(self, actions: list[Action], boxes: list[TextBox]) -> list[str]:
         results = []
+        self._marks = []
         for a in actions:
             try:
                 if a.type == "click_text":
@@ -87,12 +97,17 @@ class Runner:
                         continue
                     b = matches[a.nth]
                     self.device.click(b.x, b.y)
+                    self._marks.append({"type": "click", "x": b.x, "y": b.y})
                 elif a.type == "click":
                     self.device.click(a.x, a.y)
+                    self._marks.append({"type": "click", "x": a.x, "y": a.y})
                 elif a.type == "drag":
                     self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
+                    self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
                 elif a.type == "scroll":
-                    self.device.scroll(a.x if a.x is not None else 0.5, a.y if a.y is not None else 0.5, a.notches or -3)
+                    x, y = (a.x if a.x is not None else 0.5), (a.y if a.y is not None else 0.5)
+                    self.device.scroll(x, y, a.notches or -3)
+                    self._marks.append({"type": "scroll", "x": x, "y": y})
                 elif a.type == "key":
                     self.device.key(a.key)
                 elif a.type == "wait":
@@ -109,7 +124,7 @@ class Runner:
         frame = self.device.grab()
         boxes = self.ocr(frame.image)
         screen = classify(boxes)
-        record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen,
+        record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen, "node": node_of(boxes),
                         "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
         sig = text_signature(boxes)
         if screen in ("run_intro", "environment_choice", "prepare", "battle"):
@@ -169,6 +184,8 @@ class Runner:
         self._same = self._same + 1 if (not waiting and similar(sig, self._last_sig) > 0.85) else 0
         results = self.execute(actions, boxes) if actions else []
         record["actions"] = results
+        if self._marks:
+            record["marks"] = self._marks
         self.history.append(f"[{screen}] " + ";".join(results))
         self._last_sig = sig
         self.trace.write(record)
