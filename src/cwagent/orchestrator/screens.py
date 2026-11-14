@@ -24,8 +24,9 @@ def classify(boxes: list[TextBox]) -> str:
         return "quit_dialog"
     if find(boxes, "对局评价|对局总结"):
         return "settlement"
+    # 进度文字前面常带一个被认成字母的图标,如「X1-3 0%」
     if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中|^(我方|敌方)行动中$|^总伤害$") or find(
-            boxes, r"^[1-3]-\d{1,2}\s*\d{1,3}%$"):
+            boxes, r"^\D?[1-3]-\d{1,2}\s*\d{1,3}%$"):
         return "battle"
     # 顶部 HUD 的节点号和进度被识别成两段文字(如「1-7」「0%」)
     if not has(boxes, "备战阶段") and find(boxes, r"^[1-3]-\d{1,2}$") and find(boxes, r"^\d{1,3}%$"):

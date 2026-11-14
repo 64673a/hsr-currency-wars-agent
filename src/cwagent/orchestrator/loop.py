@@ -22,12 +22,12 @@ from ..brain.ledger import RunLedger
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, to_jsonable
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value, read_progress, summarize
-from ..vision.board import Portraits, Slot, format_board, shop_is_open
+from ..vision.board import Portraits, Slot, format_board
 from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
 from .macros import open_crystals, survey_plane
-from .prepare import PrepareExecutor
+from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
     DIFFICULTY_HINT,
     PREPARE_LAYOUT,
@@ -198,7 +198,7 @@ class Runner:
         state: dict = {"hud": hud.as_dict()}
         lines = [hud.text()]
         names: list[str] = []
-        shop = shop_is_open(boxes)
+        shop = self.prepare.shop_now(boxes)
         if shop:
             lines.append("商店(从左到右):" + format_shop(read_shop(boxes)))
         self._board = None
@@ -229,7 +229,7 @@ class Runner:
 
     def macros(self, image, boxes: list[TextBox], node: str | None) -> str | None:
         """备战界面、商店收起时先做的固定流程。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
-        if not node or shop_is_open(boxes):
+        if not node or self.prepare.shop_now(boxes):
             return None
         plane = node.split("-")[0]
         if plane != self._surveyed:
@@ -296,6 +296,10 @@ class Runner:
                 self._curve_node = record["node"] or self._curve_node
                 record["battle"] = {"av": av, "progress": progress}
                 return [Action(type="wait", seconds=4, reason="战斗进行中")]
+            case "prepare":
+                # 进入备战时屏幕中央会播「备战阶段」横幅,动画期间点击无效
+                if find(boxes, "^备战阶段$", region=(0.3, 0.35, 0.4, 0.25)):
+                    return [Action(type="wait", seconds=1.5, reason="备战阶段开场动画")]
             case "other":
                 if len(meaningful(boxes)) < 2:
                     return [Action(type="wait", seconds=1.5, reason="过场或加载中")]
@@ -372,15 +376,15 @@ class Runner:
                 self._last_sig = sig
                 self.trace.write(record)
                 return screen
-            if not shop_is_open(boxes):
+            if not self.prepare.shop_now(boxes):
                 # 先打开商店,让模型第一眼就看到能买什么
-                b = find(boxes, "^商店$")
-                self.device.click(*(b.x, b.y) if b else (0.845, 0.909))
-                time.sleep(0.8)
-                frame = self.device.grab()
-                boxes = self.ocr(frame.image)
+                opened = PrepareResult()
+                boxes = self.prepare.set_shop(opened, boxes, True)
+                frame = self.prepare.frame or frame
                 record["shot"] = self.trace.shot(n, frame.image)
                 record["texts"] = [str(b) for b in boxes]
+                if not self.prepare.shop:
+                    self.log(f"[{n}] 没能打开商店")
 
         opening = ep is None
         hints, names = self._hints(screen, frame, boxes, record, opening)

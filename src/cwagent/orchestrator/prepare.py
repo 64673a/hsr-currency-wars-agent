@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 
 from ..brain.screen_agent import Action, action_text, slot_text
 from ..device import UserInterrupt
-from ..vision.board import SHOP_X, Slot, shop_is_open, slots
+from ..vision.board import SHOP_X, Slot, slots
 from ..vision.ocr import Ocr, TextBox, find
-from ..vision.shop import read_shop
+from ..vision.shop import read_shop, shop_state
 
-SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」,识别不到文字时用(1920x1080 实测)
+SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位置,1920x1080 实测)
 READY_BUTTON = (0.946, 0.694)     # 「出战」,商店收起时
 SHOP_CARD_Y = 0.15
 GAP = 0.5
@@ -45,26 +45,43 @@ class PrepareExecutor:
         self.ocr = ocr
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
         self.sleep = sleep or (lambda s: time.sleep(s))
+        self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
+        self.frame = None         # 最近一次截图
 
     def _look(self) -> list[TextBox]:
-        return self.ocr(self.device.grab().image)
+        self.frame = self.device.grab()
+        return self.ocr(self.frame.image)
+
+    def shop_now(self, boxes: list[TextBox]) -> bool:
+        state = shop_state(boxes)
+        if state is not None:
+            self.shop = state
+        return self.shop
 
     def _click(self, out: PrepareResult, x: float, y: float) -> None:
         self.device.click(x, y)
         out.marks.append({"type": "click", "x": x, "y": y})
 
-    def _set_shop(self, out: PrepareResult, boxes: list[TextBox], want_open: bool) -> list[TextBox]:
-        if shop_is_open(boxes) == want_open:
+    def set_shop(self, out: PrepareResult, boxes: list[TextBox], want_open: bool) -> list[TextBox]:
+        """打开或收起商店,等动画结束(展开时等卡片名字连续两次读到一样)。点了没反应再点一次。"""
+        if shop_state(boxes) is want_open:
+            self.shop = want_open
             return boxes
-        b = find(boxes, "^商店$" if want_open else "^收起$")
-        if b is not None:
-            self._click(out, b.x, b.y)
-        elif want_open:
+        for _ in range(2):
             self._click(out, *SHOP_BUTTON)
-        else:
-            return boxes
-        self.sleep(0.8)
-        return self._look()
+            last = None
+            for _ in range(6):
+                self.sleep(0.4)
+                boxes = self._look()
+                if shop_state(boxes) is not want_open:
+                    continue
+                cards = read_shop(boxes)
+                if not want_open or cards == last:
+                    self.shop = want_open
+                    return boxes
+                last = cards
+        self.shop_now(boxes)
+        return boxes
 
     def run(self, actions: list[Action], boxes: list[TextBox], board: list[Slot] | None) -> PrepareResult:
         out = PrepareResult()
@@ -72,22 +89,26 @@ class PrepareExecutor:
         occupied: dict[tuple[str, int], str] | None = None
         if board is not None:
             occupied = {(s.zone, s.index): (s.name or "认不出的角色") for s in board if not s.empty}
+        self.shop_now(boxes)
         for a in actions:
             text = action_text(a)
             try:
                 if a.type == "buy":
-                    boxes = self._set_shop(out, boxes, True)
-                    cards = read_shop(boxes)
-                    name = cards[a.slot - 1][1]
-                    if name is None and any(n for _, n, _ in cards):   # 别的格子认得出,这格没字:已经买走了
-                        out.results.append(f"{text}:这一格是空的")
-                        continue
+                    boxes = self.set_shop(out, boxes, True)
+                    if not self.shop:
+                        out.results.append(f"{text}:商店没有打开")
+                        out.observe = True
+                        break
+                    name = read_shop(boxes)[a.slot - 1][1]
                     self._click(out, SHOP_X[a.slot - 1], SHOP_CARD_Y)
                     self.sleep(GAP)
                     boxes = self._look()
                     still = read_shop(boxes)[a.slot - 1][1]
                     if name and still == name:
                         out.results.append(f"{text}({name}):没买成,可能金币不够或备战席满了")
+                        continue
+                    if name is None:
+                        out.results.append(f"{text}:这一格没认出角色(可能已经买走了)")
                         continue
                     if occupied is not None:
                         free = [i for i in range(9) if ("bench", i) not in occupied]
@@ -99,7 +120,7 @@ class PrepareExecutor:
                     if occupied is not None and src not in occupied:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是空的")
                         continue
-                    layout = {(s.zone, s.index): s for s in slots(shop_is_open(boxes))}
+                    layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes))}
                     if src not in layout:
                         out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
                         continue
@@ -151,7 +172,7 @@ class PrepareExecutor:
                         self.sleep(0.3)
                     out.results.append(text)
                 elif a.type == "ready":
-                    boxes = self._set_shop(out, boxes, False)
+                    boxes = self.set_shop(out, boxes, False)
                     self._click(out, *READY_BUTTON)
                     self.sleep(1.0)
                     out.results.append(text)

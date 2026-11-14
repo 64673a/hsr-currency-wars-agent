@@ -129,6 +129,7 @@ class WindowsDevice:
             info = self.source.window()
             if not info.foreground:
                 raise CaptureError("游戏窗口不在前台,无法发送输入")
+            time.sleep(0.5)   # 刚切到前台时游戏会吞掉第一次点击(2026-11-14 实机:收集节点的第一下没点开)
         return info.left + round(x * (info.width - 1)), info.top + round(y * (info.height - 1))
 
     def _move_abs(self, sx: int, sy: int) -> None:

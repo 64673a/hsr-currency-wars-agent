@@ -137,3 +137,22 @@ def test_new_screens():
     assert classify(boxes("请选择投资策略", "团队力量•金")) == "strategy_choice"
     assert classify(boxes("返回备战界面", "遭遇节点", "遭遇其一", "奖励预览")) == "encounter_choice"
     assert role_of("prepare") == "tactical" and role_of("other") == "navigator"
+
+
+def test_shop_state():
+    from cwagent.vision.shop import shop_state
+
+    def boxes(*items):
+        return [TextBox(t, x, y, 0.05, 0.02, 0.9) for t, x, y in items]
+
+    assert shop_state(boxes(("收起", 0.845, 0.908))) is True
+    # 角色详情遮住了右下按钮和「刷新」,概率那一行还在
+    assert shop_state(boxes(("45%", 0.518, 0.359), ("33%", 0.570, 0.359), ("20%", 0.621, 0.359), ("出售", 0.92, 0.85))) is True
+    assert shop_state(boxes(("商店", 0.845, 0.909))) is False
+    assert shop_state(boxes(("出售", 0.92, 0.85))) is None
+
+
+def test_battle_progress_with_icon_and_banner():
+    from cwagent.orchestrator.screens import classify
+
+    assert classify([TextBox("X1-3 0%", 0.385, 0.025, 0.05, 0.02, 0.9)]) == "battle"

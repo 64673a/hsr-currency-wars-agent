@@ -151,7 +151,7 @@ def test_blank_and_popup_screens_skip_model(tmp_path):
 
 
 def test_prepare_semantic_actions(tmp_path):
-    shop = [("备战阶段", 0.12, 0.04), ("1-3", 0.12, 0.07), ("收起", 0.84, 0.91),
+    shop = [("备战阶段", 0.12, 0.04), ("1-3", 0.12, 0.07), ("收起", 0.845, 0.909),
             ("银狼", 0.22, 0.28), ("3", 0.30, 0.28), ("黄泉", 0.36, 0.28), ("5", 0.44, 0.28)]
     pages = {
         "closed": [("备战阶段", 0.12, 0.04), ("1-3", 0.12, 0.07), ("商店", 0.845, 0.909)],
@@ -166,7 +166,7 @@ def test_prepare_semantic_actions(tmp_path):
             return "shop"
         if a == ("click", SHOP_X[1], 0.15) and state == "shop":
             return "bought"
-        if a == ("click", 0.84, 0.91):
+        if a == ("click", 0.845, 0.909) and state in ("shop", "bought"):    # 「收起」和「商店」在同一个位置
             return "closed2"
         if a == ("click", 0.946, 0.694) and state == "closed2":
             return "battle"

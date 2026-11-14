@@ -5,9 +5,23 @@ from __future__ import annotations
 import re
 
 from .board import SHOP_NAME_Y, SHOP_X
-from .ocr import TextBox
+from .ocr import TextBox, find
 
 HALF_CARD = 0.065
+
+
+def shop_state(boxes: list[TextBox]) -> bool | None:
+    """商店是否展开:True / False;被角色详情等遮住、看不出来时返回 None。
+
+    展开时右下按钮是「收起」、右侧有「刷新」、中间有一行抽到各费角色的概率(2026-11-14 实测);
+    收起时右下按钮是「商店」。
+    """
+    if (find(boxes, "^收起$", region=(0.78, 0.86, 0.14, 0.08)) or find(boxes, "^刷新$", region=(0.78, 0.40, 0.12, 0.10))
+            or sum(1 for b in boxes if 0.33 <= b.y <= 0.39 and 0.45 <= b.x <= 0.75 and re.fullmatch(r"\d{1,2}%", b.text)) >= 3):
+        return True
+    if find(boxes, "^商店$", region=(0.78, 0.86, 0.14, 0.08)):
+        return False
+    return None
 
 
 def read_shop(boxes: list[TextBox]) -> list[tuple[int, str | None, int | None]]:
