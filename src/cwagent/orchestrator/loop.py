@@ -53,6 +53,7 @@ from .screens import (
     companion_banner,
     companion_name,
     investment_cards,
+    investment_hint,
     trait_shop,
     intro_text,
     meaningful,
@@ -840,10 +841,17 @@ class Runner:
         elif opening and screen == "environment_choice":
             advice = self.environment_advice(boxes)
             hints = "## 攻略参考\n" + advice if advice else ""
+            left = investment_hint(boxes, "environment_choice")
+            if left:
+                hints = (hints + "\n\n" + left).strip()
         elif screen == "tea_break":
             hints = TEA_BREAK_HINT
         elif screen in OVERLAY_HINTS:
             hints = OVERLAY_HINTS[screen]
+        if screen == "strategy_choice":
+            left = investment_hint(boxes, "strategy_choice")
+            if left:
+                hints = (hints + "\n\n" + left).strip()
         if screen in CHOICE_SCREENS:
             grey = [b.text for b in boxes if b.text in ("确认", "确认选择") and not lit(frame.image, b)]
             if grey:

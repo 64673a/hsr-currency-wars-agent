@@ -227,3 +227,21 @@ def test_companion_name_from_bubble():
     assert name == "不死狼" and desc.startswith("不死狼将在")
     assert companion_of_bubble("你会在幕后茶歇遇到三月兔。")[0] == "三月兔"
     assert companion_of_bubble("第一位面的最后的奖励节点将替换为幕后茶歇。")[0] == ""
+
+
+def test_invest_refresh_reads_numbers_from_ui():
+    """刷新次数的规则要由程序读出来交给模型:投资环境一次全刷、投资策略各刷各的(维护者 2026-11-16)。"""
+    from cwagent.orchestrator.screens import invest_refresh, investment_hint
+
+    env = [_b("刷刷刷", 0.229, 0.363), _b("召唤邀请", 0.5, 0.363), _b("黄金时代", 0.771, 0.363),
+           _b("剩余次数:1", 0.402, 0.910)]
+    info = invest_refresh(env, "environment_choice")
+    assert info["env"] == 1
+    hint = investment_hint(env, "environment_choice")
+    assert "全部" in hint and "1 次" in hint
+
+    strat = [_b("好运令牌·金", 0.24, 0.454), _b("伙伴总动员", 0.5, 0.453), _b("奇美成长记", 0.76, 0.454),
+             _b("刷新次数1", 0.248, 0.791), _b("刷新次数2", 0.508, 0.791), _b("刷新次数1", 0.768, 0.791)]
+    assert invest_refresh(strat, "strategy_choice")["cards"] == [1, 2, 1]
+    hint = investment_hint(strat, "strategy_choice")
+    assert "只换这一张" in hint and "第2张还剩 2 次" in hint

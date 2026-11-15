@@ -253,6 +253,48 @@ INVEST_TITLE_Y = {"environment_choice": (0.333, 0.383), "strategy_choice": (0.42
 INVEST_X = (0.24, 0.5, 0.76)
 
 
+INVEST_REFRESH_ENV = (0.25, 0.86, 0.45, 0.10)      # 投资环境底部那行「剩余次数:1」(实机 0.402, 0.910)
+INVEST_REFRESH_STRAT = (0.76, 0.82)                 # 投资策略每张卡下面的「刷新次数N」(实机 y 0.791)
+
+
+def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
+    """投资界面还剩几次刷新(读界面上的数字,不是猜)。
+
+    - 投资环境:底部只有一处「剩余次数:N」,**一次刷新把三张全部换掉**,整局就这一次(维护者 2026-11-16)。
+    - 投资策略:每张卡下面各写「刷新次数N」,**刷新只换这一张**,每次进入这个界面次数重新给,不用就作废
+      (维护者 2026-11-16;次数会被某些投资策略改动,所以每次都现读)。
+    """
+    out: dict = {"env": None, "cards": [None, None, None]}
+    if screen == "environment_choice":
+        b = find(boxes, "剩余次数|刷新次数", region=INVEST_REFRESH_ENV)
+        if b is not None:
+            out["env"] = int(re.sub(r"\D", "", b.text) or 0)
+    else:
+        for i, cx in enumerate(INVEST_X):
+            b = find(boxes, "刷新", region=(cx - 0.10, INVEST_REFRESH_STRAT[0], 0.20,
+                                            INVEST_REFRESH_STRAT[1] - INVEST_REFRESH_STRAT[0]))
+            if b is not None:
+                out["cards"][i] = int(re.sub(r"\D", "", b.text) or 0)
+    return out
+
+
+def investment_hint(boxes: list[TextBox], screen: str) -> str:
+    """把刷新次数讲清楚交给模型:数字由程序读,规则由这里说明,免得模型以为不能刷新或者刷错对象。"""
+    info = invest_refresh(boxes, screen)
+    if screen == "environment_choice" and info["env"] is not None:
+        if info["env"] <= 0:
+            return "刷新:这一屏的「剩余次数」已经是 0,只能在三张里选一张确认。"
+        return (f"刷新:底部还剩 {info['env']} 次「剩余次数」。点一次会把三张**全部**换掉(不是只换一张),"
+                "整局的次数有限;三张都不合用、或者只有一张能用时才刷。")
+    if screen == "strategy_choice":
+        left = [f"第{i + 1}张还剩 {n} 次" for i, n in enumerate(info["cards"]) if n]
+        if not left:
+            return ""
+        return ("刷新:每张卡各自独立," + "、".join(left) + ";刷新**只换这一张**,其它两张不动。"
+                "每次选投资策略时次数重新给,不用就作废——不合用的那张直接刷掉再看。")
+    return ""
+
+
 def investment_cards(boxes: list[TextBox], screen: str) -> int:
     """投资界面已经显示出标题的卡有几张。卡片是翻牌动画依次出现的,截图太快会少一张(2026-11-15 实机:第三张投资环境
     只认出了半句效果说明)。"""
