@@ -29,6 +29,8 @@ ORB_SEARCH = (1275, 202, 1624, 465)   # 找晶矿球的范围(像素,x0, y0, x1,
 GIFT_SEARCH = (1280, 112, 1570, 270)  # 奇遇倒计时礼盒可能出现的范围
 GIFT_TEMPLATE = Path(__file__).resolve().parents[1] / "assets" / "crystals" / "timed_gift.png"   # 取自 M7A
 BENCH_FULL_AREA = (0.2, 0.22, 0.6, 0.12)   # 「备战席已满」提示
+AFFIX_ROW = (0.40, 0.89, 0.58, 0.06)  # 位面详情底部的敌人词条(在「敌人难度」右边;2026-11-14 截图:y 0.92,x 0.45~0.73)
+AFFIX_BLANK = (0.12, 0.45)            # 位面详情左边的空白:点它收起词条说明【待核实】
 
 
 def _arr(image: Image.Image) -> np.ndarray:
@@ -61,8 +63,44 @@ def _panel_text(boxes: list[TextBox]) -> str:
     return " ".join(b.text for b in inside)
 
 
-def survey_plane(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] | None:
-    """打开位面详情,逐个点节点读说明,关闭后回到备战界面。失败返回 None。"""
+def read_affixes(device, ocr: Ocr, boxes: list[TextBox], book, log: Callable[[str], None],
+                 debug: Path | None = None) -> list[tuple[str, str]]:
+    """位面详情底部的敌人词条:[(名字, 说明)]。词条库里有说明的直接用;没有的点开读,说明存进词条库(维护者:官方接口
+    没有词条数据,边点边存)。点开后界面上新出现的文字就是说明;每张说明截一张图到 debug 里,方便核对。"""
+    x, y, w, h = AFFIX_ROW
+    row = sorted((b for b in boxes if x <= b.x <= x + w and y <= b.y <= y + h and not b.text.startswith("敌人难度")
+                  and len(b.text) >= 2 and not b.text[0].isdigit()), key=lambda b: b.x)
+    out: list[tuple[str, str]] = []
+    for b in row:
+        desc = book.get(b.text) if book is not None else ""
+        if not desc and book is not None:
+            before = {t.text for t in boxes}
+            device.click(b.x, b.y)
+            time.sleep(0.8)
+            shot = device.grab()
+            now = ocr(shot.image)
+            fresh = [t for t in now if t.text not in before and not (y <= t.y <= y + h)]
+            desc = "".join(t.text for t in sorted(fresh, key=lambda t: (round(t.y, 2), t.x)))
+            if debug is not None:
+                debug.mkdir(parents=True, exist_ok=True)
+                shot.image.convert("RGB").save(debug / f"{time.strftime('%H%M%S')}-词条-{b.text}.jpg", quality=80)
+            device.click(*AFFIX_BLANK)
+            time.sleep(0.6)
+            boxes = ocr(device.grab().image)
+            if desc:
+                book.record(b.text, desc)
+            if not has(boxes, "位面详情"):
+                log("读敌人词条:收起说明后不在位面详情了,剩下的词条不读")
+                out.append((b.text, desc))
+                break
+        out.append((b.text, desc))
+    return out
+
+
+def survey_plane(device, ocr: Ocr, log: Callable[[str], None], *, affixes: list | None = None, book=None,
+                 debug: Path | None = None) -> list[str] | None:
+    """打开位面详情,逐个点节点读说明(传了 affixes 时再读底部的敌人词条,放进这个列表),关闭后回到备战界面。
+    失败返回 None。"""
     device.click(*TOP_FIRST_NODE)
     time.sleep(1.2)
     frame = device.grab()
@@ -79,6 +117,11 @@ def survey_plane(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] | No
         text = _panel_text(ocr(device.grab().image))
         if text and text not in lines:
             lines.append(text)
+    if affixes is not None:
+        try:
+            affixes.extend(read_affixes(device, ocr, ocr(device.grab().image), book, log, debug))
+        except Exception as e:  # noqa: BLE001 - 词条读不出不影响收集节点
+            log(f"读敌人词条出错:{type(e).__name__}: {e}")
     device.click(*CLOSE_X)
     time.sleep(1.0)
     back = ocr(device.grab().image)

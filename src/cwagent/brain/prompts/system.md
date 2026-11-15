@@ -16,7 +16,7 @@
   - compose:把装备栏第 item 件拖到第 onto 件上合成;
   - equip:把装备栏第 item 件装给 zone 第 index 格的角色;
   - take:从备战席 index 格的道具(如武装箱)里拿名为 text 的选项;open:只看选项不拿;
-  - ready:出战,结束这个备战阶段。
+  - ready:出战,结束这个备战阶段。要单独一轮发:和别的操作一起发时程序先不出战,把操作后的实际局面给你看,确认无误再只发 ready。
 - 通用:
   - click_text:点击界面上文字为 text 的位置(与识别出的文字完全一致或包含它;有多个时用 nth 指定第几个,从 0 开始);
   - click:点击坐标 (x, y);drag:从 (x, y) 按住拖到 (x2, y2);scroll:在 (x, y) 处滚动 notches 格,正数向上、负数向下;

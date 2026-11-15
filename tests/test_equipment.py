@@ -123,9 +123,11 @@ def test_executor_compose_then_equip(monkeypatch):
     board = [Slot("front", 0, 0.3885, 0.372, "阿格莱雅", 1)]
     out = ex.run([Action(type="compose", item=2, onto=1), Action(type="equip", item=1, zone="front", index=1),
                   Action(type="equip", item=2, zone="front", index=1)], [], board)
-    assert out.results[0].endswith("合成了 反重力皮靴,现在是 1 号")
-    assert out.results[1] == "装备 1号 → 前台1号:反重力皮靴 给了 阿格莱雅"
-    assert "已经在前面的操作里用掉了" in out.results[2]   # 原来的 2 号鞋子在合成时用掉了
+    assert "合成了 反重力皮靴(现在是 1 号);装备栏现在是 1号 反重力皮靴" in out.results[0]
+    # 合成后装备栏会重新排序,后面的装备操作先不做,让模型按新装备栏重新给编号
+    assert "后面的合成 / 装备先不做" in out.results[1] and len(out.results) == 2 and out.observe
+    out = ex.run([Action(type="equip", item=1, zone="front", index=1)], [], board)
+    assert out.results == ["装备 1号 → 前台1号:反重力皮靴 给了 阿格莱雅"]
     assert out.equipped == [("阿格莱雅", "反重力皮靴")]
 
 

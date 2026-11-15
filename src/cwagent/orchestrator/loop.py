@@ -22,6 +22,7 @@ import numpy as np
 from PIL import Image
 
 from ..brain.ledger import RunLedger
+from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import SWITCH_MARGIN, Guide, GuideAdvisor, card
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
@@ -50,6 +51,8 @@ from .screens import (
     TEA_BREAK_HINT,
     classify,
     companion_name,
+    investment_cards,
+    trait_shop,
     intro_text,
     meaningful,
     node_of,
@@ -68,6 +71,8 @@ STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人�
 DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
 ENV_GUIDES = 2             # 投资环境界面每个环境列几篇攻略
 READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
+ENV_EFFECT = 3.0           # 刚进投资环境选择时的特效时长(秒)
+INVEST_WAITS = 8           # 投资界面最多等几次(每次 0.5 秒)三张卡都翻出来
 DETAIL_PER_NODE = 3        # 每个节点最多点开几张认不出的卡看详情
 RAIL_STEPS = 6             # 开拓商店界面停留这么多步还没关,程序直接关掉
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
@@ -76,7 +81,9 @@ CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_
 CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
-BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$|备战席已满")
+# 「打开商店」「有商品可购买」是棋盘左上角羁绊专属商店(开拓银轨的开拓商店等)的入口,一直挂着(2026-11-15 实机:
+# 当成弹窗后每个备战回合都等满 8 秒、跳过了开晶矿和收集节点)
+BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|打开商店|有商品可购买|\d+(/\d+)*)$|备战席已满")
 # 出现这些界面说明之前的回合已经结束
 CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
 
@@ -193,6 +200,9 @@ class Runner:
         self._costs: dict[str, set[int]] | None = None         # 角色名 → 费用(星神★阿哈有 4、5、7 费三个版本)
         self._rail: dict[str, int] = {}                        # 每个节点在开拓商店界面停了几步
         self._rail_launched: set[str] = set()                  # 已经免费启动过星穹列车的节点
+        self._env_waited = False                               # 投资环境选择的开场特效等过了
+        self.affixes = AffixBook()                             # 敌人词条库(边点边存)
+        self._affixes: list[tuple[str, str]] = []              # 本局读到的敌人词条
         self._difficulty_tries = 0                             # 程序自动选难度试了几次
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
 
@@ -531,10 +541,18 @@ class Runner:
         image = ready[0].image
         if plane != self._surveyed:
             self._surveyed = plane
-            lines = survey_plane(self.device, self.ocr, self.log)
+            affixes: list[tuple[str, str]] = []
+            lines = survey_plane(self.device, self.ocr, self.log, affixes=affixes, book=self.affixes,
+                                 debug=self.trace.root / "debug")
             if lines:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
+            if affixes and affixes != self._affixes:
+                # 有的词条会左右全局方向(如「虚数熄火」不用虚数主 C、「能量逃逸」不用靠能量放大招的主 C,维护者举例)
+                self._affixes = affixes
+                text = ";".join(f"{n}({d})" if d else n for n, d in affixes)
+                self.ledger.add(f"[位面 {plane}] 敌人词条:{text}。选主 C 和阵容方向时考虑它们的限制")
+                self.log(f"位面 {plane} 的敌人词条:{text[:300]}")
             return "收集本位面的节点序列"
         return self._open_crystals(image)
 
@@ -740,6 +758,9 @@ class Runner:
                           "出战前程序会再开一次。")
             if find(boxes, "前置流程未结束"):
                 hints += "\n- 界面提示「前置流程未结束」:可能还有没做完的流程(例如幕后茶歇里的选择),先回去做完。"
+            shop_entry = trait_shop(boxes)
+            if shop_entry:
+                hints += f"\n- {shop_entry}。"
             if find(boxes, "无法上阵同名角色|同名角色无法上阵"):
                 hints += "\n- 界面提示「无法上阵同名角色」:场上已经有一个同名角色,刚才那次上场没成功。"
             if find(boxes, "剩余时间", region=(0.1, 0.0, 0.2, 0.12)):
@@ -806,24 +827,25 @@ class Runner:
             fresh = self._identify_unknown(n)
             if fresh is not None:
                 frame, boxes = fresh
-            if not self.prepare.shop_now(boxes):
-                self._remember_hud(frame.image, boxes)
-                # 先打开商店,让模型第一眼就看到能买什么
-                opened = PrepareResult()
-                boxes = self.prepare.set_shop(opened, boxes, True)
-                frame = self.prepare.frame or frame
-                record["shot"] = self.trace.shot(n, frame.image)
-                record["texts"] = [str(b) for b in boxes]
-                if not self.prepare.shop:
-                    self.log(f"[{n}] 没能打开商店")
-                # 开商店的同时游戏可能弹出了别的界面(投资策略、补给……):交给下一步按新界面处理
-                now = self.screen_of(frame.image, boxes)
-                if now != "prepare":
-                    record["screen"] = now
-                    record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
-                    self._last_sig = sig
-                    self.trace.write(record)
-                    return now
+        if screen == "prepare" and not self.prepare.shop_now(boxes):
+            # 每一轮都由程序把角色商店打开(右下角「商店」),模型不用自己去点;它曾把左上角羁绊商店的「打开商店」
+            # 当成角色商店去点(2026-11-15 实机)
+            self._remember_hud(frame.image, boxes)
+            opened = PrepareResult()
+            boxes = self.prepare.set_shop(opened, boxes, True)
+            frame = self.prepare.frame or frame
+            record["shot"] = self.trace.shot(n, frame.image)
+            record["texts"] = [str(b) for b in boxes]
+            if not self.prepare.shop:
+                self.log(f"[{n}] 没能打开商店")
+            # 开商店的同时游戏可能弹出了别的界面(投资策略、补给……):交给下一步按新界面处理
+            now = self.screen_of(frame.image, boxes)
+            if now != "prepare":
+                record["screen"] = now
+                record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
+                self._last_sig = sig
+                self.trace.write(record)
+                return now
 
         opening = ep is None
         opens = 0
@@ -839,7 +861,7 @@ class Runner:
                       "(本局档案里有这个节点做过的操作)。先从界面提示文字弄清卡在哪里,换一种做法;实在不行用 pause 请人处理。")
         if opening:
             ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
-                         max_turns=self.prepare_turns if screen == "prepare" else OTHER_TURNS)
+                         max_turns=self.prepare_turns + 1 if screen == "prepare" else OTHER_TURNS)   # 多一轮留给单独的出战
             self.episode = ep
             ep.cache_at = self.ledger.history_len()   # 本局经历在第一条消息的最前面,只增不改
             text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names)
@@ -871,7 +893,8 @@ class Runner:
         if any(a.type == "pause" for a in actions):
             return self.finish(record, screen, actions, boxes, sig)
         self._marks = []
-        result = self.prepare.run(actions, boxes, self._board)
+        ep = self.episode
+        result = self.prepare.run(actions, boxes, self._board, final=ep is not None and ep.turns >= ep.max_turns)
         record["actions"] = result.results
         marks = result.marks + self._marks
         if marks:
@@ -950,6 +973,19 @@ class Runner:
         frame = self.settle()
         boxes = self.ocr(frame.image)
         screen = self.screen_of(frame.image, boxes)
+        if screen == "environment_choice" and not self._env_waited:
+            # 刚进投资环境选择时有约 3 秒的特效(维护者告知),等它过去再识别
+            self._env_waited = True
+            time.sleep(ENV_EFFECT)
+            frame = self.device.grab()
+            boxes = self.ocr(frame.image)
+        if screen in ("environment_choice", "strategy_choice"):
+            for _ in range(INVEST_WAITS):       # 三张卡是依次翻出来的,等都出来再交给模型
+                if investment_cards(boxes, screen) >= 3:
+                    break
+                time.sleep(0.5)
+                frame = self.device.grab()
+                boxes = self.ocr(frame.image)
         node = node_of(boxes)
         if node:
             self._node = node

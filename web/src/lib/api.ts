@@ -204,6 +204,17 @@ export interface StepState {
   board?: { zone: 'front' | 'back' | 'bench'; index: number; name: string | null; stars: number; score: number }[];
 }
 
+/** 一场战斗的读数(战斗监视记下的,不截图):samples 是 [第几秒, 行动值, 进度],没读到的为 null */
+export interface BattleRecord {
+  av: number | null;
+  progress: number | null;
+  samples?: [number, number | null, number | null][];
+  deaths?: { t: number; av: number | null; after: number | null }[];
+  events?: string[];
+  seconds?: number;
+  end?: string;
+}
+
 export interface StepRecord {
   step: number;
   ts?: string;
@@ -215,7 +226,7 @@ export interface StepRecord {
   actions?: string[];
   marks?: StepMark[];
   state?: StepState;
-  battle?: { av: number | null; progress: number | null };
+  battle?: BattleRecord;
   battle_summary?: string;
   plane_nodes?: string;
   note?: string;

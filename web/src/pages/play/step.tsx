@@ -1,7 +1,8 @@
 import { Alert } from '@/components/arc/alert/alert';
 import { Badge } from '@/components/arc/badge/badge';
-import { enc, type RunSummary, type StepRecord, type StepState } from '@/lib/api';
+import { type BattleRecord, enc, type RunSummary, type StepRecord, type StepState } from '@/lib/api';
 
+import { BattleChart } from './BattleChart';
 import styles from './play.module.css';
 
 const SCREENS: Record<string, string> = {
@@ -17,6 +18,23 @@ const SCREENS: Record<string, string> = {
   tap_continue: '点击继续',
   quit_dialog: '中断确认',
   settlement: '结算',
+  battle_end: '战斗结束',
+  node_result: '节点结算',
+  deploy_confirm: '出战确认',
+  strategy_choice: '投资策略',
+  encounter_choice: '遭遇节点',
+  tea_break: '幕后茶歇',
+  rail_shop: '开拓商店',
+  black_market: '黑市商店',
+  ranger: '巡海游侠',
+  dance: '梦境交织',
+  garden: '奇兽花园',
+  hack: '骇入效果',
+  spotlight_replace: '替换光环',
+  spotlight_info: '光环详情',
+  reconnect: '断线重连',
+  disconnected: '连接中断',
+  empty_front: '前台无角色',
   other: '其他',
 };
 
@@ -80,6 +98,39 @@ const ZONES = [
   { zone: 'bench', label: '备战席' },
 ] as const;
 
+function BattleView({ battle }: { battle: BattleRecord }) {
+  const deaths = battle.deaths ?? [];
+  const facts = [
+    battle.seconds !== undefined && `用时 ${Math.round(battle.seconds)} 秒`,
+    battle.progress !== null && `进度 ${battle.progress}%`,
+    battle.av !== null && `剩余行动值 ${battle.av}`,
+    battle.samples && `阵亡 ${deaths.length} 次`,
+  ].filter(Boolean);
+  return (
+    <section className={styles.block}>
+      <h2 className={styles.blockTitle}>战斗</h2>
+      {facts.length > 0 && <p className={styles.facts}>{facts.join(' · ')}</p>}
+      <BattleChart battle={battle} />
+      {deaths.length > 0 && (
+        <ul className={styles.events}>
+          {deaths.map((d, i) => (
+            <li key={i}>
+              第 {Math.round(d.t)} 秒有角色阵亡{d.av !== null && d.after !== null && `,行动值 ${d.av} → ${d.after}`}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(battle.events ?? []).length > 0 && (
+        <ul className={styles.events}>
+          {battle.events!.map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function StateView({ state }: { state: StepState }) {
   const h = state.hud ?? {};
   const facts = [
@@ -135,12 +186,8 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
       {step.error && <Alert tone="danger" title="这一步出错">{step.error}</Alert>}
       {d?.error && <Alert tone="warning" title="模型没有给出有效操作">{d.error}</Alert>}
 
-      {step.battle && (
-        <p className={styles.facts}>
-          剩余行动值 {step.battle.av ?? '?'} · 进度 {step.battle.progress ?? '?'}%
-        </p>
-      )}
-      {step.battle_summary && (
+      {step.battle && <BattleView battle={step.battle} />}
+      {step.battle_summary && !step.battle?.samples && (
         <section className={styles.block}>
           <h2 className={styles.blockTitle}>上一场战斗</h2>
           <p className={styles.analysis}>{step.battle_summary}</p>

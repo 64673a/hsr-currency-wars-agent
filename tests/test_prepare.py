@@ -10,6 +10,13 @@ class Dev:
     def drag(self, *a, **k):
         self.drags.append(a)
 
+    def grab(self):
+        from PIL import Image
+
+        from cwagent.capture import Frame
+
+        return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
 
 def test_move_up_blocked_when_full():
     """上场已满时把备战席的角色拖到场上空格不会生效(实测):直接告诉模型,不去拖。换位不受影响。"""

@@ -158,6 +158,15 @@ def _size(zone: str, shop_open: bool = False) -> tuple[float, float]:
     return {"front": FRONT_SIZE, "back": BACK_SIZE, "bench": BENCH_SIZE}[zone]
 
 
+def occupied_slots(image: Image.Image, shop_open: bool, counts: dict[str, int] | None = None) -> set[tuple[str, int]] | None:
+    """哪些格子里有卡(只看是不是棋盘底色,不认是谁),给拖动后的核对用。画面太小(测试里的假画面)时返回 None。"""
+    if image.size[0] < 640:
+        return None
+    img = _bgr(image.resize((1920, 1080)) if image.size != (1920, 1080) else image)
+    return {(s.zone, s.index) for s in slots(shop_open, counts)
+            if _filled(_crop(img, s.x, s.y, *_size(s.zone, shop_open)))}
+
+
 def shop_is_open(boxes: list[TextBox]) -> bool:
     """商店展开时右下角的按钮是「收起」。"""
     return any(b.text == "收起" and b.x > 0.8 and b.y > 0.85 for b in boxes)

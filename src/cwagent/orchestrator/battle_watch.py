@@ -90,6 +90,7 @@ def is_death(text: str) -> bool:
 @dataclass
 class BattleReport:
     curve: list[tuple[int | None, int | None]] = field(default_factory=list)   # (行动值, 进度) 采样
+    samples: list[tuple[float, int | None, int | None]] = field(default_factory=list)   # (第几秒, 行动值, 进度),给网页画图
     deaths: list[dict] = field(default_factory=list)   # 每次阵亡:{t: 第几秒, av: 之前的行动值, after: 之后的行动值}
     events: list[str] = field(default_factory=list)    # 其他横幅的文字(敌方机制提示)
     seconds: float = 0.0
@@ -112,7 +113,7 @@ class BattleReport:
         return ";".join(parts)
 
     def as_dict(self) -> dict:
-        return {"curve": self.curve, "deaths": self.deaths, "events": self.events, "seconds": round(self.seconds, 1),
+        return {"samples": self.samples, "deaths": self.deaths, "events": self.events, "seconds": round(self.seconds, 1),
                 "end": self.end, "candidates": self.candidates}
 
 
@@ -187,6 +188,7 @@ class BattleWatcher:
                 if av is not None:
                     last_av = av
                     rep.curve.append((av, None))
+                    rep.samples.append((round(rep.seconds, 1), av, None))
                     if pending_after and now >= pending_after[0]:
                         pending_after[1]["after"] = av
                         pending_after = None
@@ -195,6 +197,7 @@ class BattleWatcher:
                 progress = read_progress(self.ocr(image, PROGRESS_REGION))
                 if progress is not None:
                     rep.curve.append((None, progress))
+                    rep.samples.append((round(rep.seconds, 1), None, progress))
             # 还在不在战斗
             if has_marker(image):
                 marker_seen = now

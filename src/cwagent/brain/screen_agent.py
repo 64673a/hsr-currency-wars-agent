@@ -223,7 +223,8 @@ class ScreenAgent:
     @staticmethod
     def _ask(episode: Episode) -> str:
         if episode.screen == "prepare" and episode.last_turn:
-            return "这是本备战阶段最后一次决策:请把要做的事一次做完,以 ready 结束,并写回合小结(summary)。"
+            return ("这是本备战阶段最后一次决策:请把要做的事一次做完,以 ready 结束,并写回合小结(summary)。"
+                    "这一轮的操作有没成功的,程序不会出战,之后会直接出战。")
         return "请判断当前局面,调用 act 给出下一步操作。"
 
     # ---------------------------------------------------------------- 调用模型

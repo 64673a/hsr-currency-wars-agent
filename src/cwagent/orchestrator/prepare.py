@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import re
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..brain.screen_agent import Action, action_text, slot_text
 from ..device import UserInterrupt
-from ..vision.board import SHOP_X, Slot, slots
+from ..vision.board import SHOP_X, Slot, occupied_slots, slots
 from ..vision.boxes import CLOSE_POINT, read_panel
-from ..vision.equipment import EquipmentReader, cancel_point, find_compose_confirm
+from ..vision.equipment import (
+    EquipmentReader,
+    Item,
+    cancel_point,
+    find_compose_confirm,
+    format_items,
+)
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import read_shop, shop_state
 
@@ -24,6 +31,7 @@ READY_BUTTON = (0.946, 0.694)     # 「出战」,商店收起时
 SHOP_CARD_Y = 0.15
 GAP = 0.5
 ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
+REFUSED = "不可调整|无法上阵|无法移动"   # 拖动被游戏拒绝时界面中间的提示(2026-11-15 实机:「当前情况下不可调整」)
 
 
 @dataclass
@@ -106,8 +114,33 @@ class PrepareExecutor:
         self.shop_now(boxes)
         return boxes
 
-    def run(self, actions: list[Action], boxes: list[TextBox], board: list[Slot] | None) -> PrepareResult:
+    def _drag_slot(self, out: PrepareResult, src: tuple[str, int], dst: tuple[str, int],
+                   boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
+        """把 src 格的角色拖到 dst 格,再看一眼:被游戏拒绝(界面中间的提示)或目标格还是空的就算没成功。
+        商店开着和收着时棋盘位置不同,而商店会被别的操作带着开合(实机见过买完卡后商店收起),所以每次按最新画面换算坐标,
+        没成功再试一次。返回(失败原因或 None, 最新的界面文字)。"""
+        for _ in range(2):
+            layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
+            p, q = layout[src], layout[dst]
+            self.device.drag(p.x, p.y, q.x, q.y, duration=0.6)
+            out.marks.append({"type": "drag", "x": p.x, "y": p.y, "x2": q.x, "y2": q.y})
+            self.sleep(GAP)
+            boxes = self._look()
+            refused = find(boxes, REFUSED)
+            if refused is not None:
+                return f"界面提示「{refused.text}」", boxes
+            filled = occupied_slots(self.frame.image, self.shop_now(boxes), self.counts)
+            if filled is None or dst in filled:
+                return None, boxes
+        return f"拖完以后{slot_text(dst[0], dst[1] + 1)}还是空的", boxes
+
+    def run(self, actions: list[Action], boxes: list[TextBox], board: list[Slot] | None, *,
+            final: bool = False) -> PrepareResult:
+        """final:本备战阶段最后一次决策。出战要单独一轮(维护者要求:模型以为操作都成功了就出战,实际上场情况常常
+        和它想的不一样);只有最后一次决策里,前面的操作都成功时才接着出战。"""
         out = PrepareResult()
+        others = any(x.type not in ("wait", "ready") for x in actions)
+        failed = False
         # 各格子里有没有角色,随移动、买卖更新;认不出阵容时为 None,不做检查
         occupied: dict[tuple[str, int], str] | None = None
         if board is not None:
@@ -182,17 +215,18 @@ class PrepareExecutor:
                             out.results.append(f"{text}:上场已满({self.deployed}),先把场上的角色移回备战席或卖掉,"
                                                "或者升级")
                             continue
-                        p, q = layout[src], layout[dst]
-                        self.device.drag(p.x, p.y, q.x, q.y, duration=0.6)
+                        problem, boxes = self._drag_slot(out, src, dst, boxes)
+                        if problem:
+                            out.results.append(f"{text}:没成功({problem}),后面的操作先不做")
+                            out.observe = failed = True
+                            break
                         if occupied is not None and self.deployed and (dst not in occupied) != (a.to_zone == "bench"):
                             self.deployed = shift(self.deployed, 1 if up else -1 if a.to_zone == "bench" else 0)
-                        out.marks.append({"type": "drag", "x": p.x, "y": p.y, "x2": q.x, "y2": q.y})
                         if occupied is not None:
                             moving, there = occupied.pop(src), occupied.pop(dst, None)
                             occupied[dst] = moving
                             if there:
                                 occupied[src] = there
-                        self.sleep(GAP)
                         out.results.append(text)
                     else:
                         p = layout[src]
@@ -232,9 +266,21 @@ class PrepareExecutor:
                 elif a.type in ("compose", "equip"):
                     done = self._equipment(a, text, out, occupied, boxes)
                     if done is None:
+                        failed = True
+                        break
+                    if a.type == "compose" and any(x.type in ("compose", "equip") for x in pending):
+                        # 合成后装备栏会重新排序(2026-11-15 实机:和平手枪+折叠小刀合成后,原来 3 号的生命之花排到了 1 号),
+                        # 之前给的编号不一定还对
+                        out.results.append("合成后装备栏的顺序变了,后面的合成 / 装备先不做:按上面的新装备栏重新给编号")
+                        out.observe = True
                         break
                     _shift(pending, done)
                 elif a.type == "ready":
+                    if others and (not final or failed):
+                        out.results.append("出战:这一轮没有出战。出战要单独一轮:先看上面这些操作之后的实际局面(上场人数、"
+                                           "站位、装备),确认无误再只发 ready")
+                        out.observe = True
+                        break
                     boxes = self.set_shop(out, boxes, False)
                     note = self.before_ready() if self.before_ready else None
                     if note:
@@ -252,7 +298,7 @@ class PrepareExecutor:
                         boxes = self._look()
             except UserInterrupt:
                 raise
-            except Exception as e:  # noqa: BLE001 - 单个动作出错:记下来,剩下的交给模型重新判断
+            except Exception as e:
                 out.results.append(f"{text}:失败({type(e).__name__}: {e})")
                 out.observe = True
                 break
@@ -359,9 +405,10 @@ class PrepareExecutor:
                 out.results.append(f"{text}:点了确认,但装备数没有变化,可能没合成成功")
                 out.observe = True
                 return None
-            keep = min(a.item, a.onto)
-            product = next((i.name for i in after if i.index == keep), None) or "认不出的装备"
-            out.results.append(f"{text}({item.name}+{target.name}):合成了 {product},现在是 {keep} 号")
+            rest = Counter(i.name for i in before if i.index not in (a.item, a.onto))
+            new = [i for i in after if (Counter(x.name for x in after) - rest)[i.name] > 0]
+            product = f"{new[0].name or '认不出的装备'}(现在是 {new[0].index} 号)" if len(new) == 1 else "认不出的装备"
+            out.results.append(f"{text}({item.name}+{target.name}):合成了 {product};装备栏现在是 {format_items(after)}")
             return max(a.item, a.onto)
         # 装备给角色
         src = (a.zone, a.index - 1)
@@ -381,11 +428,24 @@ class PrepareExecutor:
             out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
             out.observe = True
             return None
+        if _lost(before, after) not in (None, Counter({item.name: 1})):
+            lost = "、".join(n for n in _lost(before, after).elements()) or "?"
+            out.results.append(f"{text}:装备栏少掉的不是 {item.name}(少了 {lost}),可能装错了;"
+                               f"装备栏现在是 {format_items(after)}")
+            out.observe = True
+            return None
         who = occupied.get(src, "") if occupied is not None else ""
         out.results.append(f"{text}:{item.name} 给了 {who or slot_text(a.zone, a.index)}")
         if who and item.name:
             out.equipped.append((who, item.name))
         return a.item
+
+
+def _lost(before: list[Item], after: list[Item]) -> Counter | None:
+    """装备栏少了哪些装备(按名字);有认不出的格子时没法比,返回 None。"""
+    if any(i.name is None for i in before + after):
+        return None
+    return Counter(i.name for i in before) - Counter(i.name for i in after)
 
 
 def _shift(pending: list[Action], removed: int) -> None:
