@@ -17,6 +17,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
 from PIL import Image
 
 COL_X = 1845          # 第一列格子中心(像素)
@@ -31,11 +32,15 @@ MIN_SCORE = 0.5
 MIN_GAP = 0.1         # 第一名要比第二名(不同装备)高出这么多,才算认得出
 CONFIRM = Path(__file__).resolve().parents[1] / "assets" / "equipment" / "compose-confirm.png"
 PRIVILEGE = "·特权"
-# 格子(70x70)里 V 所在的右下角。原先是 (48,46,69,69),一直取到格子最边上的那两行/列,而装备格子自带
-# 一圈亮色描边——合成出来的普通进阶装备因此被误判成「·特权(效果翻倍)」(2026-11-16 实机:冷笑话引擎)。
-# 现在两边各缩进 3 像素避开描边,门槛也按 V 的实际大小收紧。
-V_BOX = (51, 49, 66, 66)
-V_MIN_PIXELS = 40          # 比官方图标多出这么多亮色像素才算有 V【待核实:还没有实机特权装备校准过】
+# 特权版和普通版的官方图标是同一张图,区别只在格子外面套的那层边框(维护者 2026-11-16 从活动页的
+# card-border-*.svg 看出来):特权边框的右下角多一个白色 V,普通边框没有。样张存在 assets/borders/,
+# 见那里的 README。V 是矢量图形,直接按它的形状做掩码去比,比"数多出来的亮色像素"稳得多——图标自己的
+# 白高光、模板一两个像素的错位都不会再凑够门槛。下面是特权边框(44 视口)里那个白色 V 的路径,按 70x70 等比换算。
+V_PATH = ((30.9053, 30.2451), (35.0544, 39.1594), (39.3274, 30.2451), (41.833, 30.2451),
+          (36.356, 41.7632), (33.7529, 30.2451))
+V_SVG = 44.0               # 上面的路径用的视口边长
+V_WHITE = 195              # V 是纯白(V 的渲染带阴影,留一点余量);边框的渐变色达不到这个亮度
+V_HIT = 0.5                # 掩码里这么多比例的像素够白,就算有 V【待核实:还没有实机特权装备样张校准】
 
 
 def family(name: str) -> str:
@@ -105,36 +110,32 @@ class EquipmentReader:
         return ranked[0][1], ranked[0][0], ranked[0][2]
 
     @staticmethod
-    def has_v(cell: np.ndarray, where: tuple) -> bool:
-        """右下角比官方图标同一位置多出来的亮色像素(V 是白色或浅蓝色)。
+    def has_v(cell: np.ndarray, where: tuple = ()) -> bool:
+        """格子右下角有没有那个白色 V(特权版边框的标记)。
 
-        模板匹配会有一两个像素的错位,图标自身的亮边就会被算成「多出来的」,所以贴参考图时在 ±2 像素里
-        取最优对齐,再统计;统计区域也缩进过,不含格子的描边。
+        按 card-border-5-b 里 V 的矢量形状生成掩码,看掩码覆盖的地方够不够白;边框本身是渐变(青蓝或金色),
+        达不到 V 的白度,所以描边不会再被算进去(原来正是这样把普通装备判成特权的)。
+        边框可能没完全铺满格子,掩码在 ±3 像素内平移取最好的一次。
         """
-        t, (lx, ly) = where
-        best = None
-        for dx in (-2, -1, 0, 1, 2):
-            for dy in (-2, -1, 0, 1, 2):
-                n = EquipmentReader._v_pixels(cell, t, (lx + dx, ly + dy))
-                best = n if best is None or n < best else best
-        return (best or 0) >= V_MIN_PIXELS
+        mask = EquipmentReader._v_mask(cell.shape[:2])
+        white = cell.min(axis=2) >= V_WHITE
+        total = float(mask.sum())
+        if not total:
+            return False
+        for dx in range(-4, 5):                     # 边框不一定完全铺满格子,平移掩码找最好的一次
+            for dy in range(-4, 5):
+                m = np.roll(np.roll(mask, dy, axis=0), dx, axis=1)
+                if float((white & m).sum()) / total >= V_HIT:
+                    return True
+        return False
 
     @staticmethod
-    def _v_pixels(cell: np.ndarray, t: np.ndarray, where: tuple) -> int:
-        x0, y0, x1, y1 = V_BOX
-        lx, ly = where
-        corner = cell[y0:y1, x0:x1].astype(np.int16)
-        ref = np.zeros_like(corner)
-        th, tw = t.shape[:2]
-        ox0, oy0 = max(x0, lx), max(y0, ly)          # 官方图标和这个角重叠的部分
-        ox1, oy1 = min(x1, lx + tw), min(y1, ly + th)
-        if ox1 > ox0 and oy1 > oy0:
-            ref[oy0 - y0:oy1 - y0, ox0 - x0:ox1 - x0] = t[oy0 - ly:oy1 - ly, ox0 - lx:ox1 - lx]
-
-        def bright(a: np.ndarray) -> np.ndarray:
-            return (a.min(axis=2) >= 170) & (a.max(axis=2) >= 200)
-
-        return int((bright(corner) & ~bright(ref)).sum())
+    def _v_mask(size: tuple[int, int]) -> np.ndarray:
+        h, w = size
+        k = w / V_SVG
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).polygon([(x * k, y * k) for x, y in V_PATH], fill=255)
+        return np.asarray(mask) > 0
 
     def read(self, image: Image.Image) -> list[Item]:
         """从第 1 格往后读,连续两格认不出(空格)就停。"""

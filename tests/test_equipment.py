@@ -261,3 +261,20 @@ def test_role_description_has_position_and_carry_stats(tmp_path):
     con.close()
     text = NameIndex(path).link(["开拓者"])[0].text
     assert "定位 辅助" in text and "「人气主播」〔辅助〕" in text and "出现在 1 篇的最终阵容,其中 0 篇是主 C" in text
+
+
+def test_privilege_detected_by_v_shape_not_bright_pixels():
+    """特权判定按 card-border-5-b 里那个白色 V 的形状做掩码:边框的渐变色不算(维护者 2026-11-16 发现
+    特权只是套了一层带 V 的边框,图标本体和普通版同一张)。"""
+    import numpy as np
+
+    from cwagent.vision.equipment import EquipmentReader
+
+    cell = np.zeros((70, 70, 3), np.uint8)
+    cell[EquipmentReader._v_mask((70, 70))] = 255          # 画一个白 V
+    assert EquipmentReader.has_v(cell)
+    assert not EquipmentReader.has_v(np.zeros((70, 70, 3), np.uint8))
+    for border in ((0x34, 0xEA, 0xE5), (0xFE, 0xE1, 0x8C)):   # 边框的青蓝、金色渐变
+        tinted = np.zeros((70, 70, 3), np.uint8)
+        tinted[EquipmentReader._v_mask((70, 70))] = border
+        assert not EquipmentReader.has_v(tinted)
