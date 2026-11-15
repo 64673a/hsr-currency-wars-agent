@@ -31,8 +31,11 @@ MIN_SCORE = 0.5
 MIN_GAP = 0.1         # 第一名要比第二名(不同装备)高出这么多,才算认得出
 CONFIRM = Path(__file__).resolve().parents[1] / "assets" / "equipment" / "compose-confirm.png"
 PRIVILEGE = "·特权"
-V_BOX = (48, 46, 69, 69)   # 格子(70x70)里 V 所在的右下角(x0, y0, x1, y1)
-V_MIN_PIXELS = 18          # 比官方图标多出这么多亮色像素就算有 V【待核实】
+# 格子(70x70)里 V 所在的右下角。原先是 (48,46,69,69),一直取到格子最边上的那两行/列,而装备格子自带
+# 一圈亮色描边——合成出来的普通进阶装备因此被误判成「·特权(效果翻倍)」(2026-11-16 实机:冷笑话引擎)。
+# 现在两边各缩进 3 像素避开描边,门槛也按 V 的实际大小收紧。
+V_BOX = (51, 49, 66, 66)
+V_MIN_PIXELS = 40          # 比官方图标多出这么多亮色像素才算有 V【待核实:还没有实机特权装备校准过】
 
 
 def family(name: str) -> str:
@@ -103,9 +106,23 @@ class EquipmentReader:
 
     @staticmethod
     def has_v(cell: np.ndarray, where: tuple) -> bool:
-        """右下角比官方图标同一位置多出来的亮色像素(V 是白色或浅蓝色)。"""
+        """右下角比官方图标同一位置多出来的亮色像素(V 是白色或浅蓝色)。
+
+        模板匹配会有一两个像素的错位,图标自身的亮边就会被算成「多出来的」,所以贴参考图时在 ±2 像素里
+        取最优对齐,再统计;统计区域也缩进过,不含格子的描边。
+        """
         t, (lx, ly) = where
+        best = None
+        for dx in (-2, -1, 0, 1, 2):
+            for dy in (-2, -1, 0, 1, 2):
+                n = EquipmentReader._v_pixels(cell, t, (lx + dx, ly + dy))
+                best = n if best is None or n < best else best
+        return (best or 0) >= V_MIN_PIXELS
+
+    @staticmethod
+    def _v_pixels(cell: np.ndarray, t: np.ndarray, where: tuple) -> int:
         x0, y0, x1, y1 = V_BOX
+        lx, ly = where
         corner = cell[y0:y1, x0:x1].astype(np.int16)
         ref = np.zeros_like(corner)
         th, tw = t.shape[:2]
@@ -117,7 +134,7 @@ class EquipmentReader:
         def bright(a: np.ndarray) -> np.ndarray:
             return (a.min(axis=2) >= 170) & (a.max(axis=2) >= 200)
 
-        return int((bright(corner) & ~bright(ref)).sum()) >= V_MIN_PIXELS
+        return int((bright(corner) & ~bright(ref)).sum())
 
     def read(self, image: Image.Image) -> list[Item]:
         """从第 1 格往后读,连续两格认不出(空格)就停。"""
