@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ctypes
-import math
 import time
 
 from ..capture import CaptureError, Frame
@@ -176,30 +175,15 @@ class WindowsDevice:
         finally:
             _send(_mouse(BUTTONS["left"][1]))
 
-    def drag_path(self, points: list[tuple[float, float]], *, duration: float = 1.5) -> None:
-        """按住左键沿折线移动(经过每个点),用于一笔划过所有晶矿。"""
-        self._guard()
-        pts = [self._screen_point(x, y) for x, y in points]
-        self._move_abs(*pts[0])
-        time.sleep(0.05)
-        _send(_mouse(BUTTONS["left"][0]))
-        try:
-            time.sleep(0.1)
-            per = duration / max(1, len(pts) - 1)
-            for (ax, ay), (bx, by) in zip(pts, pts[1:]):
-                steps = max(2, int(math.hypot(bx - ax, by - ay) / 25))
-                for i in range(1, steps + 1):
-                    self._move_abs(round(ax + (bx - ax) * i / steps), round(ay + (by - ay) * i / steps))
-                    time.sleep(per / steps)
-            time.sleep(0.1)
-        finally:
-            _send(_mouse(BUTTONS["left"][1]))
-
     def pad_enter(self) -> bool:
         """推一下虚拟手柄的摇杆,让游戏切到手柄界面。没有手柄驱动时返回 False。"""
         self._guard()
         self._screen_point(0.5, 0.5)   # 确保游戏在前台
         return self.pad.nudge()
+
+    def pad_press(self, button: str) -> None:
+        self._guard()
+        self.pad.press(button)
 
     def pad_press_triggers(self) -> None:
         self._guard()

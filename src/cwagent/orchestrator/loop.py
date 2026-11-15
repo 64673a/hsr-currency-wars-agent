@@ -32,7 +32,7 @@ from ..vision.hud import read_hud
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
 from . import difficulty as difficulty_select
-from .macros import open_crystals, survey_plane
+from .macros import find_orbs, open_crystals, survey_plane
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
 from .prepare import PrepareExecutor, PrepareResult
@@ -62,6 +62,7 @@ STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人�
 DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
 ENV_GUIDES = 2             # 投资环境界面每个环境列几篇攻略
 READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
+CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
 BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|\d+(/\d+)*)$|备战席已满")
@@ -144,7 +145,8 @@ class Runner:
         self._results: list[str] = []     # 上一组操作的执行结果,下一轮交给模型
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
-        self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader)
+        self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
+                                       before_ready=self._crystals_before_ready)
         self.guides = guides
         self._guide: Guide | None = None                       # 当前参考的攻略
         self._guide_pinned = False                             # 模型自己选的攻略不再自动换
@@ -164,8 +166,9 @@ class Runner:
         self._curve: list[tuple[int | None, int | None]] = []  # 当前这场战斗的(剩余行动值, 进度)采样
         self._curve_node: str | None = None
         self._surveyed: str | None = None                      # 已经收集过节点的位面
-        self._crystal_tries: dict[str, int] = {}               # 每个节点开晶矿的次数
-        self._crystal_ok = True                                # 划开晶矿没效果两次后就不再尝试
+        self._crystal_fails: dict[str, int] = {}               # 每个节点开晶矿连续没开成的次数(到 CRYSTAL_TRIES 就放过这个节点)
+        self._crystal_full: tuple[str, int] | None = None      # (节点, 剩几个):备战席满了,晶矿里的角色放不下
+        self._ready_checked: str | None = None                 # 出战前已经检查过晶矿的节点
         self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
         self._difficulty_tries = 0                             # 程序自动选难度试了几次
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
@@ -424,17 +427,18 @@ class Runner:
         return None
 
     def macros(self, image, boxes: list[TextBox], node: str | None) -> str | None:
-        """备战界面先做的固定流程(先确保商店收起)。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
+        """备战回合开始先做的固定流程(先确保商店收起):新位面先收集节点序列,再开晶矿(M7A 的时机:
+        每个备战回合一开始、买东西之前先开)。做了什么就返回说明(这一步不再问模型),什么都没做返回 None。"""
         if not node:
             return None
         plane = node.split("-")[0]
-        tries = self._crystal_tries.get(node, 0)
-        if plane == self._surveyed and not (self._crystal_ok and tries < 2):
+        full = self._crystal_full is not None and self._crystal_full[0] == node   # 等模型腾出备战席,出战前再开
+        if plane == self._surveyed and (full or self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES):
             return None   # 没有要做的
         ready = self.ready_prepare()
         if ready is None:
             return None
-        image, boxes = ready[0].image, ready[1]
+        image = ready[0].image
         if plane != self._surveyed:
             self._surveyed = plane
             lines = survey_plane(self.device, self.ocr, self.log)
@@ -442,16 +446,46 @@ class Runner:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             return "收集本位面的节点序列"
-        if self._crystal_ok and tries < 2:
-            opened = open_crystals(self.device, image, self.log, ocr=self.ocr, debug=self.trace.root / "debug")
-            if opened is None:
+        return self._open_crystals(image)
+
+    def _open_crystals(self, image) -> str | None:
+        """开晶矿,返回结果说明;没有晶矿返回 None。没开成只记在当前节点上,下个节点照常再开
+        (原来累计失败 3 次就整局不开,一局里大半晶矿都没开)。"""
+        node = self._node or ""
+        if self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES:
+            return None
+        result = open_crystals(self.device, image, self.log, ocr=self.ocr, debug=self.trace.root / "debug")
+        if result is None:
+            self._crystal_full = None
+            return None
+        if result.opened:
+            self._crystal_fails.pop(node, None)
+        elif not result.full:
+            self._crystal_fails[node] = self._crystal_fails.get(node, 0) + 1
+        self._crystal_full = (node, result.after) if result.full else None
+        return result.text()
+
+    def _crystals_before_ready(self) -> str | None:
+        """点出战前(商店已收起)再看一次晶矿:回合中途拿到的、开头因为备战席满了没开成的。
+        开到了东西就先不出战,让模型看看新局面;每个节点只拦一次,免得来回卡住。"""
+        node = self._node
+        if not node or self._ready_checked == node:
+            return None
+        self._ready_checked = node
+        try:
+            if not find_orbs(self.device.grab().image):
+                self._crystal_full = None
                 return None
-            self._crystal_tries[node] = tries + 1
-            if not opened and sum(self._crystal_tries.values()) >= 3:
-                self._crystal_ok = False
-                self.log("划开晶矿没有效果,本局不再尝试")
-            return "划开晶矿" if opened else "尝试划开晶矿(没变化)"
-        return None
+            ready = self.ready_prepare()
+            did = self._open_crystals(ready[0].image) if ready else None
+        except UserInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 - 开晶矿出错不耽误出战
+            self.log(f"出战前开晶矿出错:{type(e).__name__}: {e}")
+            return None
+        if did is None or did.startswith("尝试"):
+            return None
+        return f"出战前{did}(先没出战,看看拿到了什么;没有要做的就再 ready)"
 
     def reflex(self, screen: str, image, boxes: list[TextBox], record: dict, sig: set[str]) -> list[Action] | None:
         """不需要模型的界面:返回要做的操作;需要模型判断时返回 None。"""
@@ -584,6 +618,10 @@ class Runner:
             hints = PREPARE_LAYOUT if opening else ""
             if find(boxes, "^幕后茶歇$", region=(0.85, 0.64, 0.15, 0.1)):
                 hints += "\n- 这个节点是「幕后茶歇」:右侧按钮是「幕后茶歇」而不是「出战」,ready 会进入茶歇。"
+            full = self._crystal_full
+            if full and full[0] == self._node:
+                hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席,"
+                          "出战前程序会再开一次。")
             if find(boxes, "前置流程未结束"):
                 hints += "\n- 界面提示「前置流程未结束」:可能还有没做完的流程(例如幕后茶歇里的选择),先回去做完。"
             try:

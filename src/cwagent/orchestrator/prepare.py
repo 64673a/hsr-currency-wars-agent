@@ -58,11 +58,13 @@ def shift(deployed: str, delta: int) -> str:
 
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
-                 sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None):
+                 sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None,
+                 before_ready: Callable[[], str | None] | None = None):
         self.device = device
         self.ocr = ocr
         self.equipment = equipment
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
+        self.before_ready = before_ready   # 点出战前(商店已收起)先做的事;返回说明时不出战,让模型先看新局面
         self.sleep = sleep or (lambda s: time.sleep(s))
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
         self.frame = None         # 最近一次截图
@@ -234,6 +236,11 @@ class PrepareExecutor:
                     _shift(pending, done)
                 elif a.type == "ready":
                     boxes = self.set_shop(out, boxes, False)
+                    note = self.before_ready() if self.before_ready else None
+                    if note:
+                        out.results.append(note)
+                        out.observe = True
+                        break
                     self._click(out, *READY_BUTTON)
                     self.sleep(1.0)
                     out.results.append(text)

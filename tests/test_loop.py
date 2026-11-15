@@ -178,7 +178,7 @@ def test_prepare_semantic_actions(tmp_path):
                                                                       to_zone="front", to_index=1),
                                     Action(type="ready")]]})
     runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
-    runner._surveyed, runner._crystal_ok = "1", False     # 跳过收集节点、开晶矿
+    runner.macros = lambda *a: None     # 跳过收集节点、开晶矿
     runner.run(RunOptions(max_steps=3))
     assert brain.calls == [("prepare", "opening", 1)]
     kinds = [a[0] for a in sim.actions]
@@ -276,7 +276,7 @@ def test_stuck_node_warns_then_pauses(tmp_path):
     brain = Brain({"prepare": [[Action(type="ready")]] * 10,
                    "tea_break": [[Action(type="click_text", text="返回备战界面")]] * 10})
     runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
-    runner._surveyed, runner._crystal_ok = "1", False
+    runner.macros = lambda *a: None
     assert runner.run(RunOptions(max_steps=30)) == "pause"
     assert [c for c in brain.calls if c[0] == "prepare"] == [("prepare", "opening", i) for i in (1, 3, 5, 7)]
     assert "第 3 次进入备战回合" in brain.hints_all[4] and "第 3 次" not in brain.hints_all[2]
@@ -307,3 +307,38 @@ def test_ready_prepare_waits_for_popup(tmp_path):
     assert overlay_texts(FakeOcr(sim)(sim.grab().image)) == []
     from cwagent.vision.ocr import TextBox as TB
     assert overlay_texts([TB("团队规模提升", 0.5, 0.18, 0.1, 0.03, 0.9), TB("后台区域", 0.5, 0.57, 0.1, 0.03, 0.9)]) == ["团队规模提升"]
+
+
+def test_crystal_timing(tmp_path, monkeypatch):
+    """开晶矿的时机(参考 M7A):没开成只放过当前节点;备战席满了交给模型腾位置,出战前再开一次;出战前每个节点只拦一次。"""
+    import cwagent.orchestrator.loop as loop
+    from cwagent.orchestrator.macros import Crystals
+
+    sim = Sim({"prep": [("备战阶段", 0.12, 0.04)]}, "prep", lambda s, a: None)
+    runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
+    results = []
+    monkeypatch.setattr(loop, "open_crystals", lambda *a, **k: results.pop(0))
+    monkeypatch.setattr(runner, "ready_prepare", lambda: (sim.grab(), []))
+    runner._surveyed = "1"
+
+    runner._node = "1-8"
+    results[:] = [Crystals(1, 1, "手柄"), Crystals(1, 1, "鼠标")]
+    assert runner.macros(None, [], "1-8") == "尝试划开晶矿(没变化)"
+    assert runner.macros(None, [], "1-8") == "尝试划开晶矿(没变化)"
+    assert runner.macros(None, [], "1-8") is None                  # 这个节点放过
+    runner._node = "1-9"                                             # 下个节点照常再开(原来整局都不开了)
+    results[:] = [Crystals(8, 0, "手柄")]
+    assert runner.macros(None, [], "1-9") == "划开晶矿(8 个)"
+
+    runner._node = "1-7"
+    results[:] = [Crystals(3, 2, "手柄", full=True)]
+    assert "备战席满了" in runner.macros(None, [], "1-7")
+    assert runner.macros(None, [], "1-7") is None                  # 不在回合开头反复试,等模型腾位置
+    hints, _ = runner._hints("prepare", sim.grab(), [], {"step": 1}, False)
+    assert "晶矿还剩 2 个没开" in hints
+
+    monkeypatch.setattr(loop, "find_orbs", lambda image: [(1400, 300, 28)] * 2)
+    results[:] = [Crystals(2, 0, "手柄")]
+    assert runner._crystals_before_ready().startswith("出战前划开晶矿(2 个)")
+    assert runner._crystals_before_ready() is None                 # 同一节点只拦一次
+    assert runner._crystal_full is None

@@ -4,7 +4,7 @@
 之后动一下鼠标,游戏热切换回键鼠界面(维护者告知,2026-11-14 实机验证:4 个晶矿一次全开)。
 用摇杆而不是按键来触发切换,避免误触界面上的操作。
 
-需要 ViGEmBus 驱动。没有驱动时 available() 为 False,开晶矿退回鼠标划动;
+需要 ViGEmBus 驱动。没有驱动时 available() 为 False,开晶矿改用鼠标逐个划;
 驱动可以用 `cwagent gamepad setup` 安装(安装包随 vgamepad 一起发布)。
 """
 
@@ -102,11 +102,18 @@ class Gamepad:
         pad.update()
         time.sleep(1.5)
 
-    def open_crystals(self) -> bool:
-        if not self.nudge():
-            return False
-        self.press_triggers()
-        return True
+    def press(self, button: str) -> None:
+        """按一下手柄按键(A、B、X、Y)。在手柄界面里 B 是「返回」,可以收起商店。"""
+        import vgamepad as vg
+
+        pad = self._pad
+        code = getattr(vg.XUSB_BUTTON, f"XUSB_GAMEPAD_{button.upper()}")
+        pad.press_button(button=code)
+        pad.update()
+        time.sleep(0.15)
+        pad.release_button(button=code)
+        pad.update()
+        time.sleep(1.0)
 
     def close(self) -> None:
         self._pad = None   # vgamepad 在对象释放时拔掉手柄
