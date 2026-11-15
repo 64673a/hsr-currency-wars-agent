@@ -25,6 +25,7 @@ const KINDS = [
   { kind: 'portals', name: '投资环境' },
   { kind: 'spotlights', name: '主角光环' },
   { kind: 'companions', name: '奇遇' },
+  { kind: 'affixes', name: '敌人词条' },
   { kind: 'guides', name: '指引卡' },
   { kind: 'memories', name: '记忆' },
 ];

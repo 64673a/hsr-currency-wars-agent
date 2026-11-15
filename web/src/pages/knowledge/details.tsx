@@ -50,6 +50,8 @@ export function RowBadges({ kind, it }: { kind: string; it: Item }) {
       )}
       {it.unused && <Badge size="sm">本赛季未使用</Badge>}
       {kind === 'companions' && !it.verified && <Badge size="sm">未核实</Badge>}
+      {kind === 'affixes' && it.origin && <Badge size="sm" color={it.origin === '公共' ? 'teal' : undefined}>{it.origin}</Badge>}
+      {kind === 'affixes' && it.seen_count > 1 && <Badge size="sm">{it.seen_count} 次</Badge>}
     </>
   );
 }

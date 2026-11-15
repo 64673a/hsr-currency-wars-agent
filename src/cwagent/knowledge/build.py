@@ -38,9 +38,10 @@ def effect_tags(desc: str) -> list[str]:
     return [tag for tag, pattern in EFFECT_RULES if re.search(pattern, desc)]
 
 
-KINDS = ("roles", "traits", "equipment", "augments", "portals", "spotlights", "companions", "guides")
+KINDS = ("roles", "traits", "equipment", "augments", "portals", "spotlights", "companions", "affixes", "guides")
 KIND_NAMES = {"roles": "角色", "traits": "羁绊", "equipment": "装备", "augments": "投资策略",
-              "portals": "投资环境", "spotlights": "主角光环", "companions": "奇遇", "guides": "指引卡"}
+              "portals": "投资环境", "spotlights": "主角光环", "companions": "奇遇", "affixes": "敌人词条",
+              "guides": "指引卡"}
 
 
 @dataclass
@@ -74,7 +75,8 @@ def _int(v: Any, default: int = 0) -> int:
 
 
 def build(config: dict[str, Any], lineups: list[dict[str, Any]],
-          companions: list[dict[str, Any]] | None = None) -> Knowledge:
+          companions: list[dict[str, Any]] | None = None,
+          affixes: list[dict[str, Any]] | None = None) -> Knowledge:
     props = {p["property_type"]: p["name"] for p in config.get("role_property_list", []) if p.get("name")}
 
     def c(text: str | None) -> str:
@@ -284,6 +286,17 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
                                                 "verified": data["verified"]},
                                        sort=i, search=" ".join([data["name"], data["type"], desc, *flow_notes])))
 
+    # ---------------------------------------------------------------- 敌人词条(对局中收集位面节点时点开读到的)
+    affix_entries = []
+    for i, a in enumerate(affixes or []):
+        desc = a.get("desc") or ""
+        data = {"id": str(i + 1), "name": a.get("name", ""), "desc": desc, "origin": a.get("origin", ""),
+                "source": a.get("source", ""), "seen_count": int(a.get("seen_count") or 0),
+                "last_seen": a.get("last_seen", "")}
+        affix_entries.append(Entry(data["id"], data["name"], data,
+                                   summary={"desc": desc, "origin": data["origin"]},
+                                   sort=i, search=" ".join([data["name"], desc])))
+
     # ---------------------------------------------------------------- 指引卡
     guides = []
     for lineup in lineups:
@@ -303,7 +316,8 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
     return Knowledge(
         meta=meta,
         entries={"roles": roles, "traits": traits, "equipment": equipment, "augments": augments,
-                 "portals": portals, "spotlights": spotlights, "companions": companion_entries, "guides": guides},
+                 "portals": portals, "spotlights": spotlights, "companions": companion_entries,
+                 "affixes": affix_entries, "guides": guides},
         trait_layers=trait_layers, recipes=recipes, icons=icons, warnings=warnings,
     )
 

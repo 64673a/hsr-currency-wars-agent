@@ -38,6 +38,22 @@ class AffixBook:
                 out[d["name"]] = d["desc"]
         return out
 
+    def list(self) -> list[dict[str, object]]:
+        """公共档案 + 本机档案(按名字去重,公共的说明优先),带来源、遇到次数,给知识库和网页看。"""
+        out: dict[str, dict[str, object]] = {}
+        for d in _read(self.public):
+            out[d["name"]] = {"name": d["name"], "desc": d.get("desc") or "", "origin": "公共",
+                              "source": d.get("source") or ""}
+        for d in _read(self.local):
+            item = out.setdefault(d["name"], {"name": d["name"], "desc": d.get("desc") or "", "origin": "本机",
+                                              "source": ""})
+            if not item.get("desc"):
+                item["desc"] = d.get("desc") or ""
+                item["origin"] = "本机"
+            item["seen_count"] = int(d.get("seen_count") or 0)
+            item["last_seen"] = d.get("last_seen") or ""
+        return list(out.values())
+
     def get(self, name: str) -> str:
         return self.all().get(name, "")
 

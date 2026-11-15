@@ -45,6 +45,13 @@ def load_companions() -> list[dict]:
     return CompanionBook().all()
 
 
+def load_affixes() -> list[dict]:
+    """公共档案 + 本机读到的敌人词条。"""
+    from .affixes import AffixBook
+
+    return AffixBook().list()
+
+
 def export_yaml(knowledge: Knowledge, out_dir: Path) -> None:
     """每类条目导出一个 YAML 文件,便于人工查看和比较版本差异。"""
     tmp = out_dir.with_name(out_dir.name + ".tmp")
@@ -148,7 +155,7 @@ def sync(*, max_lineups: int = 300, interval: float = 1.0, templates: bool = Tru
             api.close()
 
     report("build", "整理数据")
-    knowledge = build(config, lineups, load_companions())
+    knowledge = build(config, lineups, load_companions(), load_affixes())
     report("write", "写入知识库")
     db.write(db_path or paths.knowledge_db(), knowledge, {"config": config, "lineups": lineups})
     export_yaml(knowledge, export_dir or paths.export_dir())
