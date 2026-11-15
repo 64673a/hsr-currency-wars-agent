@@ -200,3 +200,17 @@ def test_tea_break_screens():
     # 茶歇节点的备战界面仍是备战(右侧按钮是「幕后茶歇」)
     assert classify(boxes("备战阶段", "返回幕后茶歇", "1-8", "幕后茶歇", "商店")) == "prepare"
     assert role_of("tea_break") == "chooser"
+
+
+def test_shop_state_free_refresh():
+    """「免费刷新」也是合法的刷新标签(M7A 的 SHOP_REFRESH_LABELS 就是这两个)。
+    原来只认「刷新」,免费刷新时判定不出来,商店开着被当成收起着,出战点打在商店面板上(2026-11-16 实机)。"""
+    from cwagent.vision.shop import shop_state
+
+    def boxes(*items):
+        return [TextBox(t, x, y, 0.05, 0.02, 0.9) for t, x, y in items]
+
+    assert shop_state(boxes(("收起", 0.845, 0.908), ("免费刷新", 0.842, 0.450))) is True
+    assert shop_state(boxes(("收起", 0.845, 0.908), ("刷新", 0.842, 0.451))) is True
+    assert shop_state(boxes(("免费刷新", 0.842, 0.450))) is True     # 只认到一半也算开着
+    assert shop_state(boxes(("商店", 0.845, 0.909))) is False

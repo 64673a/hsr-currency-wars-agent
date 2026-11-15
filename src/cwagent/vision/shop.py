@@ -16,17 +16,29 @@ HALF_CARD = 0.065
 NAME = r"[\u3400-\u9fffA-Za-z&＆·•.★☆]{2,18}(?:\d{1,3})?"   # M7A 的角色名写法
 
 
+# 刷新按钮上的字:有免费刷新时写的是「免费刷新」。原来只认「刷新」两个字,免费刷新时判定不出来,
+# 商店明明开着却被当成收起着,出战/选择主角就点在了商店面板上(2026-11-16 实机,1-9 连着 4 轮推进不了)。
+# M7A 的 SHOP_REFRESH_LABELS 也是这两个:'刷新'、'免费刷新'。
+REFRESH_LABEL = "刷新"
+
+
 def shop_state(boxes: list[TextBox]) -> bool | None:
     """商店是否展开:True / False;被角色详情等遮住、看不出来时返回 None。
 
-    展开时右下按钮是「收起」、右侧有「刷新」、中间有一行抽到各费角色的概率(2026-11-14 实测);
-    收起时右下按钮是「商店」。
+    照 M7A 的判法:右下角按钮是「收起」**并且**刷新区有刷新标签,才算展开;收起时右下按钮是「商店」。
+    只认到一半时宁可算展开(多收一次没损失),漏判会把点击打在商店面板上。
     """
-    if (find(boxes, "^收起$", region=(0.78, 0.86, 0.14, 0.08)) or find(boxes, "^刷新$", region=(0.78, 0.40, 0.12, 0.10))
-            or sum(1 for b in boxes if 0.33 <= b.y <= 0.39 and 0.45 <= b.x <= 0.75 and re.fullmatch(r"\d{1,2}%", b.text)) >= 3):
+    folded = find(boxes, "^收起$", region=(0.78, 0.86, 0.14, 0.08))          # 右下角按钮
+    refresh = find(boxes, REFRESH_LABEL, region=(0.78, 0.40, 0.12, 0.10))     # 右侧「刷新」/「免费刷新」
+    if folded is not None and refresh is not None:
         return True
     if find(boxes, "^商店$", region=(0.78, 0.86, 0.14, 0.08)):
         return False
+    if folded is not None or refresh is not None:
+        return True
+    # 角色详情把按钮和刷新都盖住时,中间那行「各费出现概率」还露着,也用得上
+    if sum(1 for b in boxes if 0.33 <= b.y <= 0.39 and 0.45 <= b.x <= 0.75 and re.fullmatch(r"\d{1,2}%", b.text)) >= 3:
+        return True
     return None
 
 

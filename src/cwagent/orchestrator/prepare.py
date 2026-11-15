@@ -27,6 +27,7 @@ from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop, shop_state
 
 SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位置,1920x1080 实测)
+BOARD_BLANK = (0.500, 0.550)      # 棋盘中间空白:点这里也能关掉商店(trail-cli 的 SHOP_CLOSE_POINT),按钮点不动时用它
 READY_BUTTON = (0.946, 0.694)     # 「出战」,商店收起时
 REFRESH_REGION = (0.78, 0.40, 0.12, 0.10)          # 商店右侧的「刷新」按钮(2026-11-16 实机约 0.842, 0.451)
 REFRESH_PRICE_REGION = (0.80, 0.455, 0.10, 0.075)  # 「刷新」下面那个价格(约 0.852, 0.492)
@@ -97,17 +98,26 @@ class PrepareExecutor:
         out.marks.append({"type": "click", "x": x, "y": y})
 
     def set_shop(self, out: PrepareResult, boxes: list[TextBox], want_open: bool) -> list[TextBox]:
-        """打开或收起商店,等动画结束(展开时等卡片名字连续两次读到一样)。点了没反应再点一次。"""
+        """打开或收起商店,等动画结束(展开时等卡片名字连续两次读到一样)。
+
+        点哪里:打开点右下按钮;关闭先点右下「收起」,还关不掉就点棋盘中间空白——trail-cli 关商店就是点
+        棋盘中间 (0.5, 0.55),不依赖按钮位置。每步都重新读界面确认,不靠上一轮的猜测。
+        """
         if shop_state(boxes) is want_open:
             self.shop = want_open
             return boxes
-        for _ in range(2):
-            self._click(out, *SHOP_BUTTON)
+        points = (SHOP_BUTTON,) if want_open else (SHOP_BUTTON, BOARD_BLANK)
+        for point in points:
+            self._click(out, *point)
             last = None
             for _ in range(6):
                 self.sleep(0.4)
                 boxes = self._look()
-                if shop_state(boxes) is not want_open:
+                state = shop_state(boxes)
+                if state is not want_open:
+                    last = None if state is None else last
+                    if state is None:
+                        continue
                     continue
                 cards = read_shop(boxes)
                 if not want_open or cards == last:
