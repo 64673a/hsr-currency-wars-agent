@@ -161,18 +161,32 @@ class EquipmentReader:
         return items
 
 
+CONFIRM_MIN = 0.7          # 模板匹配的门槛(原来 0.8;界面稍微变一点就匹配不上,合成会误报「不能合成」)
+CONFIRM_AREA = (1200, 100, 1920, 1040)   # 找 ✓ 的范围(像素):右侧一整条,原来只到 y=900
+
+
 def find_compose_confirm(image: Image.Image) -> tuple[float, float] | None:
     """合成确认框里的 ✓ 按钮(归一化坐标);没有确认框时返回 None。"""
     t = cv2.imread(str(CONFIRM))
     if t is None:
         return None
     img = _bgr(image)
-    x0, y0 = 1300, 100
-    r = cv2.matchTemplate(img[y0:900, x0:1920], t, cv2.TM_CCOEFF_NORMED)
-    _, mx, _, loc = cv2.minMaxLoc(r)
-    if mx < 0.8:
+    x0, y0, x1, y1 = CONFIRM_AREA
+    roi = img[y0:y1, x0:x1]
+    # 多尺度:界面缩放或分辨率不一样时,单一尺寸的模板会直接匹配不上(合成因此误报「不能合成」)
+    best, hit = 0.0, None
+    for scale in (0.8, 0.9, 1.0, 1.1, 1.2):
+        tt = t if scale == 1.0 else cv2.resize(t, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if tt.shape[0] >= roi.shape[0] or tt.shape[1] >= roi.shape[1]:
+            continue
+        r = cv2.matchTemplate(roi, tt, cv2.TM_CCOEFF_NORMED)
+        _, mx, _, loc = cv2.minMaxLoc(r)
+        if mx > best:
+            best, hit = mx, (loc[0], loc[1], tt.shape[1], tt.shape[0])
+    if hit is None or best < CONFIRM_MIN:
         return None
-    return (x0 + loc[0] + t.shape[1] / 2) / 1920, (y0 + loc[1] + t.shape[0] / 2) / 1080
+    lx, ly, tw, th = hit
+    return (x0 + lx + tw / 2) / 1920, (y0 + ly + th / 2) / 1080
 
 
 CANCEL_OFFSET = 115 / 1920   # ✗ 按钮在 ✓ 左边这么远(实测 1705 与 1820 像素)

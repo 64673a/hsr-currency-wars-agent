@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..brain.screen_agent import Action, action_text, slot_text
+from .. import paths
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, occupied_slots, slots
 from ..vision.boxes import CLOSE_POINT, read_panel
@@ -416,9 +417,18 @@ class PrepareExecutor:
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
             self.sleep(1.2)
-            ok = find_compose_confirm(self.device.grab().image)
+            shot = self.device.grab().image
+            ok = find_compose_confirm(shot)
             if ok is None:
-                out.results.append(f"{text}({item.name or '?'}+{target.name or '?'}):没有出现合成确认,这两件可能不能合成")
+                # 留一张现场图:是拖拽没触发、还是确认框换了样式,只能靠它判断(2026-11-16 两次合成都没确认框)
+                try:
+                    debug = paths.data_dir() / "debug"
+                    debug.mkdir(parents=True, exist_ok=True)
+                    shot.save(debug / f"compose-{time.strftime('%H%M%S')}.png")
+                except Exception:  # noqa: BLE001 - 存图失败不影响结果
+                    pass
+                out.results.append(f"{text}({item.name or '?'}+{target.name or '?'}):没有出现合成确认,"
+                                   "这两件可能不能合成(截图已存 data/debug,可用 cwagent 排查)")
                 out.observe = True
                 return None
             # 确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,最后取消,不能把它留在屏幕上

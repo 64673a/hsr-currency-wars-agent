@@ -278,3 +278,19 @@ def test_privilege_detected_by_v_shape_not_bright_pixels():
         tinted = np.zeros((70, 70, 3), np.uint8)
         tinted[EquipmentReader._v_mask((70, 70))] = border
         assert not EquipmentReader.has_v(tinted)
+
+
+def test_compose_confirm_multiscale():
+    """合成确认的 ✓ 用多尺度匹配:界面缩放一点也要认得出(2026-11-16 两次合成都没弹出确认,误报「不能合成」)。"""
+    from PIL import Image
+
+    from cwagent.vision.equipment import CONFIRM, find_compose_confirm
+
+    icon = Image.open(CONFIRM).convert("RGB")
+    for scale in (1.0, 0.85, 1.15):
+        w, h = int(icon.width * scale), int(icon.height * scale)
+        screen = Image.new("RGB", (1920, 1080), (40, 40, 60))
+        screen.paste(icon.resize((w, h)), (1800, 700))
+        at = find_compose_confirm(screen)
+        assert at is not None and at[0] > 0.9 and at[1] > 0.6
+    assert find_compose_confirm(Image.new("RGB", (1920, 1080), (40, 40, 60))) is None
