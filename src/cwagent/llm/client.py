@@ -13,6 +13,7 @@ import httpx
 from ..config import ModelEndpoint
 from . import anthropic_format, json_mode, openai_format
 from .base import LLMError, LLMResponse, Message, ToolSpec
+from .external import BRIDGE
 
 _ADAPTERS = {"openai": openai_format, "anthropic": anthropic_format}
 MAX_ERROR_BODY = 2000
@@ -53,11 +54,13 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
 
     429、5xx 和网络错误按指数退避重试;其他 4xx 直接抛出 LLMError。
     """
-    adapter = _ADAPTERS[profile.format]
     tools = tools or []
-    native = profile.tool_mode == "native"
     if isinstance(messages, str):
         messages = [Message(role="user", content=messages)]
+    if profile.format == "external":
+        return BRIDGE.complete(system, messages, tools, model=profile.model)
+    adapter = _ADAPTERS[profile.format]
+    native = profile.tool_mode == "native"
     if tools and not native:
         messages = _json_mode_messages(messages, tools)
     url, headers, body = adapter.build_request(profile, system, messages, tools if native else None)

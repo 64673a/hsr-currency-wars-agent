@@ -1,0 +1,11 @@
+# 把货币战争 agent 的 MCP 服务接进 DSH(DeepSeek Harness)。用法见同目录 README.md。
+# agent 和 DSH 不在同一台电脑上时,把 127.0.0.1 换成装游戏那台电脑的局域网 IP。
+- insert:
+    - id: mcp-cwagent
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cwagent
+        transport: streamable-http
+        # wait:没有需要判断的局面时(战斗、动画),一次工具调用最多等几秒;要小于下面的工具超时
+        url: http://127.0.0.1:8770/mcp?wait=540
+        toolCallTimeoutMs: 600000

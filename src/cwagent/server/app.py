@@ -1,11 +1,12 @@
 """后端接口(FastAPI)。设计见 docs/TECH_DESIGN.md 第 13 节。
 
-提供:状态、对局控制与记录、实时画面信令、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆。前端构建产物(web/dist)由这里托管。
+提供:状态、对局控制与记录、实时画面信令、知识库浏览与同步、厂商与模型档案管理、运行参数、记忆、外部 agent 接入(/mcp)。前端构建产物(web/dist)由这里托管。
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.routing import Route
 
 from .. import __version__, paths
 from ..config import (
@@ -30,6 +32,7 @@ from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
 from ..stream import LiveStream
 from .jobs import Job
+from .mcp import create_mcp
 from .runs import PlayController, RunStore
 
 # 知识库类别 -> 模板图标目录
@@ -100,7 +103,17 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     if sync_fn is None:
         from ..knowledge.sync import sync as sync_fn  # noqa: PLW0127
 
-    app = FastAPI(title="货币战争 agent", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    mcp_app, mcp_running = create_mcp(player)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        async with mcp_running():
+            yield
+
+    app = FastAPI(title="货币战争 agent", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json",
+                  lifespan=lifespan)
+    # 外部 agent 接入(11.9);要排在最后的网页兜底路由前面
+    app.router.routes.append(Route("/mcp", endpoint=mcp_app))
 
     def load_config():
         try:

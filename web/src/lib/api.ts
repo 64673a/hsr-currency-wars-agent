@@ -155,7 +155,11 @@ export interface PlayStatus {
   result: string | null;
   error: string | null;
   log: string[];
+  agent: { active: boolean; waiting: boolean; turn: number; ended: string | null; idle_s: number | null };
 }
+
+/** 外部 agent(通过 MCP 连上来的 DSH、Claude Code 等)在网页上的模型名,和后端 llm/external.py 一致 */
+export const EXTERNAL_AGENT = '外部 agent';
 
 export interface RunSummary {
   id: string;

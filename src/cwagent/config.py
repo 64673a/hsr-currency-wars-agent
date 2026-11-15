@@ -73,10 +73,10 @@ class ModelEndpoint(BaseModel):
     """厂商与模型档案合并后的完整调用参数,LLM 接入层只认这个。"""
 
     name: str
-    format: ApiFormat
-    base_url: str
+    format: ApiFormat | Literal["external"]   # external:交给通过 MCP 连上来的 agent(11.9)
+    base_url: str = ""
     api_key: str = ""
-    model: str
+    model: str = ""
     max_tokens: int | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
     extra_headers: dict[str, str] = Field(default_factory=dict)

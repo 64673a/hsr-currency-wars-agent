@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ConfigStore
+from ..llm.external import BRIDGE, EXTERNAL
 
 RUN_ID = re.compile(r"^[\w.-]+$")
 LIVE_SECONDS = 90  # steps.jsonl 在这段时间内有写入、且没有结束时间,就算进行中
@@ -159,7 +160,7 @@ class PlayController:
         with self._lock:
             state = {**self._state, "log": list(self._state["log"])}
         return {"available": self.device_factory is not None, "running": self.running, "hotkey": self._hotkey,
-                "stopping": self.running and self._stop.is_set(), **state}
+                "stopping": self.running and self._stop.is_set(), "agent": BRIDGE.status(), **state}
 
     def start(self, *, model: str | None = None, difficulty: str | None = None, max_steps: int = 700,
               rounds: int = 1) -> dict[str, Any]:
@@ -176,7 +177,9 @@ class PlayController:
         cfg = self.store.load()
         if difficulty:
             cfg = cfg.model_copy(update={"agent": cfg.agent.model_copy(update={"difficulty": difficulty})})
-        cfg.endpoint(model) if model else cfg.role_endpoint("tactical")   # 模型配置有误时在这里就报错
+        external = model == EXTERNAL
+        if not external:
+            cfg.endpoint(model) if model else cfg.role_endpoint("tactical")   # 模型配置有误时在这里就报错
         device = self.device_factory()
         if self._hotkey is None and sys.platform == "win32":
             from ..capture import windows as win
@@ -195,6 +198,9 @@ class PlayController:
             try:
                 rounds_loop()
             finally:
+                if external:
+                    with self._lock:
+                        BRIDGE.end(self._state["result"] or ("error" if self._state["error"] else "stopped"))
                 close = getattr(device, "close", None)   # 拔掉虚拟手柄等
                 if close:
                     close()
@@ -222,6 +228,8 @@ class PlayController:
                         runner.trace.meta(result="error", ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
                     break
 
+        if external:
+            BRIDGE.begin(stop)   # 在线程启动前就绪,start_run 紧接着就要等局面
         self._thread = threading.Thread(target=work, name="play", daemon=True)
         self._thread.start()
         time.sleep(0.2)   # 让状态里先有本局的 run_id

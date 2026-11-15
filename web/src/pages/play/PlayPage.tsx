@@ -10,7 +10,7 @@ import { NumberField } from '@/components/arc/number-field/number-field';
 import SegmentedControl from '@/components/arc/segmented-control/segmented-control';
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
-import { api, enc, errorText, type ModelProfile, type PlayStatus, type RunSummary, type StepRecord } from '@/lib/api';
+import { api, enc, errorText, EXTERNAL_AGENT, type ModelProfile, type PlayStatus, type RunSummary, type StepRecord } from '@/lib/api';
 import page from '@/lib/page.module.css';
 import { useToast } from '@/lib/toast';
 
@@ -47,7 +47,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
     Promise.all([api<ModelProfile[]>('/api/models'), api<{ roles: Record<string, string | null>; agent: { difficulty: string } }>('/api/config')])
       .then(([ms, cfg]) => {
         setModels(ms);
-        setModel(cfg.roles.tactical ?? cfg.roles.default ?? ms[0]?.name ?? '');
+        setModel(cfg.roles.tactical ?? cfg.roles.default ?? ms[0]?.name ?? EXTERNAL_AGENT);
         setDifficulty(cfg.agent.difficulty);
       })
       .catch((e) => setError(errorText(e)));
@@ -79,6 +79,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
     <div className={styles.controls}>
       {status.running ? (
         <>
+          {status.profile === EXTERNAL_AGENT && status.agent.waiting && <span className={styles.round}>等 agent 回答</span>}
           {status.rounds > 1 && <span className={styles.round}>第 {status.round} / {status.rounds} 局</span>}
           {status.hotkey && <span className={styles.round}>{status.hotkey.replace(/\b\w/g, (c) => c.toUpperCase())} 停止</span>}
           <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
@@ -87,10 +88,10 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
         </>
       ) : (
         <>
-          {models.length > 0 && (
-            <Select label="模型" className={styles.modelSelect} options={models.map((m) => ({ value: m.name, label: m.name }))}
-              value={model} onValueChange={setModel} />
-          )}
+          {model === EXTERNAL_AGENT && <span className={styles.round}>MCP 地址 {window.location.origin}/mcp</span>}
+          <Select label="模型" className={styles.modelSelect}
+            options={[...models.map((m) => ({ value: m.name, label: m.name })), { value: EXTERNAL_AGENT, label: '外部 agent(MCP)' }]}
+            value={model} onValueChange={setModel} />
           <Input label="难度" className={styles.difficulty} placeholder="A8-1" value={difficulty}
             onChange={(e) => setDifficulty(e.target.value)} />
           <div className={styles.rounds}>

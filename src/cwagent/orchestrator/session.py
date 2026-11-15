@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from ..knowledge.companions import CompanionBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import GuideAdvisor
 from ..knowledge.index import NameIndex
+from ..llm.external import EXTERNAL
 from ..memory import MemoryStore
 from ..vision.board import Portraits
 from .loop import Runner, RunOptions, Trace
@@ -34,7 +36,10 @@ def load_portraits() -> Portraits | None:
 
 def endpoints(cfg: AppConfig, model: str | None) -> dict[str, ModelEndpoint]:
     """各决策层用哪个模型。指定了模型(网页上选的)时,备战、战略、三选一都用它,便于对比模型;
-    没指定时按 config.yaml 的 roles。导航层配置了就用配置的(找路不需要强模型)。"""
+    没指定时按 config.yaml 的 roles。导航层配置了就用配置的(找路不需要强模型)。
+    选外部 agent 时所有决策都交给它(用户可能根本没配 API)。"""
+    if model == EXTERNAL:
+        return {"default": ModelEndpoint(name=EXTERNAL, format="external")}
     main = cfg.endpoint(model) if model else cfg.role_endpoint("tactical")
     out = {"default": main}
     if not model:
@@ -65,7 +70,8 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print)
     endpoint = eps["default"]
     memories = [m for m, _ in MemoryStore().all()]
     brain = ScreenAgent(eps, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"))
-    run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{endpoint.name}"
+    # 目录名只留字母数字和 . - _(档案名可能带空格,对局记录接口不认)
+    run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{re.sub(r'[^\w.-]+', '-', endpoint.name)}"
     trace = Trace(run_dir)
     book = CompanionBook()
     runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),

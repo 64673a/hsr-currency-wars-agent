@@ -55,6 +55,14 @@ uv run cwagent models test                      # 连通性测试
 
 配置保存在 `config.yaml`(不入库),格式见 [config.example.yaml](config.example.yaml)。
 
+### 用自己的 agent 工具下棋(MCP)
+
+`cwagent serve` 在 `http://<地址>:8770/mcp` 提供 MCP 服务,支持 MCP 的 agent 工具可以连上来,用它自己的模型和额度下棋,不需要在这里配 API key。网页对局页选「外部 agent(MCP)」,或者让 agent 调用 `start_run` 开始。
+
+- DSH:见 [integrations/dsh](integrations/dsh/README.md)
+- Claude Code:`claude mcp add --transport http cwagent http://127.0.0.1:8770/mcp`(未测试)
+- Codex:`codex mcp add cwagent --url http://127.0.0.1:8770/mcp`(未测试)
+
 ## 网页界面
 
 ```bash

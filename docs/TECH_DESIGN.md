@@ -52,6 +52,7 @@ GPL-3.0-only。这样可以直接参考或移植 March7thAssistant(GPL-3.0)的�
 | 攻略的角色 | 攻略只给大方向和玩法指导;过渡阵容、装备选择、升本、D 牌(刷新商店)时机由模型自己判断 | 用户想看模型自己思考,而不是照抄脚本 |
 | 决策粒度 | 语义原子动作为主,加少量宏 | 思考过程有看头,同时控制调用次数 |
 | 模型接入 | 统一用 URL + API key 直连 HTTP,不集成厂商 SDK;同时支持 OpenAI 格式和 Anthropic 格式 | 用户要自由换模型和网关 |
+| 外部 agent 接入(2026-11-14 加) | 本服务提供 MCP 端点,用户自己的 agent 工具(DSH、Claude Code、Codex 等)连上来下棋,用的是这些工具自己的模型和额度;本服务不调用它们的命令行、不读取它们的登录凭据。先适配 DSH | 用户想用订阅额度;MCP 是通用协议,不锁厂商(11.9) |
 | 前端 | 独立网页应用,用 ARC UI 组件库 | 用户指定 |
 | 首个形态 | 全自动对局 | 用户指定 |
 
@@ -800,6 +801,38 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
 
 设置页的"测试"按钮(命令行 `cwagent models test`)用该档案发一个最小请求(一句话 + 一个简单工具),返回是否成功、是否拿到工具调用、是否拿到思考内容、耗时和 token 用量。
 
+
+### 11.9 外部 agent 接入(MCP)
+
+2026-11-14 与用户确认方向,先适配 DSH(DeepSeek Harness,开源、可定制);Claude Code、Codex 的接法未实测。
+
+**目的**:让用户用自己的 agent 工具下棋,用的是这些工具自己的模型和额度(订阅、账号)。由用户自己打开 agent 工具并连上本服务;本服务不启动它们、不读取或转发它们的登录凭据。
+
+**为什么不由本服务去调用 `claude -p` / `codex exec`**:Anthropic 条款不允许第三方产品代用户使用订阅凭据;每次调用都要启动一次 CLI,Codex 每次还固定多约 12k token(2026-11-14 在 Mac 上实测);MCP 是通用协议,任何支持 MCP 的 agent 都能接,代码里不出现厂商名。参考过的同类做法:Netcatty、Open Design 都是调用用户本机的 CLI,自己的能力通过 MCP 交给 agent。
+
+**形态**:
+
+- `cwagent serve` 在 `/mcp` 提供 MCP 服务(Streamable HTTP)。不用 stdio:serve 跑在用户桌面会话里、握着游戏窗口,stdio 服务由 agent 工具当子进程启动,在 SSH 会话里启动时截图是黑的;HTTP 也让 agent 可以跑在另一台电脑上。
+- 对局编排不变。模型档案多一种「外部 agent」(网页上选,不写进 `config.yaml`):`complete()` 不发请求,而是把这一轮要交给模型的新内容放进信箱(`llm/external.py`),等外部 agent 通过 MCP 取走并回答。界面决策、参数校验、重问、Trace、对局页都照旧。
+- 工具:
+
+| 工具 | 作用 |
+|---|---|
+| `rules` | 玩法和规则(即 8.5 的系统提示词);上下文被压缩后可以重读 |
+| `start_run` | 开始对局(难度可选),等到第一个需要判断的局面后返回 |
+| `wait` | 等下一个需要判断的局面 |
+| `act` | 提交判断和操作(参数同 API 模式的 act 工具),执行后返回结果和下一个局面 |
+| `status` / `stop_run` | 查状态、停止对局 |
+
+- **长等待**:战斗、动画期间没有需要判断的局面。`wait` / `act` 最多等 `wait` 秒后返回「还在等待」,agent 再调 `wait`。默认 50 秒,低于常见客户端 60 秒的默认工具超时;客户端能调大工具超时的,在地址上带 `?wait=540` 这样的参数减少空转(每次空转都是一次模型调用)。
+- **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
+- **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
+- **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
+- **安全**:`/mcp` 只接受 Host 为 IP 地址或 localhost 的请求(防 DNS 重绑定),和网页接口一样不带认证,局域网访问靠防火墙限制。
+- **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code / Codex 的 Stop hook)。
+
+**DSH 接入**(`integrations/dsh/`):DSH 的 MCP 客户端(`@deepseek-ai/dsh-mcp-client`)支持 Streamable HTTP,工具名为 `mcp__cwagent__<工具>`,服务说明(instructions)会加进系统提示词;默认工具超时 60 秒,由 `toolCallTimeoutMs` 调大。
+
 ---
 
 ## 12. Trace、回放与评测
@@ -854,6 +887,7 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `GET /api/memories` `POST` `PUT /api/memories/{id}` `DELETE` | 记忆查看、添加、修改、审核 |
 | `POST /api/memories/preview` | 给定一组线索(名字、节点、界面、决策层),返回会被想起的记忆,用于调试检索 |
 | `GET /api/providers` `POST` `PUT /api/providers/{name}` `DELETE` | 厂商管理(key 掩码) |
+| `/mcp` | 外部 agent 接入的 MCP 端点(11.9) |
 | `GET /api/providers/{name}/models` | 从厂商接口拉取可用模型列表 |
 | `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理 |
 | `POST /api/models/{name}/test` | 连通性测试 |
@@ -952,7 +986,7 @@ hsr-currency-wars-agent/
 | ffmpeg、MediaMTX(`data/tools`)、`data/stream` | 实时画面准备时下载 | 删除 |
 | 知识库、模板、记忆、对局记录、配置、网页 | — | 只有 `--all` 才删除 |
 
-后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。
+后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`mcp`(MCP 协议库,11.9)、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。
 
 命令:
 
