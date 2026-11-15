@@ -32,6 +32,7 @@ def parse_target(target: str) -> tuple[int, int] | None:
 
 
 A8_AFFIXES = 4
+A8_LAYERS = 20             # A8 组有 20 层(维护者:账号最高职级 A8「财富造物主 20」)
 HEXES = {"difficulty": (0.283, 0.893), "affixes": (0.351, 0.893)}   # 底部两个六边形的中心
 
 
@@ -92,6 +93,23 @@ def select(device, ocr: Ocr, target: str, log: Callable[[str], None], sleep=time
     if state["a"] < A8_AFFIXES:
         log(f"难度:最高职级的词缀数量是 {state['a']},还没到 A8")
         return False
+    # 0. 先走直路:刚点过「返回最高职级」,此刻就站在 A8 最高层,目标层按「A8 共 20 层」直接算,
+    #    不用先下到最低层再爬回来(选 A8-20 时那样要白跑 38 次点击,而且容易被滚动惯性带偏;
+    #    M7A 也是直接用敌人难度的差值调,只有选「最低」才一路往下)
+    highest = state["d"]
+    goal = highest - (A8_LAYERS - layer)
+    if goal >= 1:
+        for _ in range(MAX_STEPS):
+            if state["d"] == goal:
+                break
+            # 一次一层、每层都读:敌人难度可能一档跳多点(M7A 也提到过),连点容易越过目标
+            step(1 if state["d"] < goal else -1)
+            if state["a"] < A8_AFFIXES:
+                break
+        if state["d"] == goal and state["a"] >= A8_AFFIXES:
+            log(f"难度:{target}(A8 最高层敌人难度 {highest},直接调到 {state['d']})")
+            return True
+        log(f"难度:直路没对(现在敌人难度 {state['d']},词缀 {state['a']}),改用探底")
     # 1. 粗调:往下到词缀数量变少(进了 A7)或到底
     for _ in range(MAX_STEPS):
         before = (state["d"], state["a"])
