@@ -217,3 +217,13 @@ def test_open_plane_detail_waits_for_animation_then_retries():
 
     got = macros.open_plane_detail(Dev(), ocr, lambda s: None, wait=0.5)
     assert got is not None and len(clicks) == 2      # 第一次被吞,第二次成功,最多点两次
+
+
+def test_companion_name_from_bubble():
+    """气泡两种写法都要能抽出伙伴名(实机:不死狼在句首、三月兔在「遇到」后面)。"""
+    from cwagent.orchestrator.macros import companion_of_bubble
+
+    name, desc = companion_of_bubble("不死狼将在【幕后茶歇】找你聊聊新的委托。 第一位面的最后的奖励节点将替换为幕后茶歇。")
+    assert name == "不死狼" and desc.startswith("不死狼将在")
+    assert companion_of_bubble("你会在幕后茶歇遇到三月兔。")[0] == "三月兔"
+    assert companion_of_bubble("第一位面的最后的奖励节点将替换为幕后茶歇。")[0] == ""

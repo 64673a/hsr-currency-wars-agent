@@ -101,10 +101,10 @@ def test_runner_reflexes_and_episode(tmp_path):
     brain = FakeBrain({"environment_choice": [[Action(type="click_text", text="追击概念股"),
                                                Action(type="click_text", text="确认")]]})
     met = []
-    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), on_companion=met.append,
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), on_companion=lambda n, d: met.append((n, d)),
                     log=lambda m: None, settle=False)
     assert runner.run(RunOptions(max_steps=10)) == "settlement"
-    assert met == ["菇菇兔"] and brain.calls == [("environment_choice", "opening", 1)]
+    assert met == [("菇菇兔", "")] and brain.calls == [("environment_choice", "opening", 1)]   # 开局界面只有名字
     # 「点击空白处继续」按提示文字本身的位置点(奇遇横幅的提示在 y≈0.655,固定点 0.62 点不到,2026-11-16 实机);
     # 这个用例里的提示在 0.89,所以点 0.89 而不是以前写死的 0.62
     assert sim.actions == [("click", 0.73, 0.91), ("click", 0.5, 0.89), ("click", 0.77, 0.36), ("click", 0.56, 0.91)]

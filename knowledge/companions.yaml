@@ -14,12 +14,13 @@
 
 - name: 三月兔
   type: ""
-  desc: ""
+  desc: 你会在幕后茶歇遇到三月兔。第一位面的最后的奖励节点将替换为幕后茶歇。
   flow_effects:
     - 奖励节点变为「幕后茶歇」
+    - 第一位面最后一个奖励节点替换为「幕后茶歇」
   screens: [tea_break]
-  verified: false
-  source: 维护者告知(2026-11-14),待游戏内核实
+  verified: true
+  source: 维护者告知(2026-11-14);游戏内「主角光环与奇遇详情」气泡(2026-11-16 实机)
 
 - name: 不死狼
   type: ""

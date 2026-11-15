@@ -24,6 +24,8 @@ memory_app = typer.Typer(help="记忆(积累的游戏经验)", no_args_is_help=T
 app.add_typer(memory_app, name="memory")
 companions_app = typer.Typer(help="奇遇伙伴档案(边玩边完善)", no_args_is_help=True)
 app.add_typer(companions_app, name="companions")
+affixes_app = typer.Typer(help="敌人词条档案(对局中点开词条自动记录)", no_args_is_help=True)
+app.add_typer(affixes_app, name="affixes")
 stream_app = typer.Typer(help="网页上的实时画面", no_args_is_help=True)
 app.add_typer(stream_app, name="stream")
 web_app = typer.Typer(help="网页界面", no_args_is_help=True)
@@ -487,6 +489,32 @@ def companions_export(name: Annotated[str, typer.Argument(help="伙伴名称")])
         path = CompanionBook().export(name)
     except KeyError:
         _fail(f"没有记录过 {name}")
+    typer.echo(f"已写入 {path}")
+
+
+@affixes_app.command("list")
+def affixes_list() -> None:
+    """列出已知的敌人词条(公共档案 + 本机读到的)。"""
+    from .knowledge.affixes import AffixBook
+
+    book = AffixBook()
+    public = {d["name"] for d in __import__("yaml").safe_load(book.public.read_text(encoding="utf-8")) or []} \
+        if book.public.exists() else set()
+    items = book.all()
+    if not items:
+        typer.echo("(还没有记录任何词条)")
+    for name, desc in sorted(items.items()):
+        typer.echo(f"- {name}  [{'公共' if name in public else '本机'}]")
+        if desc:
+            typer.echo(f"    {desc}")
+
+
+@affixes_app.command("export")
+def affixes_export() -> None:
+    """把本机读到的词条写进公共档案 knowledge/affixes.yaml(同名替换),之后可以提交到仓库。"""
+    from .knowledge.affixes import AffixBook
+
+    path = AffixBook().export()
     typer.echo(f"已写入 {path}")
 
 

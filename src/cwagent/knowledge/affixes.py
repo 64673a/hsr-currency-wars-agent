@@ -41,6 +41,22 @@ class AffixBook:
     def get(self, name: str) -> str:
         return self.all().get(name, "")
 
+    def export(self) -> Path:
+        """把本机读到的词条并进公共档案(同名替换),公共档案里已有的说明优先保留。"""
+        items = _read(self.public)
+        have = {d["name"] for d in items}
+        for d in _read(self.local):
+            if d["name"] not in have and d.get("desc"):
+                items.append({"name": d["name"], "desc": d["desc"], "source": f"对局中读取({d.get('last_seen') or ''})"})
+        self.public.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.public.with_suffix(".yaml.tmp")
+        keep = "".join(line + "\n" for line in (self.public.read_text(encoding="utf-8").splitlines()
+                                                if self.public.exists() else []) if line.startswith("#"))
+        tmp.write_text(keep + ("\n" if keep else "") + yaml.safe_dump(items, allow_unicode=True, sort_keys=False, width=120),
+                       encoding="utf-8")
+        os.replace(tmp, self.public)
+        return self.public
+
     def record(self, name: str, desc: str) -> None:
         items = _read(self.local)
         entry = next((d for d in items if d["name"] == name), None)

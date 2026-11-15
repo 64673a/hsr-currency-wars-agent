@@ -10,6 +10,7 @@ device/gamepad.py),手柄用不了时像 M7A 那样用鼠标逐个横向划过�
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -167,6 +168,19 @@ def _bubble(ocr: Ocr, image: Image.Image) -> str:
     # 气泡区域右边会蹭到头像下面那块名字标签的残字(实机读到过末尾多一个「狼」),单字丢掉
     rows = sorted((b for b in ocr(image, COMPANION_BUBBLE) if len(b.text) > 1), key=lambda b: (round(b.y, 2), b.x))
     return " ".join(b.text for b in rows)
+
+
+def companion_of_bubble(text: str) -> tuple[str, str]:
+    """气泡文字 → (伙伴名, 效果原文)。
+
+    实机见过两种写法:「不死狼将在【幕后茶歇】找你聊聊新的委托。」(名字在句首)、
+    「你会在幕后茶歇遇到三月兔。」(名字在「遇到」后面)。都抽不到就返回 ("", 全文),名字交给调用方兜底。
+    """
+    m = re.match(r"^([\u4e00-\u9fffA-Za-z0-9·★]{2,10}?)(?:将在|会|找你)", text)
+    if m:
+        return m.group(1), text
+    m = re.search(r"(?:遇到|遇见|碰上)([\u4e00-\u9fffA-Za-z0-9·★]{2,10})[。,，]", text)
+    return (m.group(1), text) if m else ("", text)
 
 
 def read_companions(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] | None:

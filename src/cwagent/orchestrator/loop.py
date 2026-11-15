@@ -36,7 +36,7 @@ from ..vision.ocr import Aliased, Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
 from . import difficulty as difficulty_select
 from .battle_watch import BattleWatcher
-from .macros import find_orbs, open_crystals, read_companions, survey_plane
+from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
 from .prepare import PrepareExecutor, PrepareResult
@@ -151,7 +151,7 @@ class Trace:
 
 class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
-                 on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
+                 on_companion: Callable[[str, str], None] | None = None, log: Callable[[str], None] = print,
                  difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
                  settle: bool = True, equipment: EquipmentBook | None = None, guides: GuideAdvisor | None = None,
                  trailblazer: str = ""):
@@ -595,8 +595,15 @@ class Runner:
         self._companion_done = True
         if lines:
             text = " / ".join(lines)[:500]
-            self.ledger.add(f"[开局 奇遇伙伴] {text}")
+            # 标签不写「开局」:这条是第一位面收集完怪物词条和节点之后点左上角读到的,是正式的记录;
+            # 开局界面上那条只有名字(见 reflex 的 run_intro)
+            self.ledger.add(f"[位面 1 奇遇伙伴] {text}")
             self.log(f"本局奇遇伙伴:{text[:300]}")
+            if self.on_companion:
+                for line in lines:      # 名字和效果一起交给档案(本机 companions.local.yaml)
+                    name, desc = companion_of_bubble(line)
+                    if name:
+                        self.on_companion(name, desc)
 
     def _open_crystals(self, image) -> str | None:
         """开晶矿,返回结果说明;没有晶矿返回 None。没开成只记在当前节点上,下个节点照常再开
@@ -660,7 +667,7 @@ class Runner:
                     self.ledger.companion = name
                     self.ledger.add(f"[开局] 奇遇伙伴:{name}")
                     if self.on_companion:
-                        self.on_companion(name)
+                        self.on_companion(name, "")          # 开局界面只有名字,效果等第一位面读完再补
                 intro = intro_text(boxes)[:600]
                 if intro and intro != self.ledger.intro:
                     self.ledger.intro = intro
