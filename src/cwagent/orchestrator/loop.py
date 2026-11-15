@@ -888,30 +888,29 @@ class Runner:
                 self._last_sig = sig
                 self.trace.write(record)
                 return screen
+            # 固定流程做完了(或这轮没有固定流程),再把角色商店打开给模型看。
+            # 原来是在每轮开头就打开、紧接着固定流程又要求收起来,一开一收来回点,画面一直在闪
+            # (维护者 2026-11-16 看到的「一直点商店」);现在只有真的要做固定流程时才收一次。
+            if not self.prepare.shop_now(boxes):
+                self._remember_hud(frame.image, boxes)
+                opened = PrepareResult()
+                boxes = self.prepare.set_shop(opened, boxes, True)
+                frame = self.prepare.frame or frame
+                record["shot"] = self.trace.shot(n, frame.image)
+                record["texts"] = [str(b) for b in boxes]
+                if not self.prepare.shop:
+                    self.log(f"[{n}] 没能打开商店")
+                now = self.screen_of(frame.image, boxes)
+                if now != "prepare":      # 开商店时游戏可能弹出别的界面(投资策略、补给……)
+                    record["screen"] = now
+                    record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
+                    self._last_sig = sig
+                    self.trace.write(record)
+                    return now
             self._peek_items(n, boxes)
             fresh = self._identify_unknown(n)
             if fresh is not None:
                 frame, boxes = fresh
-        if screen == "prepare" and not self.prepare.shop_now(boxes):
-            # 每一轮都由程序把角色商店打开(右下角「商店」),模型不用自己去点;它曾把左上角羁绊商店的「打开商店」
-            # 当成角色商店去点(2026-11-15 实机)
-            self._remember_hud(frame.image, boxes)
-            opened = PrepareResult()
-            boxes = self.prepare.set_shop(opened, boxes, True)
-            frame = self.prepare.frame or frame
-            record["shot"] = self.trace.shot(n, frame.image)
-            record["texts"] = [str(b) for b in boxes]
-            if not self.prepare.shop:
-                self.log(f"[{n}] 没能打开商店")
-            # 开商店的同时游戏可能弹出了别的界面(投资策略、补给……):交给下一步按新界面处理
-            now = self.screen_of(frame.image, boxes)
-            if now != "prepare":
-                record["screen"] = now
-                record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
-                self._last_sig = sig
-                self.trace.write(record)
-                return now
-
         opening = ep is None
         opens = 0
         if opening and screen == "prepare" and self._node:

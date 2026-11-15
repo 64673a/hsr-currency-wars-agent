@@ -110,15 +110,14 @@ class PrepareExecutor:
         for point in points:
             self._click(out, *point)
             last = None
-            for _ in range(6):
+            for _ in range(5):
                 self.sleep(0.4)
                 boxes = self._look()
                 state = shop_state(boxes)
+                if state is None:
+                    continue                     # 一时看不出开合(动画中),再看一眼
                 if state is not want_open:
-                    last = None if state is None else last
-                    if state is None:
-                        continue
-                    continue
+                    break                        # 点出了反效果(比如收起时点到了商店),别在同一个点上反复等
                 cards = read_shop(boxes)
                 if not want_open or cards == last:
                     self.shop = want_open
