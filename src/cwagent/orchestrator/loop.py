@@ -552,9 +552,10 @@ class Runner:
             return None
         image = ready[0].image
         if plane != self._surveyed:
-            # 没打开位面详情(节点图标正在播动画时点击会被吞,2026-11-16 实机)就下个回合再试,每个位面最多 3 次
+            # 打不开位面详情(节点图标正在播动画时点击会被吞,2026-11-16 实机)就下个回合再试。
+            # survey_plane 内部已经等了两轮、点了两次,所以这里给 2 次机会就够,别把一个位面拖太久
             tries = self._survey_tries[plane] = self._survey_tries.get(plane, 0) + 1
-            if tries >= 3:
+            if tries >= 2:
                 self._surveyed = plane
             affixes: list[tuple[str, str]] = []
             lines = survey_plane(self.device, self.ocr, self.log, affixes=affixes, book=self.affixes,

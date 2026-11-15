@@ -196,3 +196,24 @@ def test_companions_read_once_after_first_plane_survey(tmp_path, monkeypatch):
     runner._crystal_fails["1-2"] = 99
     runner.macros(None, [], "1-3")
     assert calls == [1]                                                  # 之后不再读
+
+
+def test_open_plane_detail_waits_for_animation_then_retries():
+    """节点图标还在播「获得经验」时点击会被吞(2026-11-16 实机):点完轮询等它出来,等不到再点一次。"""
+    from cwagent.orchestrator import macros
+
+    clicks = []
+
+    class Dev:
+        def click(self, x, y):
+            clicks.append((x, y))
+
+        def grab(self):
+            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    def ocr(im, region=None):
+        # 第一次点击之后一直没开(被动画吞掉),第二次点击后才打开
+        return [_b("位面详情", 0.5, 0.06)] if len(clicks) >= 2 else []
+
+    got = macros.open_plane_detail(Dev(), ocr, lambda s: None, wait=0.5)
+    assert got is not None and len(clicks) == 2      # 第一次被吞,第二次成功,最多点两次

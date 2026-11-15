@@ -22,6 +22,7 @@ from PIL import Image
 from ..vision.ocr import Ocr, TextBox, find, has
 
 TOP_FIRST_NODE = (0.307, 0.058)     # 备战界面顶部节点轨道的第一个图标
+PLANE_WAIT = 4.0                    # 点开后最多等多久「位面详情」出来(节点图标可能还在播「获得经验」动画)
 DETAIL_ROW = (0.48, 0.61)           # 位面详情里中间那一排节点图标的纵向范围
 DETAIL_PANEL = (0.0, 0.60, 1.0, 0.25)
 CLOSE_X = (0.969, 0.063)
@@ -97,17 +98,38 @@ def read_affixes(device, ocr: Ocr, boxes: list[TextBox], book, log: Callable[[st
     return out
 
 
+def open_plane_detail(device, ocr: Ocr, log: Callable[[str], None], *, wait: float = PLANE_WAIT):
+    """点顶部第一个节点图标打开「位面详情」,返回 (画面, 界面文字);打不开返回 None。
+
+    刚打完后节点图标还在播「获得经验」之类的动画,这时候点会被吞(2026-11-16 实机,1-2 那一次就是这样
+    白丢了一个位面的词条)。所以点完不是等一下再看一眼,而是轮询等它出来;等不到再点一次,两次都不行才放弃。
+    维护者建议:与其失败了下个回合重试,不如一开始就把等待放长。
+    """
+    for _ in range(2):
+        frame = device.grab()                     # 点击之前先看一眼:已经开着就别再点,免得把它关掉
+        boxes = ocr(frame.image)
+        if has(boxes, "位面详情"):
+            return frame, boxes
+        device.click(*TOP_FIRST_NODE)
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            time.sleep(0.4)
+            frame = device.grab()
+            boxes = ocr(frame.image)
+            if has(boxes, "位面详情"):
+                return frame, boxes
+    log("收集节点:等了两个来回也没打开位面详情,放弃")
+    return None
+
+
 def survey_plane(device, ocr: Ocr, log: Callable[[str], None], *, affixes: list | None = None, book=None,
                  debug: Path | None = None) -> list[str] | None:
     """打开位面详情,逐个点节点读说明(传了 affixes 时再读底部的敌人词条,放进这个列表),关闭后回到备战界面。
     失败返回 None。"""
-    device.click(*TOP_FIRST_NODE)
-    time.sleep(1.2)
-    frame = device.grab()
-    boxes = ocr(frame.image)
-    if not has(boxes, "位面详情"):
-        log("收集节点:没有打开位面详情,放弃")
+    opened = open_plane_detail(device, ocr, log)
+    if opened is None:
         return None
+    frame, boxes = opened
     xs = detail_nodes(frame.image)
     y = (DETAIL_ROW[0] + DETAIL_ROW[1]) / 2 - 0.003
     lines: list[str] = []
