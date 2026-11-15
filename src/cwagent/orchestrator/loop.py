@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
@@ -23,21 +24,26 @@ from PIL import Image
 from ..brain.ledger import RunLedger
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import SWITCH_MARGIN, Guide, GuideAdvisor, card
-from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, to_jsonable
+from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
 from .. import paths
 from ..device import UserInterrupt
-from ..vision.battle import has_marker, read_action_value, read_progress, summarize
-from ..vision.board import Portraits, Slot, back_hint, format_board
-from ..vision.hud import read_hud
-from ..vision.ocr import Ocr, TextBox, find
+from ..vision.battle import has_marker, read_action_value
+from ..vision.board import Portraits, Slot, back_hint, detail_name, format_board
+from ..vision.buttons import lit
+from ..vision.hud import read_crop, read_hud
+from ..vision.ocr import Aliased, Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop
 from . import difficulty as difficulty_select
+from .battle_watch import BattleWatcher
 from .macros import find_orbs, open_crystals, survey_plane
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
 from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
+    CLOSE_CORNER,
     DIFFICULTY_HINT,
+    GREY_CONFIRM,
+    OVERLAY_HINTS,
     PREPARE_LAYOUT,
     SCREEN_NAMES,
     SPOTLIGHT_LAYOUT,
@@ -62,6 +68,11 @@ STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人�
 DIFFICULTY_LLM_STEPS = 8   # 难度交给模型后最多调几步
 ENV_GUIDES = 2             # 投资环境界面每个环境列几篇攻略
 READY_SECONDS = 8          # 关键操作前等界面静下来最多等几秒
+DETAIL_PER_NODE = 3        # 每个节点最多点开几张认不出的卡看详情
+RAIL_STEPS = 6             # 开拓商店界面停留这么多步还没关,程序直接关掉
+SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
+CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
+                  "ranger", "dance", "garden", "hack", "tea_break"}
 CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
@@ -89,6 +100,12 @@ def overlay_texts(boxes: list[TextBox]) -> list[str]:
     x, y, w, h = CENTER
     return [b.text for b in boxes if x <= b.x <= x + w and y <= b.y <= y + h and not BOARD_TEXT.match(b.text)
             and re.search(r"[\u4e00-\u9fff]{2,}", b.text)]
+
+
+def _is_item(s: Slot, boxes: list[TextBox]) -> bool:
+    """备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色。"""
+    return s.zone == "bench" and any(b.text == "开启" and abs(b.x - s.x) < 0.035 and abs(b.y - s.y) < 0.065
+                                     for b in boxes)
 
 
 def frame_diff(a: Image.Image, b: Image.Image) -> float:
@@ -128,12 +145,14 @@ class Runner:
     def __init__(self, device, brain: ScreenAgent, trace: Trace, *, ocr: Ocr | None = None,
                  on_companion: Callable[[str], None] | None = None, log: Callable[[str], None] = print,
                  difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
-                 settle: bool = True, equipment: EquipmentBook | None = None, guides: GuideAdvisor | None = None):
+                 settle: bool = True, equipment: EquipmentBook | None = None, guides: GuideAdvisor | None = None,
+                 trailblazer: str = ""):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
         self.trace = trace
-        self.ocr = ocr or Ocr()
+        # 开拓者在商店、补给、角色详情里显示的是玩家自己取的名字,识别出来统一换成「开拓者」
+        self.ocr = Aliased(ocr or Ocr(), {trailblazer: "开拓者"}) if trailblazer.strip() else (ocr or Ocr())
         self.portraits = portraits
         self.on_companion = on_companion
         self.log = log
@@ -163,13 +182,17 @@ class Runner:
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
-        self._curve: list[tuple[int | None, int | None]] = []  # 当前这场战斗的(剩余行动值, 进度)采样
-        self._curve_node: str | None = None
+        self._stop: threading.Event | None = None              # 网页上的停止(战斗监视里也要随时能停)
         self._surveyed: str | None = None                      # 已经收集过节点的位面
         self._crystal_fails: dict[str, int] = {}               # 每个节点开晶矿连续没开成的次数(到 CRYSTAL_TRIES 就放过这个节点)
         self._crystal_full: tuple[str, int] | None = None      # (节点, 剩几个):备战席满了,晶矿里的角色放不下
         self._ready_checked: str | None = None                 # 出战前已经检查过晶矿的节点
         self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
+        self._hud_seen: tuple[str | None, int | None] = (None, None)   # (节点, 生命值):商店收起时读到的
+        self._details: dict[str, int] = {}                     # 每个节点点开看过几张认不出的卡
+        self._costs: dict[str, set[int]] | None = None         # 角色名 → 费用(星神★阿哈有 4、5、7 费三个版本)
+        self._rail: dict[str, int] = {}                        # 每个节点在开拓商店界面停了几步
+        self._rail_launched: set[str] = set()                  # 已经免费启动过星穹列车的节点
         self._difficulty_tries = 0                             # 程序自动选难度试了几次
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
 
@@ -234,7 +257,14 @@ class Runner:
     def perceive(self, image, boxes: list[TextBox], node: str | None) -> tuple[str, dict, list[str]]:
         """备战界面:读数字、阵容和商店。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
         hud = read_hud(image, boxes, self.ocr, node=node)
-        self.prepare.deployed = hud.deployed
+        # 商店展开时生命值和上场人数被挡住:用商店收起时读到的(上场人数在上下场、出售后由程序跟着改)
+        seen_node, seen_hp = self._hud_seen
+        if hud.hp is None and seen_node == node:
+            hud.hp = seen_hp
+        if hud.deployed:
+            self.prepare.deployed = hud.deployed
+        elif seen_node == node:
+            hud.deployed = self.prepare.deployed
         state: dict = {"hud": hud.as_dict()}
         lines = [hud.text()]
         names: list[str] = []
@@ -242,7 +272,7 @@ class Runner:
         if shop:
             cards = read_shop(boxes)
             self._shop_names = [name for _, name, _ in cards if name]
-            lines.append("商店(从左到右):" + format_shop(cards))
+            lines.append("商店(从左到右;「2星」是价格为费用 3 倍的二星卡):" + format_shop(cards, self._role_costs()))
         self._board = None
         if self.portraits is not None:
             if shop:
@@ -252,14 +282,13 @@ class Runner:
             board = self.portraits.read(image, shop_open=shop, back_hint=back_hint(hud.level, hud.deployed))
             self.prepare.counts = dict(self.portraits.counts)
             for s in board:
-                # 备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色
-                if s.zone == "bench" and any(b.text == "开启" and abs(b.x - s.x) < 0.035 and abs(b.y - s.y) < 0.065
-                                             for b in boxes):
-                    s.name, s.stars, s.score = "道具(可开启)", 0, max(s.score, 0.01)
+                if _is_item(s, boxes):
+                    s.name, s.stars, s.score, s.halo, s.cost = "道具(可开启)", 0, max(s.score, 0.01), False, None
             self._board = board
             state["board"] = [{"zone": b.zone, "index": b.index, "x": round(b.x, 3), "y": round(b.y, 3),
-                               "name": b.name, "stars": b.stars, "score": round(b.score, 2)}
-                              for b in board if not b.empty]
+                               "name": b.name, "stars": b.stars, "score": round(b.score, 2), "cost": b.cost,
+                               "halo": b.halo, "mark": b.mark}
+                              for b in board if not b.empty or b.mark]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
             self._roles = names
@@ -272,6 +301,67 @@ class Runner:
         if node and not self.ledger.node(node).start:
             self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
+
+    def _role_costs(self) -> dict[str, set[int]]:
+        """角色名 → 费用,从知识库读一次(判断商店里的二星卡:价格是费用的 3 倍)。"""
+        if self._costs is None:
+            self._costs = {}
+            db = paths.knowledge_db()
+            if db.exists():
+                try:
+                    with sqlite3.connect(db) as con:
+                        for name, summary in con.execute("SELECT name, summary FROM roles"):
+                            cost = json.loads(summary).get("cost")
+                            if cost:
+                                self._costs.setdefault(re.sub(r"[·•・]", "·", name), set()).add(int(cost))
+                except (sqlite3.Error, ValueError) as e:
+                    self.log(f"读角色费用出错:{e}")
+        return self._costs
+
+    def _remember_hud(self, image, boxes: list[TextBox]) -> None:
+        """商店收起时读一次生命值和上场人数,商店展开后(被挡住)沿用。"""
+        hud = read_hud(image, boxes, self.ocr, node=self._node)
+        if hud.hp is not None:
+            self._hud_seen = (self._node, hud.hp)
+        if hud.deployed:
+            self.prepare.deployed = hud.deployed
+            self._hud_seen = (self._node, hud.hp if hud.hp is not None else self._hud_seen[1])
+
+    def _identify_unknown(self, n: int) -> tuple | None:
+        """头像认不出的角色卡:点开看详情面板里的名字(M7A 的做法),把卡面存成这个角色的头像模板,之后直接认。
+        只在商店收起、界面静止时做,每个节点最多 DETAIL_PER_NODE 张。返回最新的(画面, 文字);没做事返回 None。"""
+        node = self._node
+        if self.portraits is None or not node or self._details.get(node, 0) >= DETAIL_PER_NODE:
+            return None
+        ready = self.ready_prepare()
+        if ready is None:
+            return None
+        frame, boxes = ready
+        board = self.portraits.read(frame.image, shop_open=False)
+        unknown = [s for s in board if not s.empty and s.name is None and not s.mark and not _is_item(s, boxes)]
+        for s in unknown[:DETAIL_PER_NODE - self._details.get(node, 0)]:
+            self._details[node] = self._details.get(node, 0) + 1
+            card = self.portraits.card_image(frame.image, s)
+            where = slot_text(s.zone, s.index + 1)
+            self.device.click(s.x, s.y)
+            time.sleep(0.8)
+            text = detail_name(self.ocr(self.device.grab().image))
+            rid = self.portraits.role_of(text) if text else None
+            if rid:
+                self.portraits.learn_card(card, rid)
+                self.log(f"[{n}] {where}认不出,点开详情是「{self.portraits.names[rid]}」,记下了这张卡面")
+            else:
+                self.log(f"[{n}] {where}认不出,点开详情也没读到名字" + (f"(读到「{text}」)" if text else ""))
+            for _ in range(2):                                  # 关掉详情:点左上角最边上的空白(M7A)
+                self.device.click(*CLOSE_CORNER)
+                time.sleep(0.6)
+                frame = self.device.grab()
+                boxes = self.ocr(frame.image)
+                if detail_name(boxes) is None:
+                    break
+            if classify(boxes) != "prepare":
+                break
+        return frame, boxes
 
     # ---------------------------------------------------------------- 攻略
 
@@ -546,12 +636,38 @@ class Runner:
                 if self._quits > 3:
                     return [Action(type="pause", reason="中断确认框关不掉,请人处理")]
                 return [Action(type="key", key="escape", reason="关掉中断确认框")]
-            case "battle":
-                av, progress = read_action_value(image, self.ocr), read_progress(boxes)
-                self._curve.append((av, progress))
-                self._curve_node = record["node"] or self._curve_node
-                record["battle"] = {"av": av, "progress": progress}
-                return [Action(type="wait", seconds=4, reason="战斗进行中")]
+            case "reconnect":
+                ok = find(boxes, "^确认$")
+                if ok is not None and lit(image, ok):
+                    return [Action(type="click_text", text="确认", reason="断线后重新连接")]
+                return [Action(type="wait", seconds=2, reason="等重连提示的确认按钮")]
+            case "disconnected":
+                return [Action(type="pause", reason="游戏连接中断,请人处理")]
+            case "tap_close":
+                b = find(boxes, "点击空白处关闭")
+                return [Action(type="click", x=float(b.x), y=float(b.y), reason="点击空白处关闭")]
+            case "reward_limit" | "empty_front":
+                # 助燃券到上限的提示只能确认;「前台区域无角色」确认后回到棋盘重新部署(M7A)
+                return [Action(type="click_text", text="确认", reason=SCREEN_NAMES.get(screen, screen))]
+            case "spotlight_info":
+                # 只是查看(点左上角奇遇伙伴头像打开的);模型以前关它时点错过好几次位置
+                if find(boxes, "前往重选") is None:
+                    x, y = SPOTLIGHT_INFO_CLOSE
+                    return [Action(type="click", x=x, y=y, reason="关掉主角光环与奇遇详情")]
+            case "rail_shop":
+                node = self._node or ""
+                self._rail[node] = self._rail.get(node, 0) + 1
+                if self._rail[node] > RAIL_STEPS:
+                    x, y = CLOSE_CORNER
+                    return [Action(type="click", x=x, y=y, reason="开拓商店停留太久,关掉")]
+                launch = find(boxes, "星穹列车")
+                if launch is not None and node not in self._rail_launched:
+                    # 星穹列车的价格是 0 时免费启动,启动后才有商品目录(M7A)
+                    price = re.sub(r"\D", "", read_crop(image, self.ocr, (0.580, 0.330, 0.025, 0.045)))
+                    if price == "0":
+                        self._rail_launched.add(node)
+                        return [Action(type="click", x=float(launch.x), y=float(launch.y),
+                                       reason="免费启动星穹列车")]
             case "prepare":
                 # 残留的合成确认框会挡住所有操作(实机:确认没点下去,之后开商店、装备、出战全都无效)
                 confirm = find_compose_confirm(image)
@@ -624,6 +740,10 @@ class Runner:
                           "出战前程序会再开一次。")
             if find(boxes, "前置流程未结束"):
                 hints += "\n- 界面提示「前置流程未结束」:可能还有没做完的流程(例如幕后茶歇里的选择),先回去做完。"
+            if find(boxes, "无法上阵同名角色|同名角色无法上阵"):
+                hints += "\n- 界面提示「无法上阵同名角色」:场上已经有一个同名角色,刚才那次上场没成功。"
+            if find(boxes, "剩余时间", region=(0.1, 0.0, 0.2, 0.12)):
+                hints += "\n- 这是限时商店(左上角是剩余时间而不是「备战阶段」):时间到了自动关闭,期间可以买;不能出战。"
             try:
                 seen, record["state"], names = self.perceive(frame.image, boxes, self._node)
                 hints += "\n\n## 程序识别的局面\n" + seen
@@ -644,6 +764,12 @@ class Runner:
             hints = "## 攻略参考\n" + advice if advice else ""
         elif screen == "tea_break":
             hints = TEA_BREAK_HINT
+        elif screen in OVERLAY_HINTS:
+            hints = OVERLAY_HINTS[screen]
+        if screen in CHOICE_SCREENS:
+            grey = [b.text for b in boxes if b.text in ("确认", "确认选择") and not lit(frame.image, b)]
+            if grey:
+                hints += "\n" + GREY_CONFIRM.format(text=grey[0])
         if self._same >= 3:
             hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
                       "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
@@ -677,7 +803,11 @@ class Runner:
                 self.trace.write(record)
                 return screen
             self._peek_items(n, boxes)
+            fresh = self._identify_unknown(n)
+            if fresh is not None:
+                frame, boxes = fresh
             if not self.prepare.shop_now(boxes):
+                self._remember_hud(frame.image, boxes)
                 # 先打开商店,让模型第一眼就看到能买什么
                 opened = PrepareResult()
                 boxes = self.prepare.set_shop(opened, boxes, True)
@@ -686,6 +816,14 @@ class Runner:
                 record["texts"] = [str(b) for b in boxes]
                 if not self.prepare.shop:
                     self.log(f"[{n}] 没能打开商店")
+                # 开商店的同时游戏可能弹出了别的界面(投资策略、补给……):交给下一步按新界面处理
+                now = self.screen_of(frame.image, boxes)
+                if now != "prepare":
+                    record["screen"] = now
+                    record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
+                    self._last_sig = sig
+                    self.trace.write(record)
+                    return now
 
         opening = ep is None
         opens = 0
@@ -778,13 +916,40 @@ class Runner:
         self.trace.write(record)
         return screen
 
+    def screen_of(self, image, boxes: list[TextBox]) -> str:
+        screen = classify(boxes)
+        # 战斗中文字有时只认出零星几个:左侧行动值条目能读出数字就算战斗(备战界面的羁绊图标也是金色六边形,只认图标会误判)
+        if screen == "other" and has_marker(image) and read_action_value(image, self.ocr) is not None:
+            screen = "battle"
+        return screen
+
+    def watch_battle(self, n: int, record: dict, sig: set[str]) -> str:
+        """战斗交给 BattleWatcher 一直看到结束:期间不存截图、不问模型(大招立绘、特效常被认成别的界面而叫醒模型),
+        只记行动值、进度、阵亡和敌方机制提示;结束后在本局经历里记一行。记录里只留进入战斗时的那一张截图。"""
+        self.close_episode()
+        node = record["node"] or self._node
+        watcher = BattleWatcher(self.device, self.ocr, classify=lambda im: self.screen_of(im, self.ocr(im)),
+                                log=self.log, stop=lambda: self._stop is not None and self._stop.is_set(),
+                                debug=self.trace.root / "debug")
+        report = watcher.run()
+        text = report.text()
+        av = [a for a, _ in report.curve if a is not None]
+        progress = [p for _, p in report.curve if p is not None]
+        # 网页上这一步显示最后的行动值、进度和整场小结
+        record["battle"] = {"av": av[-1] if av else None, "progress": progress[-1] if progress else None,
+                            **report.as_dict()}
+        record["battle_summary"] = text
+        if node:
+            self.ledger.add(f"[{node} 战斗] {text}")
+        self.log(f"[{n}] 战斗{f' {node}' if node else ''}:{text}")
+        self._last_sig = sig
+        self.trace.write(record)
+        return "battle"
+
     def step(self, n: int) -> str:
         frame = self.settle()
         boxes = self.ocr(frame.image)
-        screen = classify(boxes)
-        # 战斗中文字有时只认出零星几个:左侧行动值条目能读出数字就算战斗(备战界面的羁绊图标也是金色六边形,只认图标会误判)
-        if screen == "other" and has_marker(frame.image) and read_action_value(frame.image, self.ocr) is not None:
-            screen = "battle"
+        screen = self.screen_of(frame.image, boxes)
         node = node_of(boxes)
         if node:
             self._node = node
@@ -793,15 +958,9 @@ class Runner:
         sig = text_signature(boxes)
         if screen in ("run_intro", "environment_choice", "prepare", "battle"):
             self.in_run = True
-        if self._curve and screen in ("prepare", "supply", "spotlight_choice", "settlement", "environment_choice",
-                                      "node_result", "strategy_choice", "encounter_choice", "tea_break"):
-            summary = summarize(self._curve)
-            if self._curve_node:
-                self.ledger.add(f"[{self._curve_node} 战斗] {summary}")
-            record["battle_summary"] = f"{self._curve_node or ''} {summary}"
-            self.log(f"[{n}] 上一场战斗:{record['battle_summary']}")
-            self._curve, self._curve_node = [], None
         self._last_screen = screen
+        if screen == "battle":
+            return self.watch_battle(n, record, sig)
 
         actions = self.reflex(screen, frame.image, boxes, record, sig)
         if actions is not None:
@@ -812,6 +971,7 @@ class Runner:
 
     def run(self, opts: RunOptions) -> str:
         started = time.monotonic()
+        self._stop = opts.stop
         for n in range(1, opts.max_steps + 1):
             if opts.stop.is_set():
                 return "stopped"

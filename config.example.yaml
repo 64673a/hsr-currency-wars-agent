@@ -47,6 +47,7 @@ agent:
   use_guides: true                   # 是否给模型看官方阵容指引卡
   max_tactical_calls_per_stage: 3
   max_run_minutes: 120
+  trailblazer_name: ""               # 开拓者在游戏里显示的名字(玩家自己取的),商店、补给、角色详情里显示的是它
 
 server:
   host: 127.0.0.1                    # 改成 0.0.0.0 才能从局域网其他设备打开网页

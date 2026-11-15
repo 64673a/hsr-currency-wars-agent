@@ -2,8 +2,8 @@
 
 界面(2026-11-14 实机):列表每行左边是组内层号,中间一行高亮是当前选中的;底部两个六边形里是当前选中的
 敌人难度和词缀数量(全屏 OCR 时常读不出,单独截出来放大再认)。左侧「A8 财富造物主」是当前职级的标题行,
-不跟着选中行变,不能用来判断选中的是哪个职级组。滚轮负数向下(难度降低),约 3 格变一层;
-底部有「返回最高职级」「开始对局」。
+不跟着选中行变,不能用来判断选中的是哪个职级组。列表上下各有一个箭头,点一下换一层(M7A S2 版的做法,
+比滚轮可控:滚轮约 3 格才变一层,还会受滚动惯性影响);底部有「返回最高职级」「开始对局」。
 
 A8 起有 4 个怪物词条(维护者告知),A7 是 3 个(实机读到过):从最高职级往下滚到词缀数量变成 3,再往上回到
 变回 4 的第一层就是 A8-1;A8 每层敌人难度 +1(维护者告知),往上调到第 N 层并核对数值。只支持 A8,
@@ -20,8 +20,9 @@ from PIL import Image
 
 from ..vision.ocr import Ocr, TextBox, find
 
-LIST_POINT = (0.5, 0.55)
-STEP = 3              # 滚几格变一级
+UP_ARROW = (0.5, 0.139)     # 列表上方的「∧」:往上一层(敌人难度更高);坐标取自 M7A,2026-11-14 截图核对
+DOWN_ARROW = (0.5, 0.782)   # 列表下方的「∨」:往下一层
+COARSE = 3                  # 粗调时一次往下几层
 MAX_STEPS = 80
 
 
@@ -71,9 +72,12 @@ def select(device, ocr: Ocr, target: str, log: Callable[[str], None], sleep=time
         state["a"] = a if a is not None else state["a"]
         return ocr(img)
 
-    def scroll(notches: int) -> None:
-        device.scroll(*LIST_POINT, notches)
-        sleep(0.6)
+    def step(layers: int) -> None:
+        """正数往上(更难)、负数往下,每点一次箭头换一层。"""
+        for _ in range(abs(layers)):
+            device.click(*(UP_ARROW if layers > 0 else DOWN_ARROW))
+            sleep(0.25)
+        sleep(0.4)
         look()
 
     boxes = look()
@@ -88,23 +92,23 @@ def select(device, ocr: Ocr, target: str, log: Callable[[str], None], sleep=time
     if state["a"] < A8_AFFIXES:
         log(f"难度:最高职级的词缀数量是 {state['a']},还没到 A8")
         return False
-    # 1. 粗调:往下滚到词缀数量变少(进了 A7)或滚到底
+    # 1. 粗调:往下到词缀数量变少(进了 A7)或到底
     for _ in range(MAX_STEPS):
         before = (state["d"], state["a"])
-        scroll(-3 * STEP)
+        step(-COARSE)
         if state["a"] < A8_AFFIXES or (state["d"], state["a"]) == before:
             break
-    # 2. 回到 A8:往上一层一层滚,直到词缀数量变回 4
+    # 2. 回到 A8:往上一层一层调,直到词缀数量变回 4
     for _ in range(MAX_STEPS):
         if state["a"] >= A8_AFFIXES:
             break
-        scroll(STEP)
+        step(1)
     # 3. 确认在 A8 最低一层:再往下一层,词缀变少就退回来
     for _ in range(MAX_STEPS):
         d0 = state["d"]
-        scroll(-STEP)
+        step(-1)
         if state["a"] < A8_AFFIXES:
-            scroll(STEP)
+            step(1)
             break
         if state["d"] == d0:   # 滚到底了
             break
@@ -117,7 +121,7 @@ def select(device, ocr: Ocr, target: str, log: Callable[[str], None], sleep=time
     for _ in range(MAX_STEPS):
         if state["d"] == goal:
             break
-        scroll(STEP if state["d"] < goal else -STEP)
+        step(1 if state["d"] < goal else -1)
         if state["a"] < A8_AFFIXES:
             log(f"难度:滚出了 A8(敌人难度 {state['d']})")
             return False

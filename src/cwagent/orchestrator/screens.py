@@ -7,13 +7,29 @@ import re
 from ..vision.ocr import TextBox, find, has
 
 
+def _top(boxes: list[TextBox], pattern: str, y1: float = 0.12) -> bool:
+    """界面标题一带(顶部居中)有没有这段文字。左侧羁绊列表里也有「奇兽花园」「开拓银轨」这类名字,要排除。"""
+    return find(boxes, pattern, region=(0.28, 0.0, 0.48, y1)) is not None
+
+
 def classify(boxes: list[TextBox]) -> str:
+    # 断线提示盖在任何界面上面(M7A S2 资料)
+    if has(boxes, "失去网络连接") and has(boxes, "是否尝试重新连接"):
+        return "reconnect"
+    if (has(boxes, "连接中断") and has(boxes, "退出游戏")) or (has(boxes, "加载失败") and has(boxes, "立即切换")):
+        return "disconnected"
     if has(boxes, "点击空白处继续"):
         return "tap_continue"
+    if has(boxes, "点击空白处关闭"):
+        return "tap_close"
     if has(boxes, "点击空白加速"):
         return "battle_end"
-    if has(boxes, "可出战角色人数未达上限"):
+    if has(boxes, "助燃券持有数量已达上限"):
+        return "reward_limit"
+    if has(boxes, "可出战角色人数未达上限") or (has(boxes, "本局不再提示") and find(boxes, "^确认$")):
         return "deploy_confirm"
+    if has(boxes, "前台区域无角色|前台无角色") and find(boxes, "^确认$"):
+        return "empty_front"
     if find(boxes, "^前往结算$") and find(boxes, "挑战结束"):   # 小队生命耗尽,整局失败(M7A)
         return "settlement"
     if find(boxes, "^继续挑战$") and find(boxes, "挑战成功|挑战结束|获得金币总览"):
@@ -35,6 +51,24 @@ def classify(boxes: list[TextBox]) -> str:
         return "battle"
     if has(boxes, "^补给阶段$"):
         return "supply"
+    # 备战界面上叠的面板:背景里仍有「备战阶段」,要先于备战界面判断(M7A S2 资料;开拓商店 2026-11-14 实机见过,
+    # 当成备战界面时点商店只提示「该状态下不可使用」,卡住了一个节点)
+    if _top(boxes, "开拓商店") and (has(boxes, "星穹列车") or has(boxes, "累计消耗解锁") or find(boxes, "^详情$")):
+        return "rail_shop"
+    if has(boxes, "黑市主理人") and has(boxes, "轮换商品|招牌商品"):
+        return "black_market"
+    if _top(boxes, "巡海游侠") and (has(boxes, "任命1名角色|任命一名角色") or find(boxes, "^确认选择$")):
+        return "ranger"
+    if _top(boxes, "梦境交织") and has(boxes, "进行共舞"):
+        return "dance"
+    if _top(boxes, "奇兽花园") and (has(boxes, "选择奇美拉") or find(boxes, "^确认选择$")):
+        return "garden"
+    if has(boxes, "骇入效果") and (find(boxes, "^确认选择$") or find(boxes, "^详情$")):
+        return "hack"
+    if has(boxes, "替换该角色原有光环"):
+        return "spotlight_replace"
+    if has(boxes, "主角光环与奇遇详情"):
+        return "spotlight_info"
     if has(boxes, "选择一个角色获得主角光环"):
         return "spotlight_choice"
     if has(boxes, "请选择投资策略"):
@@ -64,7 +98,10 @@ def classify(boxes: list[TextBox]) -> str:
 ROLES = {
     "prepare": "tactical",
     "environment_choice": "strategic", "strategy_choice": "strategic", "spotlight_choice": "strategic",
+    "spotlight_replace": "strategic",
     "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
+    "rail_shop": "chooser", "black_market": "chooser", "ranger": "chooser", "dance": "chooser", "garden": "chooser",
+    "hack": "chooser",
 }
 
 
@@ -75,6 +112,8 @@ def role_of(screen: str) -> str:
 SCREEN_NAMES = {
     "prepare": "备战", "environment_choice": "投资环境", "strategy_choice": "投资策略", "spotlight_choice": "主角光环",
     "encounter_choice": "遭遇节点", "supply": "补给", "tea_break": "幕后茶歇", "difficulty": "难度选择",
+    "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
+    "dance": "梦境交织共舞", "garden": "奇兽花园", "hack": "骇入效果",
     "other": "其他界面",
 }
 
@@ -145,7 +184,7 @@ TEA_BREAK_HINT = """幕后茶歇(流程见规则卡):选一个选项后,选项�
 
 DIFFICULTY_HINT = """目标难度:{target}(「A8」是职级分组,后面的数字是组内第几层,从 1 开始)。程序没能自动选好,请手动调。
 左侧是当前选中行所在的职级组(如「A8财富造物主」);底部「敌人难度」标签上面的数字是当前的敌人难度(不是词缀数量)。
-同一组里每往上一层敌人难度 +1。用 scroll 在 (0.5, 0.55) 滚动列表:负数向下(难度降低),正数向上,大约 3 格变一层。
+同一组里每往上一层敌人难度 +1。点列表上方的「∧」(0.5, 0.139) 往上一层,点下方的「∨」(0.5, 0.782) 往下一层(难度降低)。
 找到目标组的第 1 层(再往下就换成下一个职级组),往上数到目标层,确认后再点「开始对局」。"""
 
 
@@ -159,3 +198,28 @@ SPOTLIGHT_LAYOUT = """主角光环选择界面布局(坐标可直接用于 click
 - 主角空位在 (0.500, 0.407):把要当主角的角色从上面的格子 drag 到这里。
 - 界面中间的「尚未选择主角角色和光环」消失即表示光环和主角都已选好,再点「确认」(0.504, 0.882)。
 - 「返回备战界面」(0.922, 0.060) 只是返回,首领节点必须选完光环才能出战。"""
+
+
+# 备战界面上叠的面板(坐标取自 M7A S2 版,1920x1080 设计坐标换算;标「待实测」的还没在实机核对)
+CLOSE_CORNER = (0.006, 0.011)    # 左上角最边上的空白:M7A 用它关闭角色详情、开拓商店、黑市
+OVERLAY_HINTS = {
+    "rail_shop": """开拓商店(开拓银轨羁绊的商店,盖在备战界面上;M7A S2 资料,待实测):
+- 面板左上的数字(约 0.33, 0.10)是开拓力余额;商品用开拓力买,不花金币。
+- 「星穹列车,跃迁!」(约 0.53, 0.35)右边的数字是它的价格,为 0 时点它免费启动,启动后才出现商品目录;
+  目录每列下方有「详情」,右上「累计消耗解锁」是累计消耗开拓力解锁的进度。
+- 看完或不买:点左上角最边上的空白 (0.006, 0.011) 关闭面板回到备战界面。不要点左上的退出图标(会弹出中断对局)、
+  也不要点左侧奇遇伙伴头像旁的 X(会打开主角光环详情)。""",
+    "black_market": """黑市商店(盖在备战界面上;M7A S2 资料,待实测):
+- 顶部「轮换商品」「招牌商品」两栏,每件商品下方有「详情」(约 y 0.45),看清效果和价格再决定买不买。
+- 不买就点左上角最边上的空白 (0.006, 0.011) 关闭,回到备战界面。""",
+    "ranger": """巡海游侠任命(M7A S2 资料,待实测):从候选角色里任命 1 名。
+- 点角色名字(约 y 0.33)选中,名字下方的「详情」能看说明;再点「确认选择」(约 0.78, 0.53)。""",
+    "dance": """梦境交织共舞(梦境交织羁绊,2026-11-14 实机):选 2 个角色进行共舞,增加战斗内连携效果。
+- 候选角色名字约在 y 0.33,下方是「详情」;点两个角色选中(卡上方出现「已选择」),再点「确认选择」(约 0.78, 0.53)。""",
+    "garden": """奇兽花园:三选一选择奇美拉(M7A S2 资料,待实测)。
+- 三列中心约 x 0.33 / 0.54 / 0.76,名字约 y 0.375,上方是效果说明。点名字选中,再点「确认选择」(约 0.777, 0.555)。""",
+    "hack": """骇入效果:二选一(M7A S2 资料,待实测)。
+- 两列中心约 x 0.41 / 0.68,名字约 y 0.375,上方是效果说明。点名字选中,再点「确认选择」(约 0.777, 0.555)。""",
+    "spotlight_replace": """这个角色已经有主角光环,确认就会替换掉原来的光环;不想替换就点「取消」。""",
+}
+GREY_CONFIRM = "「{text}」按钮现在是灰色的(还没选够,点了没用):先选中选项再确认。"

@@ -5,7 +5,9 @@
   比例也接近,还包括皮肤(装了皮肤的角色卡面跟着换,官方图标对不上,例如火花「甜梦电波」);
 - 官方接口的角色图标(data/templates/roles/<id>.png):卡面就是它按卡宽缩放后的上半部分;
 - 游戏里商店卡片的立绘(data/templates/cards/<id>.png):前两种都没有的角色或皮肤,
-  商店卡片下方有名字,看到一次就存下来(learn_from_shop)。
+  商店卡片下方有名字,看到一次就存下来(learn_from_shop);
+- 点开详情面板读到名字的卡面(data/templates/learned/<id>-<n>.png):还是认不出的卡,程序点开详情读名字
+  (M7A 的做法),把卡面中央按 M7A 头像的比例存下来,之后和 M7A 头像一起比(learn_card)。
 坐标以 1920x1080 客户区实测(2026-11-14),全部归一化。
 """
 
@@ -20,6 +22,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from .cards import bench_marks, card_cost, star_colors
 from .ocr import TextBox
 
 # 每格卡片的中心和大小(归一化)。前台、后台每排居中、等距。前台固定 4 格;后台 6 格起,每个佩佩 / 叽米、
@@ -74,6 +77,9 @@ class Slot:
     role_id: str | None = None
     score: float = 0.0
     stars: int = 0
+    cost: int | None = None     # 卡面底部色条读出的费用档(1~5)
+    halo: bool = False          # 星星是蓝色的:选了主角光环(维护者告知)
+    mark: str = ""              # 备战席的特殊格:乱流格 / 锁定(M7A 的模板)
 
     @property
     def empty(self) -> bool:
@@ -180,23 +186,6 @@ def _filled(card: np.ndarray) -> bool:
     return float(purple.mean()) < 0.8
 
 
-def count_stars(card: np.ndarray) -> int:
-    """卡片底部、费用条上方居中的发光星星个数:数亮黄色星芯占的列段。"""
-    h, w = card.shape[:2]
-    band = card[int(h * 0.70):int(h * 0.93), int(w * 0.12):int(w * 0.88)]
-    hsv = cv2.cvtColor(band, cv2.COLOR_BGR2HSV)
-    core = (hsv[..., 2] >= 235) & (hsv[..., 1] >= 50) & (hsv[..., 0] >= 10) & (hsv[..., 0] <= 40)
-    cols = list(core.sum(axis=0)) + [0]
-    runs, start = 0, None
-    for i, v in enumerate(cols):
-        if v > 0 and start is None:
-            start = i
-        elif v == 0 and start is not None:
-            runs += i - start >= 2
-            start = None
-    return min(3, runs)
-
-
 def _load(path: Path) -> np.ndarray:
     im = Image.open(path).convert("RGBA")
     bg = Image.new("RGBA", im.size, (0, 0, 0, 255))
@@ -242,6 +231,7 @@ class Portraits:
         self._scaled: dict[int, list[tuple[str, list[np.ndarray]]]] = {}   # 卡宽 -> 缩放好的头像
         self.icons: dict[str, np.ndarray] = {}
         self.cards: dict[str, np.ndarray] = {}
+        self.learned_dir = templates_dir / "learned"
         avatars = templates_dir / "avatars"
         if (avatars / "names.json").exists():
             table = json.loads((avatars / "names.json").read_text(encoding="utf-8"))
@@ -249,6 +239,10 @@ class Portraits:
                 p = avatars / f"{key}.png"
                 if p.exists():
                     self.avatars.append((rid, _center(_load(p))))
+        for p in sorted(self.learned_dir.glob("*.png")):
+            rid = p.stem.split("-")[0]
+            if rid in names:
+                self.avatars.append((rid, _bgr(Image.open(p))))
         roles = templates_dir / "roles"
         for rid in names:
             p = roles / f"{rid}.png"
@@ -332,14 +326,46 @@ class Portraits:
         for s in slots(shop_open, self.counts):
             w, h = _size(s.zone, shop_open)
             card = _crop(img, s.x, s.y, w, h)
-            if not _filled(card):
+            if s.zone == "bench":
+                s.mark = bench_marks(img, round(s.x * 1920), round(s.y * 1080))
+            if not _filled(card) or s.mark == "乱流格":     # 空的乱流格上只有一个标记,不是角色
                 out.append(s)
                 continue
             rid, score = self.identify(card)
             s.role_id, s.name, s.score = rid, self.names.get(rid) if rid else None, max(score, 0.01)
-            s.stars = count_stars(card)
+            gold, blue = star_colors(card)
+            s.stars, s.halo = (blue, True) if blue and not gold else (gold, False)
+            s.cost = card_cost(card)
             out.append(s)
         return out
+
+    # ---------------------------------------------------------------- 从详情面板学头像
+
+    def role_of(self, text: str) -> str | None:
+        """详情面板里读到的名字 → 角色 id。名字后面可能粘着别的字,取包含在里面的最长的已知名字。"""
+        t = _norm(text)
+        hits = [(len(_norm(n)), rid) for rid, n in self.names.items() if _norm(n) and _norm(n) in t]
+        return max(hits)[1] if hits else None
+
+    def learn_card(self, card: np.ndarray, rid: str) -> None:
+        """把认不出的卡面中央(和 M7A 头像中央 64 像素对应的那块)存成这个角色的头像模板。"""
+        h, w = card.shape[:2]
+        side = AVATAR_SIDE * w * AVATAR_SCALE
+        cx, cy = AVATAR_CENTER[0] * w, AVATAR_CENTER[1] * h
+        crop = card[max(0, int(cy - side / 2)):int(cy + side / 2), max(0, int(cx - side / 2)):int(cx + side / 2)]
+        if crop.size == 0:
+            return
+        t = cv2.resize(crop, (AVATAR_SIDE, AVATAR_SIDE), interpolation=cv2.INTER_CUBIC)
+        self.learned_dir.mkdir(parents=True, exist_ok=True)
+        n = len(list(self.learned_dir.glob(f"{rid}-*.png")))
+        Image.fromarray(cv2.cvtColor(t, cv2.COLOR_BGR2RGB)).save(self.learned_dir / f"{rid}-{n + 1}.png")
+        self.avatars.append((rid, t))
+        self._scaled.clear()
+
+    def card_image(self, image: Image.Image, slot: Slot, shop_open: bool = False) -> np.ndarray:
+        img = _bgr(image.resize((1920, 1080)) if image.size != (1920, 1080) else image)
+        w, h = _size(slot.zone, shop_open)
+        return _crop(img, slot.x, slot.y, w, h)
 
     # ---------------------------------------------------------------- 从商店学立绘
 
@@ -364,17 +390,35 @@ class Portraits:
         return learned
 
 
+DETAIL_ROLE = re.compile(r"^(前台|后台|前后台)$")
+DETAIL_SKIP = {"试用", "试用角色", "备战阶段", "角色详情", "装备追踪中"}
+
+
+def detail_name(boxes: list[TextBox]) -> str | None:
+    """角色详情面板(右侧)里的名字:在「前台 / 后台 / 前后台」标签正上方(2026-11-14 实测:名字约 (0.79, 0.213),
+    标签约 (0.81, 0.250);试用角色的名字上方还有「试用」)。没有详情面板返回 None。"""
+    role = next((b for b in boxes if DETAIL_ROLE.match(b.text) and b.x > 0.74 and 0.15 < b.y < 0.4), None)
+    if role is None:
+        return None
+    above = [b for b in boxes if b.x > 0.73 and 0.008 < role.y - b.y < 0.06 and b.text not in DETAIL_SKIP
+             and re.search(r"[\u4e00-\u9fff]", b.text)]
+    return max(above, key=lambda b: b.y).text if above else None
+
+
 def format_board(board: list[Slot]) -> str:
     """给模型看的阵容(含每格坐标)。"""
     lines = []
     for zone, label in (("front", "前台"), ("back", "后台"), ("bench", "备战席")):
         cells = []
         for s in (b for b in board if b.zone == zone):
+            mark = f",{s.mark}" if s.mark else ""
             if s.empty:
-                cells.append(f"{s.index + 1}号(空) ({s.x:.3f},{s.y:.3f})")
+                cells.append(f"{s.index + 1}号(空{mark}) ({s.x:.3f},{s.y:.3f})")
             else:
                 who = s.name or "认不出"
                 star = f" {s.stars}星" if s.stars else ""
-                cells.append(f"{s.index + 1}号 {who}{star} ({s.x:.3f},{s.y:.3f})")
+                extra = "、".join(x for x in (f"{s.cost}费" if s.cost else "", "主角光环" if s.halo else "",
+                                              s.mark) if x)
+                cells.append(f"{s.index + 1}号 {who}{star}" + (f"({extra})" if extra else "") + f" ({s.x:.3f},{s.y:.3f})")
         lines.append(f"- {label}:" + ";".join(cells))
     return "\n".join(lines)

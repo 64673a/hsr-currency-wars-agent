@@ -179,6 +179,7 @@ def test_prepare_semantic_actions(tmp_path):
                                     Action(type="ready")]]})
     runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     runner.macros = lambda *a: None     # 跳过收集节点、开晶矿
+    runner.watch_battle = lambda n, record, sig: "battle"    # 模拟画面上的战斗不会结束
     runner.run(RunOptions(max_steps=3))
     assert brain.calls == [("prepare", "opening", 1)]
     kinds = [a[0] for a in sim.actions]

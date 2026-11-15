@@ -17,6 +17,11 @@ from .ocr import Ocr, TextBox, find
 
 GOLD_AREA = (0.815, 0.815, 0.09, 0.06)    # 右下「商店」按钮上的金币图标和数字
 LEVEL_AREA = (0.13, 0.82, 0.06, 0.045)    # 左下「购买经验」里的 Lv.N
+# 以下取自 M7A S2 版(1920x1080 设计坐标换算)。商店展开时这两处被商店那一排挡住,读不到(2026-11-14 实测)。
+HP_AREA = (0.7406, 0.0574, 0.0359, 0.0352)        # 顶部爱心后面的数字(从爱心下方开始截,避开图标)
+DEPLOYED_DIGITS = (0.4656, 0.2028, 0.0797, 0.0657)   # 「已上场/上限」的数字(不含左边的小人图标)
+DEPLOYED_WIDE = (0.4479, 0.1991, 0.1172, 0.0806)     # 10 人以上数字向两边展开
+DEPLOYED_REGION = (0.44, 0.2, 0.1, 0.08)
 
 
 @dataclass
@@ -27,6 +32,7 @@ class Hud:
     level: int | None = None
     exp: str | None = None          # 如 12/40
     deployed: str | None = None     # 已上场/上限,如 5/6
+    over: bool = False              # 已上场超过上限(光环额外占人口时数字变红,M7A)
 
     def as_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -37,7 +43,7 @@ class Hud:
                  f"金币 {self.gold}" if self.gold is not None else "金币 认不出",
                  f"等级 {self.level}" if self.level is not None else "",
                  f"经验 {self.exp}" if self.exp else "",
-                 f"上场 {self.deployed}" if self.deployed else ""]
+                 f"上场 {self.deployed}" + ("(超过上限,数字是红的)" if self.over else "") if self.deployed else ""]
         return ",".join(p for p in parts if p)
 
 
@@ -92,18 +98,71 @@ def read_level(image: Image.Image, ocr: Ocr) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def read_crop(image: Image.Image, ocr: Ocr, box: tuple[float, float, float, float]) -> str:
+    """单独截一块、放大 2 倍再识别(M7A:整屏识别会把 91 漏成 9、把相邻的两个 1 拆开)。"""
+    crop = Image.fromarray(_crop(image, box))
+    crop = crop.resize((crop.width * 2, crop.height * 2), Image.LANCZOS)
+    pad = Image.new("RGB", (crop.width + 60, crop.height + 60))
+    pad.paste(crop, (30, 30))
+    return "".join(b.text for b in ocr(pad))
+
+
+def _shop_open(boxes: list[TextBox]) -> bool:
+    """商店展开时生命值和上场人数被商店那一排挡住,不去单独截图识别。"""
+    return find(boxes, "^收起$", region=(0.78, 0.86, 0.14, 0.08)) is not None
+
+
+def over_capacity(image: Image.Image) -> bool:
+    """「已上场/上限」的数字是红的:光环让已上场暂时超过上限(M7A 的颜色门槛)。"""
+    px = _crop(image, DEPLOYED_DIGITS).astype(np.int16)
+    r, g, b = px[..., 0], px[..., 1], px[..., 2]
+    scale = (image.size[1] / 1080) ** 2
+    return int(((r >= 186) & (r - g >= 80) & (r - b >= 70)).sum()) >= 150 * scale
+
+
+def parse_deployed(text: str, over: bool = False) -> str | None:
+    """「已上场/上限」。左边的小人图标常被认成 i、1 或冒号:「i3/5久」→ 3/5,「12/3」→ 2/3(M7A)。
+    上限 3~14;已上场一般不超过上限,数字变红(超员)时最多 14。"""
+    for m in re.finditer(r"(\d{1,2})/(\d{1,2})", text or ""):
+        used, cap = int(m.group(1)), int(m.group(2))
+        if not 3 <= cap <= 14:
+            continue
+        if used > cap and not over and used >= 10 and used - 10 <= cap:
+            used -= 10
+        if used <= cap or (over and used <= 14):
+            return f"{used}/{cap}"
+    return None
+
+
+def read_deployed(image: Image.Image, boxes: list[TextBox], ocr: Ocr) -> tuple[str | None, bool]:
+    over = over_capacity(image)
+    dep = find(boxes, r"\d{1,2}/\d{1,2}", region=DEPLOYED_REGION)
+    value = parse_deployed(dep.text, over) if dep else None
+    if value is None and not _shop_open(boxes):
+        value = parse_deployed(read_crop(image, ocr, DEPLOYED_DIGITS), over)
+    if value is not None and int(value.split("/")[1]) >= 10:    # 10 人以上数字向两边展开,窄裁剪会把 11/11 读成 1/11
+        wide = parse_deployed(read_crop(image, ocr, DEPLOYED_WIDE), over)
+        value = wide or value
+    return value, over
+
+
+def read_hp(image: Image.Image, boxes: list[TextBox], ocr: Ocr) -> int | None:
+    hp = find(boxes, r"^\d{1,3}$", region=(0.73, 0.045, 0.05, 0.05))   # 顶部爱心图标后的数字
+    if hp and int(hp.text) <= 150:
+        return int(hp.text)
+    if _shop_open(boxes):
+        return None
+    text = re.sub(r"\D", "", read_crop(image, ocr, HP_AREA))
+    return int(text) if text and len(text) <= 3 and int(text) <= 150 else None
+
+
 def read_hud(image: Image.Image, boxes: list[TextBox], ocr: Ocr, node: str | None = None) -> Hud:
     hud = Hud(node=node)
-    hp = find(boxes, r"^\d{1,3}$", region=(0.73, 0.045, 0.05, 0.05))   # 顶部爱心图标后的数字
-    if hp:
-        hud.hp = int(hp.text)
+    hud.hp = read_hp(image, boxes, ocr)
     exp = find(boxes, r"^\d{1,3}/\d{1,3}$", region=(0.12, 0.86, 0.07, 0.04))
     if exp:
         hud.exp = exp.text
-    dep = find(boxes, r"\d{1,2}/\d{1,2}$", region=(0.44, 0.2, 0.1, 0.08))
-    if dep:
-        m = re.search(r"(\d{1,2}/\d{1,2})$", dep.text)
-        hud.deployed = m.group(1) if m else None
+    hud.deployed, hud.over = read_deployed(image, boxes, ocr)
     hud.gold = read_gold(image, ocr)
     hud.level = read_level(image, ocr)
     return hud

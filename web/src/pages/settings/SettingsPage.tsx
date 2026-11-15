@@ -336,6 +336,12 @@ function ConfigForm({ settings, models, onSaved }: { settings: Settings; models:
             value={s.knowledge.max_lineups}
             onValueChange={(v) => update({ ...s, knowledge: { ...s.knowledge, max_lineups: v } })}
           />
+          <Input
+            label="开拓者的名字"
+            placeholder="游戏里开拓者显示的名字"
+            value={s.agent.trailblazer_name}
+            onChange={(e) => agent({ trailblazer_name: e.target.value })}
+          />
           <div className={page.field}>
             <span id={`${id}-guides`} className={page.fieldLabel}>参考官方阵容</span>
             <div className={page.switchControl}>

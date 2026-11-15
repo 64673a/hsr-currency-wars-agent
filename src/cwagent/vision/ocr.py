@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PIL import Image
 
@@ -73,3 +73,16 @@ def find(boxes: list[TextBox], pattern: str, *, region: tuple[float, float, floa
 
 def has(boxes: list[TextBox], *patterns: str) -> bool:
     return all(find(boxes, p) for p in patterns)
+
+
+class Aliased:
+    """把界面文字里的别名换成知识库里的名字后再交出去,其余照原样。开拓者在商店、补给、角色详情里显示的是
+    玩家自己取的名字(M7A 也要用户配置这个名字:currencywars_remembrance_trailblazer_name)。"""
+
+    def __init__(self, ocr, aliases: dict[str, str]):
+        self.ocr = ocr
+        self.aliases = {k.strip(): v for k, v in aliases.items() if k.strip()}
+
+    def __call__(self, image: Image.Image, region: tuple[float, float, float, float] | None = None) -> list[TextBox]:
+        boxes = self.ocr(image, region) if region is not None else self.ocr(image)
+        return [replace(b, text=self.aliases[b.text]) if b.text in self.aliases else b for b in boxes]

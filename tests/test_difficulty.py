@@ -18,13 +18,10 @@ class ListDevice:
     def click(self, x, y, *, button="left"):
         if abs(x - 0.726) < 0.01:          # 返回最高职级
             self.pos, self.ticks = len(LEVELS) - 1, 0
-
-    def scroll(self, x, y, notches):
-        self.ticks += notches               # 3 格变一层
-        while self.ticks >= 3:
-            self.pos, self.ticks = min(self.pos + 1, len(LEVELS) - 1), self.ticks - 3
-        while self.ticks <= -3:
-            self.pos, self.ticks = max(self.pos - 1, 0), self.ticks + 3
+        elif (x, y) == difficulty.UP_ARROW:
+            self.pos = min(self.pos + 1, len(LEVELS) - 1)
+        elif (x, y) == difficulty.DOWN_ARROW:
+            self.pos = max(self.pos - 1, 0)
 
 
 def run(target, start=15):
