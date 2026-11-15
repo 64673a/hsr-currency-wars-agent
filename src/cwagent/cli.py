@@ -614,6 +614,29 @@ def uninstall_cmd(
     typer.echo("完成。" + ("现在可以删除程序所在的文件夹。" if everything else ""))
 
 
+@web_app.command("build")
+def web_build() -> None:
+    """在本机用前端源码重新构建网页界面(改了 web/ 之后要用;需要 node 和 npm)。"""
+    import shutil
+    import subprocess
+
+    from . import paths
+
+    web = paths.root() / "web"
+    if not (web / "package.json").exists():
+        _fail(f"找不到前端源码:{web}")
+    if not shutil.which("npm"):
+        _fail("没有 npm:装 Node.js 后重试,或者 `cwagent web download` 用官方预构建包")
+    if not (web / "node_modules").exists():
+        typer.echo("安装前端依赖…")
+        subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=web, check=False)
+    typer.echo("构建网页界面…")
+    done = subprocess.run(["npm", "run", "build"], cwd=web, check=False)
+    if done.returncode != 0:
+        _fail("构建失败,看上面的输出")
+    typer.echo(f"已更新 {paths.web_dist()};重启 cwagent serve 后生效")
+
+
 @web_app.command("download")
 def web_download() -> None:
     """下载最新的网页界面预构建包(替换 web/dist)。"""

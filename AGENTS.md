@@ -17,7 +17,7 @@
 | `src/cwagent/` | agent 本体(按设计文档第 15 节的结构逐步实现) |
 | `pyproject.toml`、`uv.lock`、`.python-version` | uv 项目配置 |
 | `config.example.yaml` | 配置示例,复制为 `config.yaml`(不入库)后使用 |
-| `web/` | 前端:React 19 + Vite + TypeScript + Arc(uiarc.dev,shadcn 注册表,组件源码在 `web/src/components/arc/`),`npm run build` 产出 `web/dist/` 由后端托管 |
+| `web/` | 改了前端源码后要在跑服务的那台机器上重新构建(`cwagent web build`,或 `cd web && npm install && npm run build`),`cwagent serve` 只会在 `web/dist` 不存在时下载预构建包、不会重建。前端:React 19 + Vite + TypeScript + Arc(uiarc.dev,shadcn 注册表,组件源码在 `web/src/components/arc/`),`npm run build` 产出 `web/dist/` 由后端托管 |
 | `local/` | 维护者的个人开发辅助工具,不入库。存在时先读 `local/AGENTS.md` |
 
 ## Python 环境(uv)
