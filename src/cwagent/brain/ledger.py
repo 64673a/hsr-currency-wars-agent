@@ -29,6 +29,7 @@ class NodeRecord:
 class RunLedger:
     difficulty: str = ""
     companion: str = ""
+    companion_intro: str = ""                                # 对局中弹出的「本局奇遇」介绍横幅的正文
     intro: str = ""                                          # 开局界面上的首领、怪物词条等原文
     plane_nodes: str = ""                                    # 本位面的节点序列(程序在位面开始时收集)
     direction: str = ""                                      # 对局方向与计划(模型写)

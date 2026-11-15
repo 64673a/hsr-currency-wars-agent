@@ -94,7 +94,7 @@ def test_runner_reflexes_and_episode(tmp_path):
     }
 
     def rules(state, a):
-        return {("intro", ("click", 0.73, 0.91)): "tap", ("tap", ("click", 0.5, 0.62)): "env",
+        return {("intro", ("click", 0.73, 0.91)): "tap", ("tap", ("click", 0.5, 0.89)): "env",
                 ("env", ("click", 0.56, 0.91)): "end"}.get((state, a))
 
     sim = Sim(pages, "intro", rules)
@@ -105,7 +105,9 @@ def test_runner_reflexes_and_episode(tmp_path):
                     log=lambda m: None, settle=False)
     assert runner.run(RunOptions(max_steps=10)) == "settlement"
     assert met == ["菇菇兔"] and brain.calls == [("environment_choice", "opening", 1)]
-    assert sim.actions == [("click", 0.73, 0.91), ("click", 0.5, 0.62), ("click", 0.77, 0.36), ("click", 0.56, 0.91)]
+    # 「点击空白处继续」按提示文字本身的位置点(奇遇横幅的提示在 y≈0.655,固定点 0.62 点不到,2026-11-16 实机);
+    # 这个用例里的提示在 0.89,所以点 0.89 而不是以前写死的 0.62
+    assert sim.actions == [("click", 0.73, 0.91), ("click", 0.5, 0.89), ("click", 0.77, 0.36), ("click", 0.56, 0.91)]
     led = runner.ledger
     assert led.companion == "菇菇兔" and "本场对局首领" in led.intro
     assert led.direction == "主 C 走那刻夏"

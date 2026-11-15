@@ -12,13 +12,31 @@ def _top(boxes: list[TextBox], pattern: str, y1: float = 0.12) -> bool:
     return find(boxes, pattern, region=(0.28, 0.0, 0.48, y1)) is not None
 
 
+def companion_banner(boxes: list[TextBox]) -> tuple[float, float] | None:
+    """奇遇伙伴的介绍横幅:返回点哪里能跳过,不是横幅返回 None。
+
+    奇遇伙伴出现时机不定(维护者 2026-11-16):那个发光的页面就是它,左边伙伴立绘,中间标题「本局奇遇」,
+    正文写它带来什么,底部「点击空白处继续」(实机 y≈0.655)。它会出现任何界面上(投资策略、补给、备战),
+    不是每局都有,也不用做任何选择,认出就点掉。
+    OCR 没读到「点击空白处继续」时退回横幅中间(那也是空白处);开局介绍界面也有「本局奇遇」,
+
+    但它带「下一步」,不归这里管。
+    """
+    if find(boxes, "^本局奇遇$") is None or find(boxes, "^下一步$") is not None:
+        return None
+    hint = find(boxes, "点击空白处继续")
+    return (float(hint.x), float(hint.y)) if hint is not None else (0.5, 0.655)
+
+
 def classify(boxes: list[TextBox]) -> str:
     # 断线提示盖在任何界面上面(M7A S2 资料)
     if has(boxes, "失去网络连接") and has(boxes, "是否尝试重新连接"):
         return "reconnect"
     if (has(boxes, "连接中断") and has(boxes, "退出游戏")) or (has(boxes, "加载失败") and has(boxes, "立即切换")):
         return "disconnected"
-    if has(boxes, "点击空白处继续"):
+    # 奇遇伙伴的介绍横幅可能出现 ANY 时刻(投资策略、补给、备战……),而且不是每局都有(维护者 2026-11-16),
+    # 所以在所有界面判断之前先认它,认出就点掉
+    if has(boxes, "点击空白处继续") or companion_banner(boxes) is not None:
         return "tap_continue"
     if has(boxes, "点击空白处关闭"):
         return "tap_close"

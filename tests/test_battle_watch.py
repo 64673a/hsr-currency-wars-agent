@@ -94,3 +94,15 @@ def test_watcher_stops():
     rep = bw.BattleWatcher(Device(), lambda im, region=None: [], classify=lambda im: "battle",
                            stop=lambda: True).run()
     assert rep.end == "stopped"
+
+
+def test_drop_count_flags_missed_banner():
+    """横幅漏检时也要让模型知道:行动值的 35 的整数倍骤降是独立信号(2026-11-16 实机两场一次横幅都没认出)。"""
+    rep = bw.BattleReport()
+    rep.samples = [(0.0, 145, None), (1.0, 105, None), (2.0, 88, None), (3.0, 101, None), (4.0, 55, None)]
+    assert rep.drop_count() == 2                       # 145→105(-40)、88→101 上涨不算、101→55(-46)
+    rep.deaths = [{"t": 1.0, "av": 145, "after": 105}]
+    text = rep.text()
+    assert "阵亡 1 次" in text and "另有 1 次行动值骤降" in text
+    rep.deaths = [{"t": 1.0, "av": 145, "after": 105}, {"t": 4.0, "av": 101, "after": 55}]
+    assert "另有" not in rep.text()                    # 两个信号对得上就不再提

@@ -130,6 +130,55 @@ def survey_plane(device, ocr: Ocr, log: Callable[[str], None], *, affixes: list 
     return lines
 
 
+# ---------------------------------------------------------------- 奇遇伙伴
+
+COMPANION_ICON = (0.039, 0.123)          # 备战界面左上角的奇遇伙伴头像(2026-11-16 实机)
+COMPANION_BUBBLE = (0.28, 0.75, 0.55, 0.18)   # 详情页里悬停头像后弹出的气泡(名字 + 它带来什么)
+COMPANION_FIRST_X = 0.263                # 左下角第一个伙伴头像的 x(1920x1080 实测)
+COMPANION_STEP = 0.077                   # 头像间距,按它往右一个个试
+COMPANION_Y = 0.863                      # 头像的 y(悬停位置)
+COMPANION_SLOTS = 6                      # 最多试几个
+COMPANION_CLOSE = (0.970, 0.060)         # 详情页右上角的 X
+
+
+def _bubble(ocr: Ocr, image: Image.Image) -> str:
+    # 气泡区域右边会蹭到头像下面那块名字标签的残字(实机读到过末尾多一个「狼」),单字丢掉
+    rows = sorted((b for b in ocr(image, COMPANION_BUBBLE) if len(b.text) > 1), key=lambda b: (round(b.y, 2), b.x))
+    return " ".join(b.text for b in rows)
+
+
+def read_companions(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] | None:
+    """点备战界面左上角的奇遇伙伴头像,在「主角光环与奇遇详情」页面左下角逐个悬停,读出本局的奇遇伙伴。
+
+    奇遇伙伴的出场时机不定(维护者 2026-11-16);这一页左下角列着本局所有的伙伴,鼠标停在头像上会弹气泡,
+    写着它是谁、带来什么,例如「不死狼将在【幕后茶歇】找你聊聊新的委托。/ 第一位面的最后的奖励节点将替换为幕后茶歇。」
+    (2026-11-16 实机截图)。读完点右上角 X 回备战界面。打不开或读不到就返回 None,不影响备战。
+    """
+    device.click(*COMPANION_ICON)
+    time.sleep(1.2)
+    if not has(ocr(device.grab().image), "主角光环与奇遇详情"):
+        log("读奇遇伙伴:没有打开详情页,放弃")
+        return None
+    lines: list[str] = []
+    misses = 0
+    for i in range(COMPANION_SLOTS):
+        device.move(COMPANION_FIRST_X + i * COMPANION_STEP, COMPANION_Y)
+        time.sleep(0.7)
+        text = _bubble(ocr, device.grab().image)
+        if not text or text in lines:
+            misses += 1
+            if misses >= 2:      # 连续两个位置读不到就认为没有更多伙伴
+                break
+            continue
+        misses = 0
+        lines.append(text)
+    device.click(*COMPANION_CLOSE)
+    time.sleep(0.8)
+    if not find(ocr(device.grab().image), "备战阶段"):
+        log("读奇遇伙伴:关掉详情页后没回到备战界面")
+    return lines
+
+
 # ---------------------------------------------------------------- 晶矿
 
 _GIFT: np.ndarray | None = None

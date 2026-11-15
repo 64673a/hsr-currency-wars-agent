@@ -97,6 +97,15 @@ class BattleReport:
     end: str = ""          # 怎么结束的:screen=<界面> / gone / timeout / stopped
     candidates: int = 0    # 颜色像横幅、文字没确认的次数(调检测用)
 
+    def drop_count(self) -> int:
+        """行动值单次下降 ≥35 的次数:1 回合 100 行动值,阵亡一次 -35、两个同时 -70。
+
+        这是独立于横幅的第二个信号(横幅只停留约 1 秒,被大招特效挡住时颜色和文字都可能认不出来,
+        2026-11-16 实机有两场一次横幅都没认出),两个对不上时要让模型知道。
+        """
+        av = [a for _, a, _ in self.samples if a is not None]
+        return sum(1 for prev, a in zip(av, av[1:]) if prev - a >= 35)
+
     def text(self) -> str:
         parts = [summarize(self.curve)]
         if self.deaths:
@@ -107,6 +116,9 @@ class BattleReport:
             parts.append(f"阵亡 {len(self.deaths)} 次(" + ";".join(items) + ")")
         else:
             parts.append("没有看到阵亡提示")
+        missed = self.drop_count() - len(self.deaths)
+        if missed > 0:
+            parts.append(f"另有 {missed} 次行动值骤降 ≥35 没认出阵亡横幅(可能被大招特效挡住,按阵亡算)")
         if self.events:
             parts.append("战斗提示:" + " / ".join(self.events))
         parts.append(f"用时 {self.seconds:.0f} 秒")
@@ -130,16 +142,24 @@ class BattleWatcher:
         self.sleep = sleep
         self.debug = debug
         self.saved = 0
+        self.saved_miss = 0    # 颜色像横幅、文字没确认的存图数(核对为什么漏检用)
 
     def _save(self, image: Image.Image, rows: tuple[int, int], label: str) -> None:
-        if self.debug is None or self.saved >= DEBUG_CROPS:
+        if self.debug is None:
+            return
+        if label.startswith("候选"):
+            if self.saved_miss >= DEBUG_CROPS:
+                return
+            self.saved_miss += 1
+        elif self.saved >= DEBUG_CROPS:
             return
         W = image.size[0]
         a, b = rows
         crop = image.convert("RGB").crop((int(BANNER_OCR_X[0] * W), max(0, a - 10), int(BANNER_OCR_X[1] * W), b + 10))
         self.debug.mkdir(parents=True, exist_ok=True)
         crop.save(self.debug / f"{time.strftime('%H%M%S')}-{label}.jpg", quality=80)
-        self.saved += 1
+        if not label.startswith("候选"):
+            self.saved += 1
 
     def run(self) -> BattleReport:
         rep = BattleReport()
@@ -181,6 +201,7 @@ class BattleWatcher:
                 else:
                     next_banner = now + MISS_GAP
                     rep.candidates += 1
+                    self._save(image, rows, "候选")   # 颜色像、文字不是:存小图,回头查是特效还是真横幅 
             # 行动值、进度
             if now >= next_av or (pending_after and now >= pending_after[0]):
                 next_av = now + AV_EVERY

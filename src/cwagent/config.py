@@ -110,7 +110,7 @@ class AgentSettings(BaseModel):
     difficulty: str = "A8-1"   # 标准博弈的目标难度(职级分组-等级)
     trailblazer_name: str = ""   # 开拓者在游戏里显示的名字(玩家自己取的;商店、补给、角色详情里显示的是它)
     use_guides: bool = True
-    max_tactical_calls_per_stage: int = Field(default=3, ge=1, le=20)
+    max_tactical_calls_per_stage: int = Field(default=5, ge=1, le=20)   # 不含单独那一轮出战(按 2026-11-16 实机,3 轮在高难下不够用)
     max_run_minutes: int = Field(default=120, ge=1)
 
 

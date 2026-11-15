@@ -24,10 +24,13 @@ from ..vision.equipment import (
     format_items,
 )
 from ..vision.ocr import Ocr, TextBox, find
-from ..vision.shop import read_shop, shop_state
+from ..vision.shop import format_shop, read_shop, shop_state
 
 SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位置,1920x1080 实测)
 READY_BUTTON = (0.946, 0.694)     # 「出战」,商店收起时
+REFRESH_REGION = (0.78, 0.40, 0.12, 0.10)          # 商店右侧的「刷新」按钮(2026-11-16 实机约 0.842, 0.451)
+REFRESH_PRICE_REGION = (0.80, 0.455, 0.10, 0.075)  # 「刷新」下面那个价格(约 0.852, 0.492)
+NO_MONEY = r"金币不足|不足|余额不足"
 SHOP_CARD_Y = 0.15
 GAP = 0.5
 ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
@@ -113,6 +116,31 @@ class PrepareExecutor:
                 last = cards
         self.shop_now(boxes)
         return boxes
+
+    def _refresh(self, out: PrepareResult, boxes: list[TextBox], text: str) -> str:
+        """点商店右侧的「刷新」按钮,再核对 5 张卡真的换了。
+
+        原来按 D 键(2026-11-16 实机两局按了都没反应:金币和卡片跟刷新前一样,模型因此以为刷新不可用,
+        整局没再搜过牌)。M7A 的做法是直接点「刷新」;点完再读一遍商店,没变就把界面提示(金币不足等)
+        和刷新价一起报回去,不让模型以为自己刷新过了。
+        """
+        before = read_shop(boxes)
+        button = find(boxes, "^刷新$", region=REFRESH_REGION)
+        if button is not None:
+            self._click(out, float(button.x), float(button.y))
+        else:
+            self.device.key("d")          # 认不出按钮时退回快捷键
+        self.sleep(1.0)
+        boxes = self._look()
+        after = read_shop(boxes)
+        if after != before:
+            return f"{text}(停下来看新商店)"
+        hint = find(boxes, NO_MONEY)
+        price = find(boxes, r"^\d{1,2}$", region=REFRESH_PRICE_REGION)
+        why = (f"界面提示「{hint.text}」" if hint is not None
+               else f"刷新价 {price.text} 金币,可能不够" if price is not None else "可能金币不足")
+        return (f"刷新没有生效:金币和商店都没变(还是 {format_shop(after)})——{why}。"
+                "不要反复点刷新,先看现有卡片怎么用")
 
     def _drag_slot(self, out: PrepareResult, src: tuple[str, int], dst: tuple[str, int],
                    boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
@@ -252,9 +280,7 @@ class PrepareExecutor:
                             self.deployed = shift(self.deployed, -1)
                         out.results.append(text)
                 elif a.type == "refresh":
-                    self.device.key("d")
-                    self.sleep(0.8)
-                    out.results.append(f"{text}(停下来看新商店)")
+                    out.results.append(self._refresh(out, boxes, text))
                     out.observe = True
                     break
                 elif a.type == "buy_exp":

@@ -89,3 +89,80 @@ def test_refused_move_stops_the_turn():
                   Action(type="sell", zone="bench", index=2), Action(type="ready")], [], board, final=True)
     assert out.results == ["备战席1号 → 后台2号:没成功(界面提示「当前情况下不可调整」),后面的操作先不做"]
     assert out.observe and not out.ready and len(dev.drags) == 1
+
+
+# ---------------------------------------------------------------- 2026-11-16 实机
+
+def test_read_companions_gives_up_when_page_does_not_open():
+    """点左上角没打开「主角光环与奇遇详情」就放弃,不要接着在棋盘上乱点(2026-11-16 实机坐标)。"""
+    clicks = []
+
+    class Dev:
+        def click(self, x, y):
+            clicks.append((x, y))
+
+        def move(self, x, y):
+            pass
+
+        def grab(self):
+            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    from cwagent.orchestrator import macros
+
+    assert macros.read_companions(Dev(), lambda im, region=None: [], lambda s: None) is None
+    assert clicks == [macros.COMPANION_ICON]
+
+
+def test_companion_bubble_drops_single_char_noise():
+    """气泡右侧会蹭到头像下面名字标签的残字(实机读到过末尾多一个「狼」),单字要丢掉。"""
+    from cwagent.orchestrator import macros
+
+    boxes = [TextBox("不死狼将在【幕后茶歇】找你聊聊新的委托。", 0.40, 0.80, 0.30, 0.03, 0.9),
+             TextBox("狼", 0.29, 0.885, 0.01, 0.03, 0.9)]
+    text = macros._bubble(lambda im, region=None: boxes, Image.new("RGB", (8, 8)))
+    assert text == "不死狼将在【幕后茶歇】找你聊聊新的委托。"
+
+
+def test_refresh_points_at_button_and_reports_no_change():
+    """刷新改成点商店的「刷新」按钮(原来按 D 键实机没反应),没换牌时要把原因报回去。"""
+    from cwagent.orchestrator.prepare import PrepareExecutor
+
+    clicks = []
+    page = [TextBox("刷新", 0.842, 0.451, 0.05, 0.02, 0.9), TextBox("3", 0.852, 0.492, 0.02, 0.02, 0.9),
+            TextBox("金币不足", 0.5, 0.5, 0.1, 0.03, 0.9)]
+    #
+
+    class Dev:
+        def click(self, x, y):
+            clicks.append((x, y))
+
+        def key(self, k):
+            raise AssertionError("认得出「刷新」按钮时不该按 D 键")
+
+        def grab(self):
+            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    ex = PrepareExecutor(Dev(), ocr=lambda im, region=None: page, raw=lambda a, b: "", sleep=lambda s: None)
+    r = ex.run([Action(type="refresh")], page, None)
+    assert clicks and abs(clicks[0][0] - 0.842) < 1e-6
+    assert "刷新没有生效" in r.results[0] and "金币不足" in r.results[0]
+
+
+def test_companion_banner_recognised_on_any_screen():
+    """奇遇伙伴的横幅随时可能出现(投资策略、补给、备战),不是每局都有:认出就跳过,不要当成卡住的界面。"""
+    from cwagent.orchestrator.screens import classify, companion_banner
+
+    banner = [_b("本局奇遇", 0.50, 0.44), _b("第一位面的最后的奖励节点将替换为幕后茶歇。", 0.50, 0.505),
+              _b("点击空白处继续", 0.50, 0.655)]
+    # 盖在投资策略界面上
+    assert classify(banner + [_b("请选择投资策略", 0.5, 0.09)]) == "tap_continue"
+    # 盖在补给界面上
+    assert classify(banner + [_b("补给阶段", 0.5, 0.143)]) == "tap_continue"
+    # 点在提示文字本身(固定点 0.62 点不到横幅底部那条提示)
+    assert companion_banner(banner) == (0.50, 0.655)
+    # OCR 没读到提示文字时退回横幅中间
+    assert companion_banner(banner[:2]) == (0.5, 0.655)
+    # 开局介绍界面也有「本局奇遇」,但它带「下一步」,不能当横幅点掉
+    intro = [_b("本局奇遇", 0.63, 0.58), _b("菇菇兔", 0.65, 0.635), _b("下一步", 0.73, 0.91)]
+    assert companion_banner(intro) is None
+    assert classify(intro + [_b("本场对局首领", 0.3, 0.18)]) == "run_intro"
