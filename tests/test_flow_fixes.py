@@ -166,3 +166,33 @@ def test_companion_banner_recognised_on_any_screen():
     intro = [_b("本局奇遇", 0.63, 0.58), _b("菇菇兔", 0.65, 0.635), _b("下一步", 0.73, 0.91)]
     assert companion_banner(intro) is None
     assert classify(intro + [_b("本场对局首领", 0.3, 0.18)]) == "run_intro"
+
+
+def test_companions_read_once_after_first_plane_survey(tmp_path, monkeypatch):
+    """奇遇伙伴整局只读一次,时机是第一位面收集完词条和节点之后(维护者 2026-11-16)。"""
+    import cwagent.orchestrator.loop as loop
+    from cwagent.orchestrator.loop import Runner, Trace
+    from tests.test_loop import FakeBrain
+
+    calls = []
+
+    class Sim:
+        state = "prep"
+
+        def grab(self):
+            return Frame(image=Image.new("RGB", (8, 8)), timestamp=0)
+
+    monkeypatch.setattr(loop, "read_companions", lambda *a, **k: calls.append(1) or ["不死狼将在【幕后茶歇】找你聊聊新的委托。"])
+    monkeypatch.setattr(loop, "survey_plane", lambda *a, **k: ["战斗", "奖励"])
+    runner = Runner(Sim(), FakeBrain({}), Trace(tmp_path / "run"), ocr=lambda im, region=None: [], log=lambda m: None,
+                    settle=False)
+    monkeypatch.setattr(runner, "ready_prepare", lambda: (Sim().grab(), []))
+
+    assert runner.macros(None, [], "1-2") == "收集本位面的节点序列"     # 第一位面:先收集词条和节点
+    assert calls == []
+    assert runner.macros(None, [], "1-2") == "读取本局奇遇伙伴"          # 收集完接着读伙伴
+    assert calls == [1]
+    assert any("奇遇伙伴" in h for h in runner.ledger.history)
+    runner._crystal_fails["1-2"] = 99
+    runner.macros(None, [], "1-3")
+    assert calls == [1]                                                  # 之后不再读

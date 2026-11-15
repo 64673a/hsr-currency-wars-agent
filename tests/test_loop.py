@@ -326,6 +326,7 @@ def test_crystal_timing(tmp_path, monkeypatch):
     monkeypatch.setattr(loop, "open_crystals", lambda *a, **k: results.pop(0))
     monkeypatch.setattr(runner, "ready_prepare", lambda: (sim.grab(), []))
     runner._surveyed = "1"
+    runner._companion_done = True                                    # 奇遇伙伴只在第一位面收集完节点后读一次
 
     runner._node = "1-8"
     results[:] = [Crystals(1, 1, "手柄"), Crystals(1, 1, "鼠标")]

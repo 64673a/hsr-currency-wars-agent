@@ -202,9 +202,8 @@ class Runner:
         self._rail: dict[str, int] = {}                        # 每个节点在开拓商店界面停了几步
         self._rail_launched: set[str] = set()                  # 已经免费启动过星穹列车的节点
         self._survey_tries: dict[str, int] = {}                # 每个位面试过几次收集节点
-        self._companion_tries: dict[str, int] = {}             # 每个位面试过几次读奇遇伙伴
-        self._companion_planes: set[str] = set()               # 已经读过（或者放弃读）奇遇伙伴的位面
-        self._companions: list[str] = []                       # 本局读到的奇遇伙伴(整局去重)
+        self._companion_tries = 0                              # 读奇遇伙伴试了几次
+        self._companion_done = False                           # 本局的奇遇伙伴已经读过(只读一次)
         self._env_waited = False                               # 投资环境选择的开场特效等过了
         self.affixes = AffixBook()                             # 敌人词条库(边点边存)
         self._affixes: list[tuple[str, str]] = []              # 本局读到的敌人词条
@@ -525,7 +524,6 @@ class Runner:
                 continue
             banner = companion_banner(boxes)          # 奇遇伙伴的横幅盖在备战界面上:先点掉再继续
             if banner is not None:
-                self._note_companion_banner(boxes)
                 self.device.click(*banner)
                 time.sleep(0.8)
                 prev = None
@@ -545,8 +543,9 @@ class Runner:
             return None
         plane = node.split("-")[0]
         full = self._crystal_full is not None and self._crystal_full[0] == node   # 等模型腾出备战席,出战前再开
+        pending_companion = plane == "1" and not self._companion_done   # 奇遇伙伴整局只读一次,第一位面读
         if (plane == self._surveyed and (full or self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES)
-                and plane in self._companion_planes):
+                and not pending_companion):
             return None   # 没有要做的
         ready = self.ready_prepare()
         if ready is None:
@@ -572,35 +571,31 @@ class Runner:
                 self.ledger.add(f"[位面 {plane}] 敌人词条:{text}。选主 C 和阵容方向时考虑它们的限制")
                 self.log(f"位面 {plane} 的敌人词条:{text[:300]}")
             return "收集本位面的节点序列"
-        if plane not in self._companion_planes:
-            # 收集完词条和节点,再点左上角看本局奇遇伙伴(维护者 2026-11-16 指定这个时机):详情页左下角逐个悬停,
-            # 读到的写进本局经历交给模型。读不到就下个回合再试,一个位面最多 2 次,不影响备战。
-            did = self._read_companions(plane)
-            if did:
-                return did
+        if pending_companion:
+            # 第一位面收集完词条和节点,顺手点左上角读本局的奇遇伙伴(维护者 2026-11-16 指定的时机):
+            # 详情页左下角列着本局所有伙伴,悬停读气泡。读不到下个节点再试一次,不影响备战。
+            self._read_companions()
+            return "读取本局奇遇伙伴"
         return self._open_crystals(image)
 
-    def _read_companions(self, plane: str) -> str | None:
-        """点左上角读本局的奇遇伙伴(详情页左下角),记进本局经历;整局去重。返回说明或 None。"""
-        if self._companion_tries.get(plane, 0) >= 2:
-            self._companion_planes.add(plane)
-            return None
-        self._companion_tries[plane] = self._companion_tries.get(plane, 0) + 1
+    def _read_companions(self) -> None:
+        """点左上角读本局的奇遇伙伴(详情页左下角),记进本局经历。整局一次。"""
+        if self._companion_done or self._companion_tries >= 2:
+            return
+        self._companion_tries += 1
         try:
             lines = read_companions(self.device, self.ocr, self.log)
         except Exception as e:  # noqa: BLE001 - 读伙伴出错不耽误备战
             self.log(f"读奇遇伙伴出错:{type(e).__name__}: {e}")
             lines = None
         if lines is None:
-            return None
-        self._companion_planes.add(plane)
-        fresh = [t for t in lines if t not in self._companions]
-        if fresh:
-            self._companions.extend(fresh)
-            text = " / ".join(fresh)[:500]
-            self.ledger.add(f"[第{plane}位面 奇遇伙伴] {text}")
+            self._companion_done = self._companion_tries >= 2   # 试两次还读不到就放过
+            return
+        self._companion_done = True
+        if lines:
+            text = " / ".join(lines)[:500]
+            self.ledger.add(f"[开局 奇遇伙伴] {text}")
             self.log(f"本局奇遇伙伴:{text[:300]}")
-        return "读取本局奇遇伙伴"
 
     def _open_crystals(self, image) -> str | None:
         """开晶矿,返回结果说明;没有晶矿返回 None。没开成只记在当前节点上,下个节点照常再开
@@ -641,20 +636,6 @@ class Runner:
             return None
         return f"出战前{did}(先没出战,看看拿到了什么;没有要做的就再 ready)"
 
-    def _note_companion_banner(self, boxes: list[TextBox]) -> None:
-        """对局中弹出的「本局奇遇」介绍横幅:把正文记进本局经历。
-
-        奇遇伙伴出现时机不定(维护者 2026-11-16),这个横幅可以不管,点空白处就过去;记下来是为了知道
-        本局哪些奖励节点被换成了幕后茶歇之类。同一个横幅只记一次。
-        """
-        if find(boxes, "^本局奇遇$") is None:
-            return
-        text = intro_text([b for b in boxes if "点击空白处继续" not in b.text])[:400]
-        if not text or text == self.ledger.companion_intro:
-            return
-        self.ledger.companion_intro = text
-        self.ledger.add(f"[奇遇] {text}")
-
     def reflex(self, screen: str, image, boxes: list[TextBox], record: dict, sig: set[str]) -> list[Action] | None:
         """不需要模型的界面:返回要做的操作;需要模型判断时返回 None。"""
         if screen != "quit_dialog":
@@ -665,7 +646,6 @@ class Runner:
                 # 后面的固定流程就被跳过了(2026-11-16 实机)。按 M7A 的做法点这段文字本身。
                 point = companion_banner(boxes)
                 if point is not None:
-                    self._note_companion_banner(boxes)
                     return [Action(type="click", x=point[0], y=point[1], reason="跳过奇遇伙伴的介绍横幅")]
                 hint = find(boxes, "点击空白处继续")
                 if hint is not None:
