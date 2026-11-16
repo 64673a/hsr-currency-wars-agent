@@ -1,0 +1,18 @@
+{
+  "name": "cwagent",
+  "displayName": "货币战争 agent",
+  "version": "0.1.0",
+  "description": "连上装游戏那台电脑上的 cwagent serve,由 Claude 下《崩坏:星穹铁道》货币战争",
+  "author": { "name": "64673a" },
+  "repository": "https://github.com/64673a/hsr-currency-wars-agent",
+  "license": "GPL-3.0-only",
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "cwagent 地址",
+      "description": "装游戏那台电脑上 cwagent serve 的地址,如 http://192.168.0.200:8770",
+      "default": "http://127.0.0.1:8770",
+      "required": true
+    }
+  }
+}

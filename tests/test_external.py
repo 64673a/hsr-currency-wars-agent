@@ -1,6 +1,7 @@
 """外部 agent:信箱(llm/external.py)和 MCP 端点(server/mcp.py)。"""
 
 import asyncio
+import json
 import socket
 import threading
 import time
@@ -142,3 +143,36 @@ def test_mcp_rejects_domain_host(server):
 
     r = httpx.post(f"http://127.0.0.1:{server}/mcp", headers={"Host": "evil.example:80"}, json={})
     assert r.status_code == 421
+
+
+
+def test_mcp_hook(server):
+    """Claude Code 插件的 hook:只让正在下这一局的会话接着下。"""
+    from mcp import Client
+
+    async def main():
+        async with Client(f"http://127.0.0.1:{server}/mcp?wait=1") as client:
+            async def hook(event, session):
+                return json.loads((await client.call_tool("hook", {"event": event, "session": session})).content[0].text)
+
+            assert await hook("stop", "a") == {}   # 没有对局:放行
+            BRIDGE.begin(threading.Event())
+            try:
+                assert await hook("stop", "a") == {}   # 还没有会话调用过工具
+                assert await hook("tool", "a") == {}
+                out = await hook("stop", "a")
+                assert out["hookSpecificOutput"]["hookEventName"] == "Stop"
+                assert "wait" in out["hookSpecificOutput"]["additionalContext"]
+                assert await hook("stop", "b") == {}   # 别的会话不受影响
+                await hook("tool", "b")                # 换了会话接手
+                assert await hook("stop", "a") == {}
+            finally:
+                BRIDGE.end("stopped")
+            assert await hook("stop", "b") == {}
+            BRIDGE.begin(threading.Event())            # 新对局不认上一局的会话
+            try:
+                assert await hook("stop", "b") == {}
+            finally:
+                BRIDGE.end("stopped")
+
+    asyncio.run(main())

@@ -43,6 +43,8 @@ INSTRUCTIONS = """本服务让你自主游玩《崩坏:星穹铁道》的「货�
 4. 返回「还在等待」时(战斗、动画进行中),直接再调用 wait,不要停下来问用户。
 5. 一直下到返回「对局结束」为止。每个回合的第一条消息带完整的本局档案,不需要回顾之前的回合。"""
 
+KEEP_PLAYING = "货币战争对局还在进行,不要停下:调用 wait 取下一个局面,一直下到返回「对局结束」。用户要求停下时先调用 stop_run。"
+
 RESULTS = {"settlement": "打完了(到了结算界面)", "pause": "暂停了,需要人处理", "stopped": "已停止",
            "timeout": "超过了对局时长上限", "max_steps": "步数用完了", "interrupted": "有人接管了键鼠", "error": "出错了"}
 
@@ -57,6 +59,10 @@ TOOLS = [
          input_schema=ACT_TOOL.parameters),
     Tool(name="status", description="查看对局状态。", input_schema=_EMPTY),
     Tool(name="stop_run", description="停止当前对局。", input_schema=_EMPTY),
+    Tool(name="hook", description="供 Claude Code 插件的 hook 调用,不要直接调用。",
+         input_schema={"type": "object", "properties": {
+             "event": {"type": "string", "enum": ["tool", "stop"]}, "session": {"type": "string"}},
+             "required": ["event"]}),
 ]
 
 
@@ -161,6 +167,18 @@ class Tools:
         st = self.player.status()
         keys = ("running", "stopping", "profile", "difficulty", "run_id", "result", "error", "agent")
         return json.dumps({k: st.get(k) for k in keys} | {"log": st["log"][-5:]}, ensure_ascii=False, indent=1)
+
+    async def hook(self, args: dict[str, Any], wait: float) -> str:
+        """Claude Code 插件(integrations/claude-code)的 hook,返回 hook 输出(JSON)。
+        tool:agent 调用了本服务的工具,记下它的会话;stop:agent 想停下,对局还在进行、且就是它在下时让它接着下。
+        连续续行的次数由 Claude Code 自己限制(调用过工具就重新计数),卡住时不会无限循环。"""
+        session = str(args.get("session") or "")
+        if args.get("event") == "tool":
+            BRIDGE.claim(session)
+        elif args.get("event") == "stop" and session and BRIDGE.status()["active"] and BRIDGE.agent_session == session:
+            return json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": KEEP_PLAYING}},
+                              ensure_ascii=False)
+        return "{}"
 
     async def stop_run(self, args: dict[str, Any], wait: float) -> str:
         if not self.player.running:

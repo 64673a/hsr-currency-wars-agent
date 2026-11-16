@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cwagent": {
+      "type": "http",
+      "url": "${user_config.server_url}/mcp?wait=100",
+      "alwaysLoad": true
+    }
+  }
+}

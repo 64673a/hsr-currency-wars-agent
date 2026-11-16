@@ -812,7 +812,7 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
 
 ### 11.9 外部 agent 接入(MCP)
 
-2026-11-14 与用户确认方向,先适配 DSH(DeepSeek Harness,开源、可定制);Claude Code、Codex 的接法未实测。
+2026-11-14 与用户确认方向,先适配 DSH(DeepSeek Harness,开源、可定制);2026-11-16 加上 Claude Code(插件);Codex 的接法未实测。
 
 **目的**:让用户用自己的 agent 工具下棋,用的是这些工具自己的模型和额度(订阅、账号)。由用户自己打开 agent 工具并连上本服务;本服务不启动它们、不读取或转发它们的登录凭据。
 
@@ -831,15 +831,25 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
 | `wait` | 等下一个需要判断的局面 |
 | `act` | 提交判断和操作(参数同 API 模式的 act 工具),执行后返回结果和下一个局面 |
 | `status` / `stop_run` | 查状态、停止对局 |
+| `hook` | 只给 Claude Code 插件的 hook 调用(见下面的 Claude Code 接入) |
 
 - **长等待**:战斗、动画期间没有需要判断的局面。`wait` / `act` 最多等 `wait` 秒后返回「还在等待」,agent 再调 `wait`。默认 50 秒,低于常见客户端 60 秒的默认工具超时;客户端能调大工具超时的,在地址上带 `?wait=540` 这样的参数减少空转(每次空转都是一次模型调用)。
 - **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
 - **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
 - **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
 - **安全**:`/mcp` 只接受 Host 为 IP 地址或 localhost 的请求(防 DNS 重绑定),和网页接口一样不带认证,局域网访问靠防火墙限制。
-- **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code / Codex 的 Stop hook)。
+- **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code 插件里的 Stop hook,Codex 的 Stop hook)。
 
 **DSH 接入**(`integrations/dsh/`):DSH 的 MCP 客户端(`@deepseek-ai/dsh-mcp-client`)支持 Streamable HTTP,工具名为 `mcp__cwagent__<工具>`,服务说明(instructions)会加进系统提示词;默认工具超时 60 秒,由 `toolCallTimeoutMs` 调大。
+
+**Claude Code 接入**(`integrations/claude-code/`,仓库根目录的 `.claude-plugin/marketplace.json` 把它发布成插件市场):做成插件,用户装一次、填一个 serve 地址(插件的 `userConfig`),不用自己写 MCP 和 hook 配置。
+
+- MCP:`.mcp.json` 连 `<地址>/mcp?wait=100`,`alwaysLoad` 让工具一开始就加载(不走工具搜索)。工具名是 `mcp__plugin_cwagent_cwagent__<工具>`。
+- `wait=100`:Claude Code 主对话里超过 2 分钟的 MCP 调用会转成后台任务、模型先结束这一轮,和「一直等到下一个局面」的流程冲突,所以一次最多等 100 秒;HTTP 服务的空闲超时是 5 分钟,也够。
+- `/cwagent:play [难度]`(skill):写明下棋流程;`allowed-tools` 免去 6 个工具的逐次确认(只在这一轮有效,用户插话后要重新确认,或在权限设置里永久允许)。
+- 续行:skill 的 frontmatter 里带两个 `mcp_tool` 类型的 hook,只在调用过这个 skill 的会话里注册,serve 没开时也不会在别的会话里报错。它们通过插件已经连上的 MCP 服务调用 `hook` 工具(只给 hook 用),带上会话 ID:每次调用本服务的工具后(PostToolUse)记下「这一局是哪个会话在下」(新对局清空);想停下时(Stop),对局还在进行、且就是这个会话在下,就返回 `additionalContext` 让模型接着调 `wait`,否则放行。这样换一个会话接手、或者 DSH 在下时,之前下过的 Claude Code 会话不会被拉回来抢着下。连续续行次数由 Claude Code 限制(8 次,调用过工具就重新计数)。
+  - 没用 `command` hook + `curl`:skill frontmatter 里的 hook 不替换插件的 `${user_config.*}`(2026-11-16 实测,curl 拿到的是原样的 `${user_config.server_url}`),放到插件级 `hooks/hooks.json` 又会在所有会话里生效。
+- 没有用 Claude Code 自带的 `/goal`:它每次停下都要再问一次模型判断条件,而对局是否结束 serve 自己知道。
 
 ---
 

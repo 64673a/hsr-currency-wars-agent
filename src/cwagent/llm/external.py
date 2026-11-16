@@ -42,6 +42,7 @@ class ExternalBridge:
         self.idle_seconds = idle_seconds
         self.system = ""            # 最近一次的系统提示词(rules 工具返回它)
         self.last_seen = 0.0        # 最近一次 MCP 调用的时间
+        self.agent_session = ""     # 正在下这一局的 agent 会话(Claude Code 插件的 hook 报上来的),新对局清空
         self._cond = threading.Condition()
         self._seq = 0
         self._turn: Turn | None = None
@@ -55,6 +56,7 @@ class ExternalBridge:
     def begin(self, stop: threading.Event) -> None:
         with self._cond:
             self._stop, self._active, self._ended = stop, True, None
+            self.agent_session = ""
             self._turn = self._reply = None
             self.last_seen = time.time()
             self._cond.notify_all()
@@ -119,6 +121,12 @@ class ExternalBridge:
             self._reply = arguments
             self._cond.notify_all()
             return True
+
+    def claim(self, session: str) -> None:
+        """记下最近调用工具的 agent 会话:对局进行中时只让它接着下(server/mcp.py 的 hook 工具)。"""
+        with self._cond:
+            if self._active and session:
+                self.agent_session = session
 
     def status(self) -> dict[str, Any]:
         with self._cond:
