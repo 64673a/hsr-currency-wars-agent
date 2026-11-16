@@ -16,12 +16,16 @@
 - Codex HTTP MCP 安装脚本、配置示例和游玩 skill；只读 observe、完整 snapshot、turn 过期回答保护。
 
 验收与后续：
-- [ ] Windows 用户桌面中的服务、只读截图和原生 MCP 图片验证，不开始对局
-- [ ] 实际 API 模型随机数字读图、Codex 客户端读取 MCP 图片验证
+- [x] Windows 用户桌面中的服务、只读截图和原生 MCP 图片验证；observe 返回登录页，调用前后 running=false，未开始对局
+- [x] Windows 的 gpt-6.1-sol 档案正确读取随机六位数字并返回工具调用；当前 Codex 桌面会话直接收到 observe 原生图片
 - [ ] 专项研究输入降噪：API 与外部 agent 分开测量重复、过期、截断和图片历史，形成证据和建议
 - [ ] 道具栏仍属于 P4；完整对局验证按维护者指令暂缓
 
 下方旧清单保留原阶段拆分，已实现项目以上述进度为准。
+
+验证记录：Mac 全量 196 项通过，Windows 全量 196 项通过，前端生产构建通过。Windows 测试需用 NO_PROXY/no_proxy 排除
+127.0.0.1、localhost；否则本机代理会把 Host 拦截测试转成 502。独立 Homebrew Codex CLI 冒烟验证受本机
+code-mode-host 路径和网络错误影响，未完成；Codex 桌面当前会话已验证 MCP status、observe 和图片。完整对局尚未验证。
 
 ### P0 程序缺陷 + 报表（跨平台写，Windows 实机验收：A8-1 不暂停打完整局）
 

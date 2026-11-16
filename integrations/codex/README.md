@@ -18,3 +18,10 @@ uv run python integrations/codex/install.py --url 'http://127.0.0.1:8770/mcp?wai
 - `observe` 只截图、不发键鼠;必须在 Windows 用户桌面会话中的 serve 调用。
 
 配置依据:OpenAI 官方 Codex MCP 文档 `https://developers.openai.com/codex/mcp`。
+
+## 验证状态
+
+2026-11-16：Windows 用户桌面中的 serve 已返回原生 MCP 图片；Codex 桌面会话直接调用 status、observe，
+成功读取登录页截图及标号，running 保持 false。未开始对局，尚未验证完整游玩。
+
+独立 Homebrew Codex CLI 的测试遇到本机 code-mode-host 路径及网络问题，不能据此宣称该安装方式已通过。
