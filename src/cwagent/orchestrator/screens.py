@@ -22,7 +22,8 @@ def companion_banner(boxes: list[TextBox]) -> tuple[float, float] | None:
 
     但它带「下一步」,不归这里管。
     """
-    if find(boxes, "^本局奇遇$") is None or find(boxes, "^下一步$") is not None:
+    if (find(boxes, "^本局奇遇$") is None or find(boxes, "^下一步$|^下一页$|^返回货币战争$") is not None
+            or find(boxes, "对局未完成|对局评价|我的阵容") is not None):
         return None
     hint = find(boxes, "点击空白处继续")
     return (float(hint.x), float(hint.y)) if hint is not None else (0.5, 0.655)

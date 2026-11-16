@@ -11,3 +11,11 @@ def test_old_settlement_without_ocr_button_can_be_left(tmp_path):
     runner.in_run = True
     assert runner.reflex("settlement", sim.grab().image, boxes, {}, set()) == []
     runner.trace.close()
+
+
+def test_previous_run_summary_is_not_companion_banner():
+    from cwagent.orchestrator.screens import classify, companion_banner
+    from cwagent.vision.ocr import TextBox
+    boxes = [TextBox(t, .5, .5, .1, .02, .9) for t in ("对局未完成", "本局奇遇", "我的阵容", "下一页")]
+    assert companion_banner(boxes) is None
+    assert classify(boxes) == "previous_run"
