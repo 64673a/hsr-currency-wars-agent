@@ -192,7 +192,7 @@ def test_companions_read_once_after_first_plane_survey(tmp_path, monkeypatch):
     assert calls == []
     assert runner.macros(None, [], "1-2") == "读取本局奇遇伙伴"          # 收集完接着读伙伴
     assert calls == [1]
-    assert any("奇遇伙伴" in h for h in runner.ledger.history)
+    assert any("奇遇伙伴" in f for f in runner.ledger.facts)
     runner._crystal_fails["1-2"] = 99
     runner.macros(None, [], "1-3")
     assert calls == [1]                                                  # 之后不再读

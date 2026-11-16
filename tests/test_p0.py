@@ -273,3 +273,60 @@ def test_guide_card_shows_whole_plan():
     assert "第一组 定期福利;第二组 成长基金" in text and "合成顺序 蓄能帆 → 永动机" in text
     short = card(g, full=False)
     assert "作者思路" not in short and "核心羁绊:7持续伤害" in short
+
+
+# ---------------------------------------------------------------- 局面要点(P1)
+
+from cwagent.orchestrator import situation  # noqa: E402
+from cwagent.vision.board import Slot  # noqa: E402
+from cwagent.vision.hud import Hud  # noqa: E402
+
+
+def gpt_1_7_board():
+    """2026-11-16 gpt-6.1-sol 那局 1-7 的阵容:前台只有银狼,备战席两张瓦尔特。"""
+    def s(zone, i, name, stars=1):
+        return Slot(zone, i, 0.5, 0.5, name=name, score=0.9, stars=stars)
+    return ([Slot("front", 0, 0.4, 0.37), s("front", 1, "银狼LV.999"), Slot("front", 2, 0.5, 0.37),
+             Slot("front", 3, 0.6, 0.37)]
+            + [s("back", 0, "三月七"), s("back", 1, "白露"), s("back", 2, "景元"), s("back", 3, "开拓者")]
+            + [s("bench", 0, "那刻夏"), s("bench", 1, "瓦尔特"), s("bench", 4, "瓦尔特"), s("bench", 5, "景元")])
+
+
+def test_situation_facts():
+    facts = situation.RoleFacts(traits_of={"景元": ["云上五骁", "召唤"], "白露": ["云上五骁", "治疗"],
+                                           "三月七": ["开拓银轨"], "开拓者": ["开拓银轨", "星核猎手"],
+                                           "银狼LV.999": ["星核猎手"]},
+                                layers={"云上五骁": [2, 3, 4, 5], "开拓银轨": [2, 4, 6], "星核猎手": [2, 3, 5],
+                                        "召唤": [2, 4], "治疗": [2, 4]})
+    hud = Hud(node="1-7", hp=56, gold=56, level=5, exp="4/20", deployed="5/5")
+    shop = [(1, "瓦尔特", 1), (2, "万敌", 2), (3, None, None), (4, "景元", 3), (5, "白露", 2)]
+    text = situation.render(board=gpt_1_7_board(), hud=hud, shop=shop, two_star={4}, facts=facts)
+    assert "下个节点利息 5" in text and "超过 50 的 6 金币不产生利息" in text
+    assert "升下一级还差 16 经验(买 4 次,16 金币)" in text
+    assert "前台 1/4、后台 4;上场 5/5" in text
+    assert "瓦尔特 1星×2(再 1 张 1 星升 2 星)" in text and "景元 1星×2(再 1 张 1 星升 2 星)" in text
+    assert "商店 1 号 瓦尔特:买了就升 2 星" in text
+    assert "商店 4 号 景元" not in text                    # 那是二星卡,场上没有两张 2 星景元
+    assert "云上五骁 2 人(档位 2*,3,4,5),下一档差 1 人" in text
+    assert "星核猎手 2 人(档位 2*,3,5)" in text
+    assert situation.at_ready(gpt_1_7_board(), hud) == "出战时前台 1/4,场上 5 人其中 2 星及以上 0 个,剩 56 金币(其中 6 不产生利息)"
+
+
+def test_situation_direction():
+    from cwagent.knowledge.guides import Guide
+    g = Guide(id="x", title="t", carries=["银狼LV.999"], final={"front": [{"name": "银狼LV.999"}, {"name": "花火"}],
+                                                                  "back": []},
+              early={"火花"}, middle=set(), traits=[], environments=[], tempo=[], equip_order={}, idea="",
+              augments=[], use_count=0, hard=False)
+    lines = situation.direction(g, gpt_1_7_board(), [(1, "花火", 2), (2, "火花", 1), (3, "万敌", 2)])
+    assert lines[0] == "商店:1 号 花火(方向的最终阵容);2 号 火花(方向的前中期过渡);3 号 万敌(不在方向里)"
+    assert lines[1].startswith("备战席:1 号 那刻夏(不在方向里)")
+
+
+def test_aha_banner_is_waited_out(tmp_path):
+    """「阿哈帮大忙了」一两秒后自己消失(维护者 2026-11-16),程序直接等,不叫模型。"""
+    pages = {"aha": [("阿哈帮大忙了", 0.5, 0.4), ("「贪饕」侵蚀 污染等级3", 0.5, 0.5)]}
+    sim = Sim(pages, "aha", lambda s, a: None)
+    r = runner_for(sim, tmp_path)
+    acts = r.reflex("other", None, FakeOcr(sim)(sim.grab().image), {}, set())
+    assert [a.type for a in acts] == ["wait"]

@@ -60,7 +60,7 @@ class FakeBrain:
 
     def opening(self, ep, boxes, *, ledger, hints="", names=None, nodes=None):
         self.calls.append((ep.screen, "opening", ep.id))
-        self.ledger = ledger
+        self.ledger = ledger.render() if hasattr(ledger, "render") else ledger
         self.nodes = nodes
         return "open", []
 
@@ -113,7 +113,7 @@ def test_runner_reflexes_and_episode(tmp_path):
     assert led.companion == "菇菇兔" and "本场对局首领" in led.intro
     assert led.direction == "主 C 走那刻夏"
     assert led.history[-1].startswith("[开局 投资环境] 点击「追击概念股」;点击「确认」")   # 回合在结算界面结束,留一行记录
-    assert "[开局] 奇遇伙伴:菇菇兔" in led.history
+    assert any(f.startswith("奇遇伙伴 菇菇兔") for f in led.facts)   # 开局信息记在整局已知事实里(设计文档第 20.4 节)
     assert "菇菇兔" in brain.ledger                                    # 开场时模型看到了本局档案
     lines = (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 4 and (tmp_path / "run" / "shots" / "0001.jpg").exists()

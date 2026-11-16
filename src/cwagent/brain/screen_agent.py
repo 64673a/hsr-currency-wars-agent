@@ -142,7 +142,8 @@ class Episode:
     turns: int = 0
     pending: list[str] = field(default_factory=list)   # 等待执行结果的工具调用 id
     done: list[str] = field(default_factory=list)      # 本回合执行过的操作(给回合摘要)
-    seen: set[str] = field(default_factory=set)        # 已经给过描述的游戏条目
+    seen: set[str] = field(default_factory=set)        # 已经给过描述的游戏条目(有本局档案时就是档案里那一份,整局共用)
+    book: Any = None                                   # 本局档案(RunLedger):新出现的条目也追加进去
     waiting: bool = False                              # 上一轮模型只让等待
     cache_at: int = 0                                  # 第一条消息里本局经历的长度(在这里断开打缓存标记)
     summary: str = ""                                  # 模型写的回合小结(最近一次)
@@ -184,27 +185,47 @@ class ScreenAgent:
     # ---------------------------------------------------------------- 发给模型的内容
 
     def _entities(self, boxes: list[TextBox], names: list[str] | None, episode: Episode) -> tuple[str, set[str]]:
+        """界面上第一次出现的条目(整局只给一次说明);有本局档案时同时追加进档案的「条目说明」。"""
         found = [e for e in self.index.link([b.text for b in boxes] + (names or [])) if e.name not in episode.seen]
         episode.seen.update(e.name for e in found)
+        if episode.book is not None:
+            for e in found:
+                episode.book.add_entry(e.name, format_entities([e]))
         return (format_entities(found) if found else ""), {e.name for e in found}
 
-    def opening(self, episode: Episode, boxes: list[TextBox], *, ledger: str, hints: str = "",
+    def opening(self, episode: Episode, boxes: list[TextBox], *, ledger, hints: str = "",
                 names: list[str] | None = None, nodes: set[str] | None = None) -> tuple[str, list[str]]:
-        """回合的第一条消息:本局档案 + 当前界面 + 条目描述 + 相关经验。nodes 是当前和下一个节点的类型(记忆按它触发)。"""
+        """回合的第一条消息:本局档案 + 当前界面。nodes 是当前和下一个节点的类型(记忆按它触发)。
+
+        ledger 是本局档案(RunLedger)时(设计文档第 20.4 节):新出现的条目说明、第一次相关的经验追加进档案里只追加的块,
+        档案渲染出来就带着它们,之后的回合不再当作新信息重发。ledger 是字符串时照旧把条目和经验放在当前界面后面。"""
         texts = [b.text for b in boxes]
-        described, entities = self._entities(boxes, names, episode)
-        cues = Cues(entities=entities, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
+        book = ledger if hasattr(ledger, "render") else None
+        if book is not None:
+            episode.book = book
+            episode.seen = book.described
+        present = {e.name for e in self.index.link(texts + (names or []))}
+        described, _ = self._entities(boxes, names, episode)
+        cues = Cues(entities=present, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
                     layer="战术" if episode.screen == "prepare" else "选择")
         hits = recall(self.memories, cues)
-        parts = [
-            ledger,
+        if book is not None:
+            for r in hits:
+                m = r.memory
+                book.add_lesson(m.id, f"- [{m.label()}] {m.title}\n  {m.content.strip()}")
+            episode.cache_at = book.stable_len()
+            head = [book.render()]
+        else:
+            head = [ledger]
+        parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
             "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
         ]
-        if described:
-            parts.append("## 界面上出现的条目\n" + described)
-        if hits:
-            parts.append("## 相关经验\n" + format_for_prompt(hits))
+        if book is None:
+            if described:
+                parts.append("## 界面上出现的条目\n" + described)
+            if hits:
+                parts.append("## 相关经验\n" + format_for_prompt(hits))
         parts.append(self._ask(episode))
         return "\n\n".join(p for p in parts if p), [r.memory.id for r in hits]
 

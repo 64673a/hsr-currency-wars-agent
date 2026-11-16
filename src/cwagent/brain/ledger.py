@@ -70,6 +70,12 @@ class RunLedger:
     guide: str = ""                                          # 当前参考的攻略(卡片文字)
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)         # 本局经历,只追加
+    # 以下三块都只追加、不重复(设计文档第 20.4 节):出现新内容时加一条,之后每个回合都在,不再当作新信息反复塞
+    facts: list[str] = field(default_factory=list)           # 整局已知事实:程序从界面读到的(开局、位面节点与词条、拿到的投资)
+    entries: list[str] = field(default_factory=list)         # 条目说明:角色、羁绊、装备等第一次出现时的官方描述
+    described: set[str] = field(default_factory=set)         # 已经给过说明的条目名
+    lessons: list[str] = field(default_factory=list)         # 想起的经验(记忆):第一次相关时附上
+    recalled: set[str] = field(default_factory=set)          # 已经附上的记忆 id
 
     def node(self, name: str) -> NodeRecord:
         if name not in self.nodes:
@@ -81,6 +87,28 @@ class RunLedger:
         text = text.strip()
         if text:
             self.history.append(text[:MAX_LINE])
+
+    def add_fact(self, text: str) -> bool:
+        """整局已知事实追加一条(和已有的完全相同就不加)。返回是否加了。"""
+        text = text.strip()[:MAX_LINE * 2]
+        if not text or text in self.facts:
+            return False
+        self.facts.append(text)
+        return True
+
+    def add_entry(self, name: str, text: str) -> bool:
+        if not name or name in self.described:
+            return False
+        self.described.add(name)
+        self.entries.append(text.strip())
+        return True
+
+    def add_lesson(self, memory_id: str, text: str) -> bool:
+        if memory_id in self.recalled:
+            return False
+        self.recalled.add(memory_id)
+        self.lessons.append(text.strip())
+        return True
 
     def kinds_near(self, node: str | None) -> set[str]:
         """当前节点和下一个节点的类型(记忆按「当前或下一个节点」触发,设计文档 5.4)。"""
@@ -94,12 +122,19 @@ class RunLedger:
     def set_direction(self, text: str) -> None:
         self.direction = text.strip()[:MAX_DIRECTION]
 
-    def render_history(self) -> str:
-        head = "## 本局经历(程序记录 + 你写的回合小结,从旧到新)\n- 难度 " + (self.difficulty or "?")
-        return head + "".join(f"\n- {h}" for h in self.history)
+    def render_facts(self) -> str:
+        head = "## 整局已知事实(程序从游戏界面读到的,出现新事实时追加)\n- 难度 " + (self.difficulty or "?")
+        return head + "".join(f"\n- {f}" for f in self.facts)
 
-    def history_len(self) -> int:
-        return len(self.render_history())
+    def render_history(self) -> str:
+        head = "## 本局经历(程序记录 + 你写的回合小结,从旧到新)"
+        return head + ("".join(f"\n- {h}" for h in self.history) if self.history else "\n(还没有)")
+
+    def stable_len(self) -> int:
+        """整局已知事实 + 本局经历的长度:这两块只往后追加,在这里断开打缓存标记,下一个回合能命中到这里。"""
+        return len(self.render_facts()) + 2 + len(self.render_history())
+
+    history_len = stable_len   # 旧名字
 
     def render_state(self) -> str:
         parts = []
@@ -111,11 +146,32 @@ class RunLedger:
         if self.items:
             parts.append("### 备战席里还没开的道具(程序看过的选项)\n" + "\n".join(
                 f"- 备战席{i}号 {name}:{'、'.join(opts)}" for i, (name, opts) in sorted(self.items.items())))
-        if self.plane_nodes:
-            parts.append("### 本位面的节点\n" + self.plane_nodes)
-        parts.append("### 对局方向与计划(你自己写的,可以在 run_notes 里整体改写)\n" + (self.direction or "(还没写)"))
+        parts.append("### 我的笔记(只有你能改:在 run_notes 里整体改写,写方向、主 C、经济计划、待办)\n"
+                     + (self.direction or "(还没写)"))
         return "## 当前状态\n" + "\n\n".join(parts)
 
     def render(self) -> str:
-        """本局经历在前(只增不改,命中缓存),当前状态在后。"""
-        return self.render_history() + "\n\n" + self.render_state()
+        """从稳定到易变:整局已知事实、本局经历(只追加,命中缓存),条目说明、想起的经验(只追加),当前状态。"""
+        parts = [self.render_facts(), self.render_history()]
+        if self.entries:
+            parts.append("## 条目说明(每个条目第一次出现时附上官方描述)\n" + "\n".join(self.entries))
+        if self.lessons:
+            parts.append("## 想起的经验(过去积累的,可能不完整或有错,结合局面判断;第一次相关时附上)\n"
+                         + "\n".join(self.lessons))
+        parts.append(self.render_state())
+        return "\n\n".join(parts)
+
+
+def compact_node(line: str) -> str:
+    """位面详情的节点说明行压成一小段:节点号 + 名字 + 画面上的标记(狂化状态、主角光环、奇遇伙伴带来的效果)。
+    说明正文(「难度较低的节点,拥有无限的行动值……」)每局都一样,放进规则卡,这里不重复。"""
+    m = re.match(r"\s*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
+    if not m:
+        return line.strip()[:40]
+    node, label, rest = m.groups()
+    marks = [k for k in ("狂化状态", "主角光环") if k in rest]
+    effect = re.search(r"本局效果[:：](.+?)(?:$|\s{2})", rest)
+    if "继续备战【战斗节点】" in rest:
+        marks.append("选完打战斗")
+    text = f"{node} {label}" + (f"({'、'.join(marks)})" if marks else "")
+    return text + (f"[{effect.group(1).strip()}]" if effect else "")

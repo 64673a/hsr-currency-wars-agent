@@ -21,10 +21,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from ..brain.ledger import RunLedger, node_types
+from ..brain.ledger import RunLedger, compact_node, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
-from ..knowledge.guides import SWITCH_MARGIN, Guide, GuideAdvisor, card
+from ..knowledge.guides import Guide, GuideAdvisor, card
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
 from .. import paths
 from ..device import UserInterrupt
@@ -33,19 +33,19 @@ from ..vision.board import Portraits, Slot, back_hint, detail_name, format_board
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_hud
 from ..vision.ocr import Aliased, Ocr, TextBox, find
-from ..vision.shop import format_shop, read_shop
+from ..vision.shop import format_shop, read_shop, two_star
 from . import difficulty as difficulty_select
 from .battle_watch import BattleWatcher
 from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
+from . import situation
 from .prepare import PrepareExecutor, PrepareResult
 from .screens import (
     CLOSE_CORNER,
     DIFFICULTY_HINT,
     GREY_CONFIRM,
     OVERLAY_HINTS,
-    PREPARE_LAYOUT,
     SCREEN_NAMES,
     SPOTLIGHT_LAYOUT,
     TEA_BREAK_HINT,
@@ -77,6 +77,8 @@ ENV_EFFECT = 3.0           # 刚进投资环境选择时的特效时长(秒)
 INVEST_WAITS = 8           # 投资界面最多等几次(每次 0.5 秒)三张卡都翻出来
 DETAIL_PER_NODE = 3        # 每个节点最多点开几张认不出的卡看详情
 RAIL_STEPS = 6             # 开拓商店界面停留这么多步还没关,程序直接关掉
+# 一两秒后自己消失的过场(维护者 2026-11-16:「阿哈帮大忙了」相当于过场动画),认出就等,不叫模型
+TRANSIENT = "阿哈帮大忙了|啊哈帮大忙了"
 SPOTLIGHT_BUTTON = "^选择主角$"   # 首领节点备战界面右下的按钮(实机:商店开着时点不到)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
@@ -213,6 +215,13 @@ class Runner:
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
         self._notice = ""                                      # 反射层处理掉的、下一个备战回合要告诉模型的事
         self._spotlight_opened: set[str] = set()               # 程序已经替模型打开过「选择主角」的节点
+        self._facts: situation.RoleFacts | None = None         # 角色 → 羁绊、羁绊档位(局面要点用)
+        self._last_hud = None                                  # 最近一次读到的备战数字
+        self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
+        self._checked_planes: set[str] = set()                 # 战略检查点:已经过了开头的位面
+        self._checked_boss: set[str] = set()                   # 战略检查点:已经过了的首领节点
+        self._losses = 0                                       # 连输几场(节点结算读到「挑战结束」)
+        self._checked_losses = False                           # 这一串连输已经算过检查点
 
     # ---------------------------------------------------------------- 截图
 
@@ -287,6 +296,7 @@ class Runner:
         lines = [hud.text()]
         names: list[str] = []
         shop = self.prepare.shop_now(boxes)
+        cards: list = []
         if shop:
             cards = read_shop(boxes)
             self._shop_names = [name for _, name, _ in cards if name]
@@ -316,9 +326,24 @@ class Runner:
             text, equip_names = self.equipment.describe(items, names, self.ledger.items)
             lines.append(text)
             names = names + equip_names
+        try:
+            costs = self._role_costs()
+            two = {slot for slot, name, price in cards if name and two_star(name, price, costs)}
+            facts = situation.render(board=self._board, hud=hud, shop=cards, two_star=two, facts=self._role_facts(),
+                                     guide=self._guide, front_slots=(self.prepare.counts or {}).get("front", 4))
+            if facts:
+                lines.append(facts)
+        except Exception as e:  # noqa: BLE001 - 局面要点算错不影响模型照常决策
+            self.log(f"局面要点出错:{type(e).__name__}: {e}")
+        self._last_hud = hud
         if node and not self.ledger.node(node).start:
             self.ledger.node(node).start = hud.text().replace(f"节点 {node},", "")
         return "\n".join(lines), state, names
+
+    def _role_facts(self) -> situation.RoleFacts:
+        if self._facts is None:
+            self._facts = situation.RoleFacts.load(paths.knowledge_db())
+        return self._facts
 
     def _role_costs(self) -> dict[str, set[int]]:
         """角色名 → 费用,从知识库读一次(判断商店里的二星卡:价格是费用的 3 倍)。"""
@@ -388,51 +413,53 @@ class Runner:
         self.ledger.guide = card(g)
         self.ledger.add(f"[{self._node or '开局'} 攻略] 参考攻略改为「{g.title}」(主 C {'、'.join(g.carries)})")
 
+    def checkpoint(self) -> str:
+        """现在是不是战略检查点(设计文档第 20.5 节),是就返回原因:每个位面的第一个备战回合、首领节点、连输两场以上。
+        同一个原因只算一次。攻略候选只在检查点给,平时不再每回合附上、也不自动换方向。"""
+        node = self._node or ""
+        plane = node.split("-")[0] if node else ""
+        if plane and plane not in self._checked_planes:
+            self._checked_planes.add(plane)
+            return f"位面 {plane} 开始"
+        if "boss" in self.ledger.node_kinds.get(node, set()) and node not in self._checked_boss:
+            self._checked_boss.add(node)
+            return f"{node} 首领节点"
+        if self._losses >= 2 and not self._checked_losses:
+            self._checked_losses = True
+            return f"连输 {self._losses} 场"
+        return ""
+
     def guide_advice(self, opening: bool, record: dict) -> str:
-        """按场上、备战席、商店里的角色和投资环境给攻略打分:还没定方向时定下第一名;当前攻略的主 C 一个都没有、
-        别的攻略高出 SWITCH_MARGIN 时自动换(模型自己选的不换);已经有主 C 时只提示可以转向,由模型决定。
-        回合开头给候选;回合中间只有候选变了(例如刷新商店后出了别的攻略的主 C)才再给。"""
+        """攻略方向:还没定方向时按场上、备战席、商店和投资环境定下第一名;之后不自动换(设计文档第 20.5 节),
+        只在战略检查点的回合开头列出别的候选和当前方向的匹配情况,由模型决定换不换(guide 字段)。"""
         if self.guides is None:
             return ""
         env = self.ledger.environment or None
         ranked = self.guides.rank(self._roles, self._shop_names, env)
         if not ranked:
             return ""
-        current = self.guides.score(self._guide, set(self._roles), set(self._shop_names) - set(self._roles), env) \
-            if self._guide else None
-        best = ranked[0]
-        if current is None:
+        if self._guide is None:
+            best = ranked[0]
             self._set_guide(best.guide)
             self.log(f"初始方向:攻略「{best.guide.title}」({best.why()})")
-            current = best
-        elif (best.guide.id != self._guide.id and not self._guide_pinned and not current.carries_have
-              and best.score >= current.score + SWITCH_MARGIN):
-            self.log(f"换攻略:「{self._guide.title}」→「{best.guide.title}」({best.why()})")
-            self._set_guide(best.guide)
-            current = best
+        reason = self.checkpoint() if opening else ""
+        if not reason:
+            return ""
+        current = self.guides.score(self._guide, set(self._roles), set(self._shop_names) - set(self._roles), env)
         shop = [m for m in self.guides.shop_carries(self._roles, self._shop_names, env)
                 if m.guide.id != self._guide.id and not set(m.guide.carries) & set(self._guide.carries)]
         cands: list = []
         for m in ranked + shop[:2]:
             if m.guide.id != self._guide.id and all(c.guide.id != m.guide.id for c in cands):
                 cands.append(m)
-        shown = (self._guide.id, tuple(m.guide.id for m in cands), tuple(m.guide.id for m in shop))
-        if not opening and shown == self._shown:
-            return ""
-        self._shown = shown
+        cands = cands[:3]
         self._candidates = [m.guide for m in cands]
-        record["guides"] = {"current": self._guide.title, "score": current.score,
+        record["guides"] = {"checkpoint": reason, "current": self._guide.title, "score": current.score,
                             "candidates": [{"title": m.guide.title, "score": m.score} for m in cands]}
-        lines = [f"当前方向「{self._guide.title}」:{current.why()}(匹配分 {current.score})"]
+        lines = [f"战略检查点({reason}):可以重新比较方向;要换就在 guide 填候选编号,并在 run_notes 改写笔记。",
+                 f"当前方向「{self._guide.title}」:{current.why()}(匹配分 {current.score})"]
         for i, m in enumerate(cands, start=1):
             lines.append(f"候选 {i}(匹配分 {m.score}):{m.why()}\n{card(m.guide, full=False)}")
-        for m in shop:
-            i = next((i for i, c in enumerate(cands, start=1) if c.guide.id == m.guide.id), None)
-            lines.append(f"商店里有 {'、'.join(m.carries_shop)},是{f'候选 {i}' if i else ''}「{m.guide.title}」的主 C,"
-                         "可以考虑转向。")
-        if cands and cands[0].score >= current.score + SWITCH_MARGIN and all(m.guide.id != cands[0].guide.id
-                                                                             for m in shop):
-            lines.append("候选 1 比当前方向匹配得多,可以考虑转向。")
         return "\n".join(lines)
 
     def environment_advice(self, boxes: list[TextBox]) -> str:
@@ -570,12 +597,13 @@ class Runner:
             if lines:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.ledger.node_kinds.update(node_types(lines))
+                self.ledger.add_fact(f"位面 {plane} 的节点(从左到右):" + " | ".join(compact_node(t) for t in lines))
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             if affixes and affixes != self._affixes:
                 # 有的词条会左右全局方向(如「虚数熄火」不用虚数主 C、「能量逃逸」不用靠能量放大招的主 C,维护者举例)
                 self._affixes = affixes
                 text = ";".join(f"{n}({d})" if d else n for n, d in affixes)
-                self.ledger.add(f"[位面 {plane}] 敌人词条:{text}。选主 C 和阵容方向时考虑它们的限制")
+                self.ledger.add_fact(f"位面 {plane} 的敌人词条:{text}")
                 self.log(f"位面 {plane} 的敌人词条:{text[:300]}")
             return "收集本位面的节点序列"
         if pending_companion:
@@ -620,7 +648,7 @@ class Runner:
             text = " / ".join(lines)[:500]
             # 标签不写「开局」:这条是第一位面收集完怪物词条和节点之后点左上角读到的,是正式的记录;
             # 开局界面上那条只有名字(见 reflex 的 run_intro)
-            self.ledger.add(f"[位面 1 奇遇伙伴] {text}")
+            self.ledger.add_fact(f"本局奇遇伙伴(详情页读到):{text}")
             self.log(f"本局奇遇伙伴:{text[:300]}")
             if self.on_companion:
                 for line in lines:      # 名字和效果一起交给档案(本机 companions.local.yaml)
@@ -688,13 +716,13 @@ class Runner:
                 name = companion_name(boxes)
                 if name and not self.ledger.companion:
                     self.ledger.companion = name
-                    self.ledger.add(f"[开局] 奇遇伙伴:{name}")
+                    self.ledger.add_fact(f"奇遇伙伴 {name}(开局界面,效果见之后读到的那条)")
                     if self.on_companion:
                         self.on_companion(name, "")          # 开局界面只有名字,效果等第一位面读完再补
                 intro = intro_text(boxes)[:600]
                 if intro and intro != self.ledger.intro:
                     self.ledger.intro = intro
-                    self.ledger.add(f"[开局] {intro}")
+                    self.ledger.add_fact("开局界面:" + intro.replace("\n", " "))
                 return [Action(type="click_text", text="下一步", reason="开局介绍")]
             case "home":
                 return [Action(type="click_text", text="开始「货币战争」")]
@@ -720,6 +748,10 @@ class Runner:
                     return [Action(type="click_text", text="前往结算", reason="整局失败")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
+                if find(boxes, "挑战成功"):
+                    self._losses, self._checked_losses = 0, False
+                elif find(boxes, "挑战结束") and sig != self._last_sig:
+                    self._losses += 1
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
             case "deploy_confirm":
                 # 出战时「可出战角色人数未达上限」(设计文档第 9 节):这个节点第一次弹就取消、告诉模型;模型看过以后
@@ -785,6 +817,8 @@ class Runner:
             case "other":
                 if len(meaningful(boxes)) < 2:
                     return [Action(type="wait", seconds=1.5, reason="过场或加载中")]
+                if find(boxes, TRANSIENT):
+                    return [Action(type="wait", seconds=1.5, reason="自动消失的过场")]
                 ep = self.episode
                 if ep is not None and ep.waiting and similar(sig, self._last_sig) > 0.6 and self._waits < 10:
                     self._waits += 1
@@ -806,13 +840,22 @@ class Runner:
         if ep is None:
             return
         done = ";".join(ep.done)
-        if ep.screen == "environment_choice" and self.guides is not None:
-            envs = sorted(self.guides.environments, key=len, reverse=True)
-            for d in reversed(ep.done):
-                env = next((e for e in envs if e in d), None)
-                if env:
-                    self.ledger.environment = env
-                    break
+        if ep.screen == "environment_choice":
+            picked = self._picked(ep.done, "portals")
+            if picked:
+                self.ledger.environment = picked[0]
+                self.ledger.add_fact(f"投资环境 {picked[0]}:{picked[1]}")
+            elif self.guides is not None:
+                envs = sorted(self.guides.environments, key=len, reverse=True)
+                for d in reversed(ep.done):
+                    env = next((e for e in envs if e in d), None)
+                    if env:
+                        self.ledger.environment = env
+                        break
+        if ep.screen == "strategy_choice":
+            picked = self._picked(ep.done, "augments")
+            if picked:
+                self.ledger.add_fact(f"投资策略 {picked[0]}({ep.node or '开局'} 拿到):{picked[1]}")
         if ep.screen == "difficulty":
             return
         # 本局经历里留一行:程序记录的做了什么 + 模型自己写的回合小结(没写就用它最后的判断开头)
@@ -833,10 +876,29 @@ class Runner:
             name = SCREEN_NAMES.get(ep.screen, "其他界面")
             self.ledger.add(f"[{ep.node or '开局'} {name}] {done[-300:] or '没有操作'}{tail}")
 
+    def _picked(self, done: list[str], kind: str) -> tuple[str, str] | None:
+        """选择界面最后点中的条目(按「点击「名字」」的文字查知识库):(名字, 官方描述)。点的是坐标就认不出,返回 None。
+        投资策略的卡面标题有时只有前半截(「爆晶矿」对「爆晶矿•金」),按前缀也算。"""
+        index = getattr(self.brain, "index", None)
+        by_name = getattr(index, "by_name", None)
+        if not by_name:
+            return None
+        for d in reversed(done):
+            m = re.search(r"点击「(.+?)」", d)
+            if not m or m.group(1) in ("确认", "确定", "选择", "刷新", "确认选择"):
+                continue
+            text = m.group(1)
+            for name in [text] + sorted((n for n in by_name if n.startswith(text) or (len(n) >= 2 and n in text)),
+                                        key=len, reverse=True):
+                hit = next((e for e in by_name.get(name, []) if e.kind == kind), None)
+                if hit is not None:
+                    return hit.name, hit.text
+        return None
+
     def _hints(self, screen: str, frame, boxes: list[TextBox], record: dict, opening: bool) -> tuple[str, list[str]]:
         hints, names = "", []
         if screen == "prepare":
-            hints = PREPARE_LAYOUT if opening else ""
+            hints = ""   # 备战界面的操作说明已经在系统提示词里(整局不变、可缓存),不再每回合开场重发
             if self._notice:
                 hints += "\n- " + self._notice
                 self._notice = ""
@@ -892,8 +954,8 @@ class Runner:
             if grey:
                 hints += "\n" + GREY_CONFIRM.format(text=grey[0])
         if self._same >= 3:
-            hints += (f"\n\n注意:最近 {self._same} 步都在这个界面、画面几乎没变,前面的操作没有起作用。"
-                      "先读界面中间的提示文字找原因,换一种做法,不要重复同样的操作。")
+            # 只陈述程序看到的事实,不替模型下结论(设计文档第 20.4 节)
+            hints += f"\n\n(程序观察:最近 {self._same} 步都在这个界面,画面几乎没变,前面的操作可能没有生效。)"
         return hints.strip(), names
 
     def decide(self, n: int, frame, boxes: list[TextBox], screen: str, record: dict, sig: set[str]) -> str:
@@ -956,14 +1018,15 @@ class Runner:
                                    boxes, sig)
         hints, names = self._hints(screen, frame, boxes, record, opening)
         if opens >= STUCK_WARN:
-            hints += (f"\n\n注意:这是节点 {self._node} 第 {opens} 次进入备战回合,前面的回合都没能推进"
-                      "(本局档案里有这个节点做过的操作)。先从界面提示文字弄清卡在哪里,换一种做法;实在不行用 pause 请人处理。")
+            hints += (f"\n\n(程序观察:这是节点 {self._node} 第 {opens} 次进入备战回合,前面的回合没有进入战斗;"
+                      f"第 {STUCK_PAUSE} 次会暂停请人处理。)")
         if opening:
             ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
                          max_turns=self.prepare_turns + 1 if screen == "prepare" else OTHER_TURNS)   # 多一轮留给单独的出战
             self.episode = ep
-            ep.cache_at = self.ledger.history_len()   # 本局经历在第一条消息的最前面,只增不改
-            text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names,
+            ep.cache_at = self.ledger.stable_len()    # 整局已知事实 + 本局经历在第一条消息的最前面,只增不改
+            # 传档案本身:新出现的条目说明、第一次相关的经验追加进档案,不再每回合重发(设计文档第 20.4 节)
+            text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger, hints=hints, names=names,
                                                 nodes=self.ledger.kinds_near(self._node))
         else:
             text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
@@ -1010,6 +1073,8 @@ class Runner:
         if result.ready:
             if self.episode is not None and self.episode.node and result.lineup():
                 self.ledger.node(self.episode.node).lineup = result.lineup()
+            self._ready_facts = situation.at_ready(self._board, self._last_hud,
+                                                   (self.prepare.counts or {}).get("front", 4), self.prepare.deployed)
             self.close_episode()
         self._same = 0
         self._last_sig = sig
@@ -1063,7 +1128,8 @@ class Runner:
                             **report.as_dict()}
         record["battle_summary"] = text
         if node:
-            self.ledger.add(f"[{node} 战斗] {text}")
+            facts, self._ready_facts = self._ready_facts, ""
+            self.ledger.add(f"[{node} 战斗] {text}" + (f";{facts}" if facts else ""))
         self.log(f"[{n}] 战斗{f' {node}' if node else ''}:{text}")
         self._last_sig = sig
         self.trace.write(record)

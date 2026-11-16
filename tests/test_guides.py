@@ -42,29 +42,33 @@ def test_rank_prefers_owned_carry(advisor):
     assert [m.guide.id for m in advisor.shop_carries([], ["黑天鹅", "白露"])] == ["b"]
 
 
-def test_initial_direction_then_auto_switch(tmp_path, advisor):
+def test_initial_direction_then_no_auto_switch(tmp_path, advisor):
+    """开局按热门程度定方向;之后不自动换(设计文档第 20.5 节),只在战略检查点列候选。"""
     r = make_runner(tmp_path, advisor)
+    r._node = "1-1"
     text = r.guide_advice(True, {})
     assert r._guide.id == "a"                     # 什么都没有时按热门程度定
     assert "景元攻略" in r.ledger.render()
-    assert "当前方向「景元攻略」" in text
-    # 主 C 一个都没有时,别的攻略明显更合适就自动换
+    assert "战略检查点(位面 1 开始)" in text and "当前方向「景元攻略」" in text
     r._roles = ["黑天鹅", "卡芙卡"]
-    r.guide_advice(False, {})
-    assert r._guide.id == "b"
+    r._node = "1-2"
+    assert r.guide_advice(True, {}) == ""         # 不是检查点:不附候选
+    assert r._guide.id == "a"                     # 也不自动换
 
 
-def test_shop_carry_is_only_suggested_once_committed(tmp_path, advisor):
+def test_candidates_only_at_checkpoints(tmp_path, advisor):
     r = make_runner(tmp_path, advisor)
-    r._roles = ["景元", "白露"]
+    r._roles, r._node = ["景元", "白露"], "1-1"
     r.guide_advice(True, {})
-    assert r._guide.id == "a"
-    r._shop_names = ["刃"]
-    record: dict = {}
-    text = r.guide_advice(False, {})
-    assert r._guide.id == "a"                     # 已经有主 C:只提示
-    assert "商店里有 刃,是候选" in text and "「刃攻略」的主 C" in text
-    assert r.guide_advice(False, record) == ""    # 候选没变就不重复
+    r._shop_names, r._node = ["刃"], "1-4"
+    assert r.guide_advice(True, {}) == ""         # 同一位面、不是首领、没连输
+    r._losses = 2                                 # 连输两场是检查点
+    text = r.guide_advice(True, {})
+    assert "连输 2 场" in text and "刃攻略" in text
+    assert r.guide_advice(True, {}) == ""         # 同一串连输只算一次
+    r.ledger.node_kinds["1-9"] = {"boss"}
+    r._node = "1-9"
+    assert "1-9 首领节点" in r.guide_advice(True, {})
     n = next(i for i, g in enumerate(r._candidates, start=1) if g.id == "c")
     r.choose_guide(f"候选{n}", 1)
     assert r._guide.id == "c" and r._guide_pinned

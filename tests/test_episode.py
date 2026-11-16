@@ -134,7 +134,10 @@ def test_ledger_history_append_only():
     assert history.startswith(before) and "[1-0 战斗]" in history and "[1-99 战斗]" in history
     assert len(led.history[-1]) == 600
     text = led.render()
-    assert text.startswith(history) and text.index("刃攻略") > len(history) and led.history_len() == len(history)
+    stable = led.render_facts() + "\n\n" + history          # 整局已知事实 + 本局经历在最前面(设计文档第 20.4 节)
+    assert text.startswith(stable) and text.index("刃攻略") > len(stable) and led.stable_len() == len(stable)
+    led.add_fact("位面 1 敌人词条:第一位面强化")
+    assert led.render().startswith(led.render_facts()) and not led.add_fact("位面 1 敌人词条:第一位面强化")
     led.set_direction("x" * 2000)
     assert len(led.direction) == 800
 
