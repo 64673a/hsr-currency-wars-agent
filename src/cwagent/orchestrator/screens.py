@@ -96,13 +96,15 @@ def classify(boxes: list[TextBox]) -> str:
     # 幕后茶歇(奇遇伙伴替换奖励节点):选项页和选项里的二级页都有「返回备战界面」
     if find(boxes, "^返回备战界面$") and find(boxes, "^(幕后茶歇|享用茶歇|醒香猫语)$|^聊一聊$|^摇一摇$"):
         return "tea_break"
+    # 投资环境要在备战之前判断:「轮岗」的说明是「备战阶段开始时,使一个随机费用的刷新概率翻倍」,按子串会被认成备战
+    # (2026-11-16 实机,模型先得指出「这其实是投资环境选择」)
+    if find(boxes, "^投资环境$") and find(boxes, "^确认$"):
+        return "environment_choice"
     if has(boxes, "备战阶段"):
         return "prepare"
     # 商店展开时会挡住顶部的「备战阶段」
     if has(boxes, "购买经验") and find(boxes, "^(商店|收起)$"):
         return "prepare"
-    if has(boxes, "^投资环境$") and find(boxes, "^确认$"):
-        return "environment_choice"
     if has(boxes, "开始「货币战争」"):
         return "home"
     if find(boxes, "^进入(标准|超频)博弈$"):

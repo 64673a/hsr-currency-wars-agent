@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from ..brain.ledger import RunLedger
+from ..brain.ledger import RunLedger, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import SWITCH_MARGIN, Guide, GuideAdvisor, card
@@ -77,6 +77,7 @@ ENV_EFFECT = 3.0           # 刚进投资环境选择时的特效时长(秒)
 INVEST_WAITS = 8           # 投资界面最多等几次(每次 0.5 秒)三张卡都翻出来
 DETAIL_PER_NODE = 3        # 每个节点最多点开几张认不出的卡看详情
 RAIL_STEPS = 6             # 开拓商店界面停留这么多步还没关,程序直接关掉
+SPOTLIGHT_BUTTON = "^选择主角$"   # 首领节点备战界面右下的按钮(实机:商店开着时点不到)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
                   "ranger", "dance", "garden", "hack", "tea_break"}
@@ -210,6 +211,8 @@ class Runner:
         self._affixes: list[tuple[str, str]] = []              # 本局读到的敌人词条
         self._difficulty_tries = 0                             # 程序自动选难度试了几次
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
+        self._notice = ""                                      # 反射层处理掉的、下一个备战回合要告诉模型的事
+        self._spotlight_opened: set[str] = set()               # 程序已经替模型打开过「选择主角」的节点
 
     # ---------------------------------------------------------------- 截图
 
@@ -545,8 +548,9 @@ class Runner:
         plane = node.split("-")[0]
         full = self._crystal_full is not None and self._crystal_full[0] == node   # 等模型腾出备战席,出战前再开
         pending_companion = plane == "1" and not self._companion_done   # 奇遇伙伴整局只读一次,第一位面读
+        spotlight = node not in self._spotlight_opened and find(boxes, SPOTLIGHT_BUTTON) is not None
         if (plane == self._surveyed and (full or self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES)
-                and not pending_companion):
+                and not pending_companion and not spotlight):
             return None   # 没有要做的
         ready = self.ready_prepare()
         if ready is None:
@@ -565,6 +569,7 @@ class Runner:
                 self._surveyed = plane
             if lines:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
+                self.ledger.node_kinds.update(node_types(lines))
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             if affixes and affixes != self._affixes:
                 # 有的词条会左右全局方向(如「虚数熄火」不用虚数主 C、「能量逃逸」不用靠能量放大招的主 C,维护者举例)
@@ -578,7 +583,24 @@ class Runner:
             # 详情页左下角列着本局所有伙伴,悬停读气泡。读不到下个节点再试一次,不影响备战。
             self._read_companions()
             return "读取本局奇遇伙伴"
-        return self._open_crystals(image)
+        did = self._open_crystals(image)
+        if did is None and spotlight:
+            did = self._open_spotlight(node)
+        return did
+
+    def _open_spotlight(self, node: str) -> str | None:
+        """首领节点开局先打开「选择主角」(设计文档第 20.5 节:必做的界面操作由程序包办)。原来交给模型自己找,
+        外部 agent 花了两三轮才发现按钮被商店挡住。每个节点只开一次:模型从光环界面返回备战后要自己再点。"""
+        self._spotlight_opened.add(node)
+        boxes = self.ocr(self.device.grab().image)
+        if self.prepare.shop_now(boxes):
+            boxes = self.prepare.set_shop(PrepareResult(), boxes, False)
+        button = find(boxes, SPOTLIGHT_BUTTON)
+        if button is None:
+            return None
+        self.device.click(float(button.x), float(button.y))
+        time.sleep(1.0)
+        return "打开主角光环选择(首领节点要选完光环才能出战)"
 
     def _read_companions(self) -> None:
         """点左上角读本局的奇遇伙伴(详情页左下角),记进本局经历。整局一次。"""
@@ -700,8 +722,15 @@ class Runner:
             case "node_result":
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
             case "deploy_confirm":
-                # 模型已经决定出战(没上满人);勾上「本局不再提示」,以后不再弹
-                return [Action(type="click_text", text="本局不再提示"), Action(type="click_text", text="确认")]
+                # 出战时「可出战角色人数未达上限」(设计文档第 9 节):这个节点第一次弹就取消、告诉模型;模型看过以后
+                # 又出战就照它的决定确认。不勾「本局不再提示」——原来勾上后,之后少上人游戏就不再提醒(最近 6 局每局都发生)
+                node = self._node or ""
+                if node in self.prepare.understaffed:
+                    return [Action(type="click_text", text="确认", reason="看过人数未满的提示后仍决定出战")]
+                self.prepare.understaffed.add(node)
+                self._notice = ("上次点出战时游戏提示「可出战角色人数未达上限」,已点取消、没有出战。还有空着的上场名额,"
+                                "先把角色放上场再出战;确实没有角色可上就再发一次 ready,会照常出战。")
+                return [Action(type="click_text", text="取消", reason="人数未满,先交回模型")]
             case "previous_run":
                 if find(boxes, "^返回货币战争$"):
                     return [Action(type="click_text", text="返回货币战争", reason="上一局的结算")]
@@ -808,12 +837,18 @@ class Runner:
         hints, names = "", []
         if screen == "prepare":
             hints = PREPARE_LAYOUT if opening else ""
+            if self._notice:
+                hints += "\n- " + self._notice
+                self._notice = ""
             if find(boxes, "^幕后茶歇$", region=(0.85, 0.64, 0.15, 0.1)):
                 hints += "\n- 这个节点是「幕后茶歇」:右侧按钮是「幕后茶歇」而不是「出战」,ready 会进入茶歇。"
             full = self._crystal_full
             if full and full[0] == self._node:
                 hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席,"
                           "出战前程序会再开一次。")
+            if find(boxes, SPOTLIGHT_BUTTON):
+                hints += ("\n- 右下角有「选择主角」:这个首领节点的主角光环还没选,选完才能出战。"
+                          "要选时 click_text「选择主角」进入(会先收起商店)。")
             if find(boxes, "前置流程未结束"):
                 hints += "\n- 界面提示「前置流程未结束」:可能还有没做完的流程(例如幕后茶歇里的选择),先回去做完。"
             shop_entry = trait_shop(boxes)
@@ -928,7 +963,8 @@ class Runner:
                          max_turns=self.prepare_turns + 1 if screen == "prepare" else OTHER_TURNS)   # 多一轮留给单独的出战
             self.episode = ep
             ep.cache_at = self.ledger.history_len()   # 本局经历在第一条消息的最前面,只增不改
-            text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names)
+            text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger.render(), hints=hints, names=names,
+                                                nodes=self.ledger.kinds_near(self._node))
         else:
             text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
                                                     names=names), []
@@ -1053,6 +1089,7 @@ class Runner:
         node = node_of(boxes)
         if node:
             self._node = node
+            self.prepare.node = node
         record: dict = {"step": n, "ts": time.strftime("%H:%M:%S"), "screen": screen, "node": node,
                         "shot": self.trace.shot(n, frame.image), "texts": [str(b) for b in boxes]}
         sig = text_signature(boxes)

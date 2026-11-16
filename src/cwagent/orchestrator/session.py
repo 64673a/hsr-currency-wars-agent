@@ -92,6 +92,12 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
     finally:
         runner.trace.meta(result=result, ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         runner.trace.close()
+        try:
+            from ..replay import report
+
+            log(f"报表:{report.write(runner.trace.root)}")
+        except Exception as e:  # noqa: BLE001 - 报表出错不影响对局结果
+            log(f"生成报表出错:{type(e).__name__}: {e}")
     log(f"结束:{result}")
     return result
 

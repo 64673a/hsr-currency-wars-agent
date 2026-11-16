@@ -75,9 +75,10 @@ def test_build():
     g = guides[0].data
     assert g["carries"] == ["甲"] and g["tempo_labels"] == ["速升8级"] and g["environments"] == ["火药味"]
     assert g["final_board"]["front"][0] == {"name": "甲", "cost": 1, "star": 2, "carry": True,
-                                            "equipment": ["反重力皮靴"], "spotlights": ["蚁群效应"]}
+                                            "equipment": ["反重力皮靴"], "equipment2": [], "spotlights": ["蚁群效应"]}
     assert g["key_traits"] == [{"name": "连击", "count": 2, "layer": 2}]
-    assert g["example_boards"]["early"] == {"front": ["甲"], "back": []}
+    assert [r["name"] for r in g["example_boards"]["early"]["front"]] == ["甲"]   # 前期阵容带星级和前后台
+    assert g["example_boards"]["early"]["back"] == [] and "early" in g["stage_traits"]
     assert k.icons["roles"]["1001"].endswith("r1001.png") and "1002" not in k.icons["roles_big"]
 
 

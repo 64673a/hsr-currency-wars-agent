@@ -10,10 +10,41 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 MAX_LINE = 600       # 本局经历每条最长
 MAX_DIRECTION = 800
+
+# 位面详情里节点说明开头的名字 → 节点类型(记忆的 triggers.nodes 用这些英文名)。
+# 只看节点号后面紧跟的名字:「1-8 幕后茶歇 特殊的奖励节点……」后文里也有「奖励节点」,不能按全文匹配
+NODE_LABELS = (("首领节点", "boss"), ("遭遇节点", "encounter"), ("战斗节点", "battle"), ("奖励节点", "reward"),
+               ("补给", "supply"), ("投资策略", "strategy"), ("幕后茶歇", "tea_break"))
+
+
+def node_types(lines: list[str]) -> dict[str, set[str]]:
+    """位面详情里每个节点的说明行 → {节点号: 类型}。
+
+    实机的说明行如「1-1 奖励节点 难度较低的节点……」「1-3 投资策略 ……选择完毕后将继续备战【战斗节点】。」;
+    投资策略选完还要打一场战斗,所以同时算 battle。认不出名字的节点不收。
+    """
+    out: dict[str, set[str]] = {}
+    for line in lines:
+        m = re.match(r"\s*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
+        if not m:
+            continue
+        node, label, rest = m.groups()
+        types = {t for key, t in NODE_LABELS if label.startswith(key)}
+        if "strategy" in types and "战斗节点" in rest:
+            types.add("battle")
+        if types:
+            out[node] = types
+    return out
+
+
+def next_node(node: str) -> str | None:
+    m = re.fullmatch(r"([1-3])-(\d{1,2})", node or "")
+    return f"{m.group(1)}-{int(m.group(2)) + 1}" if m else None
 
 
 @dataclass
@@ -31,6 +62,7 @@ class RunLedger:
     companion: str = ""
     intro: str = ""                                          # 开局界面上的首领、怪物词条等原文
     plane_nodes: str = ""                                    # 本位面的节点序列(程序在位面开始时收集)
+    node_kinds: dict[str, set[str]] = field(default_factory=dict)   # 节点号 → 类型(reward、battle……),给记忆检索
     direction: str = ""                                      # 对局方向与计划(模型写)
     equipped: dict[str, list[str]] = field(default_factory=dict)   # 角色 → 程序给他装上的装备
     items: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号的道具:(名字, 看过的选项)
@@ -49,6 +81,12 @@ class RunLedger:
         text = text.strip()
         if text:
             self.history.append(text[:MAX_LINE])
+
+    def kinds_near(self, node: str | None) -> set[str]:
+        """当前节点和下一个节点的类型(记忆按「当前或下一个节点」触发,设计文档 5.4)。"""
+        if not node:
+            return set()
+        return self.node_kinds.get(node, set()) | self.node_kinds.get(next_node(node) or "", set())
 
     def equip(self, role: str, item: str) -> None:
         self.equipped.setdefault(role, []).append(item)

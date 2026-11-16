@@ -6,6 +6,7 @@ import concurrent.futures as cf
 import json
 import os
 import shutil
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,6 +137,26 @@ def download_avatars(out_dir: Path, *, progress: Progress | None = None,
     finally:
         if own:
             client.close()
+
+
+def rebuild(*, db_path: Path | None = None, export_dir: Path | None = None) -> SyncResult:
+    """不联网,用库里存的上次接口原始响应(raw_snapshots)重新整理一遍知识库。改了整理逻辑(如攻略卡片多存了字段)
+    之后用,不必再请求官方接口;奇遇伙伴、敌人词条照常从 YAML 读最新的。"""
+    path = db_path or paths.knowledge_db()
+    if not path.exists():
+        raise FileNotFoundError(f"没有知识库:{path},先运行 cwagent knowledge sync")
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        raw = {name: json.loads(text) for name, text in con.execute("SELECT name, json FROM raw_snapshots")}
+    finally:
+        con.close()
+    if "config" not in raw or "lineups" not in raw:
+        raise FileNotFoundError("知识库里没有上次同步的原始响应,先运行 cwagent knowledge sync")
+    knowledge = build(raw["config"], raw["lineups"], load_companions(), load_affixes())
+    db.write(path, knowledge, {"config": raw["config"], "lineups": raw["lineups"]})
+    export_yaml(knowledge, export_dir or paths.export_dir())
+    return SyncResult(counts=knowledge.counts(), meta=knowledge.meta, warnings=knowledge.warnings,
+                      lineups_fetched=len(raw["lineups"]))
 
 
 def sync(*, max_lineups: int = 300, interval: float = 1.0, templates: bool = True,

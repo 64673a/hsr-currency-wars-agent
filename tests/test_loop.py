@@ -58,9 +58,10 @@ class FakeBrain:
         self.plans = plans
         self.calls: list[tuple[str, str, int]] = []   # (界面, opening / observation, 回合 id)
 
-    def opening(self, ep, boxes, *, ledger, hints="", names=None):
+    def opening(self, ep, boxes, *, ledger, hints="", names=None, nodes=None):
         self.calls.append((ep.screen, "opening", ep.id))
         self.ledger = ledger
+        self.nodes = nodes
         return "open", []
 
     def observation(self, ep, results, boxes, *, screen, hints="", names=None):
@@ -274,10 +275,10 @@ def test_stuck_node_warns_then_pauses(tmp_path):
     sim = Sim(pages, "prep", rules)
 
     class Brain(FakeBrain):
-        def opening(self, ep, boxes, *, ledger, hints="", names=None):
+        def opening(self, ep, boxes, *, ledger, hints="", names=None, nodes=None):
             self.hints = getattr(self, "hints_all", []) + [hints]
             self.hints_all = self.hints
-            return super().opening(ep, boxes, ledger=ledger, hints=hints, names=names)
+            return super().opening(ep, boxes, ledger=ledger, hints=hints, names=names, nodes=nodes)
 
     brain = Brain({"prepare": [[Action(type="ready")]] * 10,
                    "tea_break": [[Action(type="click_text", text="返回备战界面")]] * 10})

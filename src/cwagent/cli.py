@@ -30,6 +30,8 @@ stream_app = typer.Typer(help="网页上的实时画面", no_args_is_help=True)
 app.add_typer(stream_app, name="stream")
 web_app = typer.Typer(help="网页界面", no_args_is_help=True)
 app.add_typer(web_app, name="web")
+runs_app = typer.Typer(help="对局记录(runs/ 目录)", no_args_is_help=True)
+app.add_typer(runs_app, name="runs")
 
 
 def _fail(message: str) -> None:
@@ -237,6 +239,20 @@ def knowledge_sync(
         typer.secho(f"  提示 {len(result.warnings)} 条:", fg="yellow")
         for w in result.warnings:
             typer.echo(f"    - {w}")
+
+
+@knowledge_app.command("rebuild")
+def knowledge_rebuild() -> None:
+    """不联网:用上次同步存下的官方接口原始响应重新整理知识库(改了整理逻辑后用,不必再请求接口)。"""
+    from .knowledge.sync import rebuild
+
+    try:
+        result = rebuild()
+    except FileNotFoundError as e:
+        _fail(str(e))
+    from .knowledge.build import KIND_NAMES
+    typer.secho(f"重建完成:阵容 {result.lineups_fetched} 条", fg="green")
+    typer.echo("  " + "  ".join(f"{KIND_NAMES[k]} {v}" for k, v in result.counts.items()))
 
 
 @knowledge_app.command("stats")
@@ -649,6 +665,25 @@ def web_download() -> None:
 
 
 # ---------------------------------------------------------------- 对局
+
+@runs_app.command("report")
+def runs_report(
+    run: Annotated[str | None, typer.Argument(help="对局目录名或路径,默认最近一局")] = None,
+) -> None:
+    """生成逐节点报表(写到对局目录的 report.md 并打印):进场数字、出战时的阵容、战斗结果、模型调用。"""
+    from . import paths
+    from .replay import report
+
+    if run and Path(run).is_dir():
+        target = Path(run)
+    else:
+        runs = sorted(p for p in paths.runs_dir().glob("*") if p.is_dir())
+        target = paths.runs_dir() / run if run else (runs[-1] if runs else None)
+    if target is None or not (target / "steps.jsonl").exists():
+        _fail(f"找不到对局记录:{run or paths.runs_dir()}")
+    report.write(target)
+    typer.echo(report.render(target))
+
 
 @app.command("play")
 def play_cmd(

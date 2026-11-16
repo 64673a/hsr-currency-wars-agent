@@ -346,6 +346,7 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
                     "name": r.get("name", ""), "cost": _int(r.get("rarity")), "star": _int(r.get("star"), 1),
                     "carry": bool(r.get("is_carry")),
                     "equipment": [e.get("name", "") for e in r.get("first_equipments") or []],
+                    "equipment2": [e.get("name", "") for e in r.get("second_equipments") or []],   # 次选装备
                     "spotlights": [s.get("name", "") for s in r.get("first_spot_lights") or []],
                 })
             out[side] = items
@@ -361,7 +362,9 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
         return sorted(out, key=lambda t: -t["count"])
 
     description = (lineup.get("description") or "").strip()
-    augments = [a.get("name", "") for a in (td.get("first_fight_augments") or []) + (td.get("second_fight_augments") or [])]
+    first = [a.get("name", "") for a in td.get("first_fight_augments") or []]
+    second = [a.get("name", "") for a in td.get("second_fight_augments") or []]
+    augments = first + second
     return {
         "id": str(lineup.get("id", "")),
         "title": lineup.get("title", ""),
@@ -379,8 +382,12 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
         "equip_order": {"basic": [e.get("name", "") for e in td.get("order_basic") or []],
                         "compose": [e.get("name", "") for e in td.get("order_compose") or []]},
         "recommended_augments": augments,
-        "example_boards": {"early": board(stages.get("Early"), detail=False),
-                           "middle": board(stages.get("Middle"), detail=False)},
+        "augments": {"first": first, "second": second},          # 官方分成两组(推荐的第一、第二次投资策略)
+        # 前期、中期阵容:接口里只有角色、星级和前后台(没有装备),按最终阵容同样的结构存;
+        # stage_traits 是各阶段激活的羁绊人数,给模型对照「现在该凑到几个」
+        "example_boards": {"early": board(stages.get("Early"), detail=True),
+                           "middle": board(stages.get("Middle"), detail=True)},
+        "stage_traits": {"early": stage_traits(stages.get("Early")), "middle": stage_traits(stages.get("Middle"))},
         "share_code": td.get("share_code", ""),
         "season_id": str(td.get("season_id", "")),
         "game_version": str(td.get("rpg_game_big_version", "")),

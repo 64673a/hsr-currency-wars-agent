@@ -24,6 +24,7 @@ from ..vision.equipment import (
     find_compose_confirm,
     format_items,
 )
+from ..vision.hud import read_level
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop, shop_state
 
@@ -37,6 +38,10 @@ SHOP_CARD_Y = 0.15
 GAP = 0.5
 ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
 REFUSED = "不可调整|无法上阵|无法移动"   # 拖动被游戏拒绝时界面中间的提示(2026-11-15 实机:「当前情况下不可调整」)
+BEHIND_SHOP = {"选择主角", "出战"}   # 右下的按钮,商店展开时被挡住(2026-11-16 外部 agent 实测:点了没反应)
+UNDERSTAFFED = "人数未达上限"    # 出战时的「可出战角色人数未达上限,是否确认出战?」(实机文字在 0.498, 0.473)
+UNDERSTAFFED_CANCEL = (0.43, 0.572)     # 读不到「取消」时的位置(trail-cli 的 BATTLE_TEAM_COUNT_CANCEL_POINT)
+UNDERSTAFFED_CONFIRM = (0.57, 0.572)    # 读不到「确认」时的位置(和取消左右对称,待实机核对)
 
 
 @dataclass
@@ -69,6 +74,12 @@ def shift(deployed: str, delta: int) -> str:
     return f"{max(0, int(m.group(1)) + delta)}/{m.group(2)}" if m else deployed
 
 
+def raise_cap(deployed: str, delta: int) -> str:
+    """「已上场/上限」的上限加 delta(升级)。"""
+    m = re.fullmatch(r"(\d+)/(\d+)", deployed)
+    return f"{m.group(1)}/{int(m.group(2)) + delta}" if m else deployed
+
+
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
                  sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None,
@@ -83,6 +94,8 @@ class PrepareExecutor:
         self.frame = None         # 最近一次截图
         self.counts: dict[str, int] | None = None   # 前台、后台的格子数(Runner 识别阵容时更新)
         self.deployed: str | None = None            # 「已上场/上限」,如 5/6(Runner 读 HUD 时更新)
+        self.node: str | None = None                # 当前节点(Runner 每步更新)
+        self.understaffed: set[str] = set()         # 已经因为「人数未达上限」拦过一次出战的节点
 
     def _look(self) -> list[TextBox]:
         self.frame = self.device.grab()
@@ -97,6 +110,47 @@ class PrepareExecutor:
     def _click(self, out: PrepareResult, x: float, y: float) -> None:
         self.device.click(x, y)
         out.marks.append({"type": "click", "x": x, "y": y})
+
+    def _level(self) -> int | None:
+        """左下「购买经验」上的等级,商店展开时也读得到(读不出返回 None)。"""
+        try:
+            return read_level(self.device.grab().image, self.ocr)
+        except Exception:  # noqa: BLE001 - 读等级只是为了跟上上场上限,失败就当拿不准
+            return None
+
+    def _after_level_up(self, before: int | None, after: int | None) -> str:
+        """买经验后跟上上场上限(上限 = 等级 + 财富宝钻):升了几级上限就加几。读不出等级时上场人数拿不准,
+        标成过期(None),之后不用它拦上场,改成上场后核对——原来缓存一直是升级前的数,模型的上场被程序自己拦下
+        (2026-11-16 实机,模型在笔记里记下了这个问题)。"""
+        if before is None or after is None:
+            self.deployed = None
+            return ""
+        if after > before:
+            if self.deployed:
+                self.deployed = raise_cap(self.deployed, after - before)
+            return f":升到 {after} 级" + (f",上场 {self.deployed}" if self.deployed else "")
+        return f":现在 {after} 级"
+
+    def answer_understaffed(self, out: PrepareResult, boxes: list[TextBox]) -> str | None:
+        """点出战后弹出「可出战角色人数未达上限,是否确认出战?」时怎么答(设计文档第 9 节,参考 trail-cli):
+        这个节点第一次弹就点「取消」,返回给模型的说明;模型看过以后又发出战(比如备战席确实没人可上),
+        就照它的决定点「确认」,返回 None。两种情况都不勾「本局不再提示」——原来勾上后,之后少上人游戏就不再提醒。
+        没弹这个框返回 None。"""
+        if find(boxes, UNDERSTAFFED) is None:
+            return None
+        node = self.node or ""
+        if node in self.understaffed:
+            ok = find(boxes, "^确认$")
+            self._click(out, *((float(ok.x), float(ok.y)) if ok is not None else UNDERSTAFFED_CONFIRM))
+            self.sleep(1.0)
+            return None
+        self.understaffed.add(node)
+        cancel = find(boxes, "^取消$")
+        self._click(out, *((float(cancel.x), float(cancel.y)) if cancel is not None else UNDERSTAFFED_CANCEL))
+        self.sleep(0.8)
+        seats = f"(上场 {self.deployed})" if self.deployed else ""
+        return (f"没有出战:游戏提示「可出战角色人数未达上限」{seats},已点取消。还有空着的上场名额,"
+                "先把角色放上场再出战;确实没有角色可上就再发一次 ready,会照常出战")
 
     def set_shop(self, out: PrepareResult, boxes: list[TextBox], want_open: bool) -> list[TextBox]:
         """打开或收起商店,等动画结束(展开时等卡片名字连续两次读到一样)。
@@ -294,11 +348,12 @@ class PrepareExecutor:
                     out.observe = True
                     break
                 elif a.type == "buy_exp":
+                    before = self._level()
                     for _ in range(a.times or 1):
                         self.device.key("f")
                         self.sleep(0.3)
                     self.sleep(0.8)   # 升级有动画,紧接着点商店会点不上(2026-11-14 实机)
-                    out.results.append(text)
+                    out.results.append(text + self._after_level_up(before, self._level()))
                 elif a.type in ("compose", "equip"):
                     done = self._equipment(a, text, out, occupied, boxes)
                     if done is None:
@@ -325,10 +380,17 @@ class PrepareExecutor:
                         break
                     self._click(out, *READY_BUTTON)
                     self.sleep(1.0)
+                    blocked = self.answer_understaffed(out, self._look())
+                    if blocked:
+                        out.results.append(f"{text}:{blocked}")
+                        out.observe = True
+                        break
                     out.results.append(text)
                     out.ready = True
                     break
                 else:
+                    if a.type == "click_text" and a.text in BEHIND_SHOP:
+                        boxes = self.set_shop(out, boxes, False)   # 商店开着时点不到这些按钮
                     out.results.append(self.raw(a, boxes))
                     if a.type != "wait":
                         boxes = self._look()

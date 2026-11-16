@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 SWITCH_MARGIN = 3.0   # 别的攻略比当前方向高出这么多分,才提示转向(大约等于多对上一个主 C)
@@ -30,6 +30,10 @@ class Guide:
     augments: list[str]
     use_count: int
     hard: bool
+    boards: dict = field(default_factory=dict)          # {"early": {"front": [...], "back": [...]}, "middle": ...}
+    stage_traits: dict = field(default_factory=dict)    # {"early": [{"name", "count"}], "middle": ..., "final": ...}
+    augment_groups: dict = field(default_factory=dict)  # {"first": [...], "second": [...]}
+    author: str = ""
 
     @property
     def final_names(self) -> set[str]:
@@ -76,16 +80,21 @@ class GuideAdvisor:
 
             def names(stage: str) -> set[str]:
                 b = boards.get(stage) or {}
-                return {n for side in ("front", "back") for n in b.get(side) or [] if isinstance(n, str)}
+                return {_name(n) for side in ("front", "back") for n in b.get(side) or [] if _name(n)}
 
+            stage_traits = dict(g.get("stage_traits") or {})
+            stage_traits["final"] = [t for t in g.get("key_traits") or [] if isinstance(t, dict)]
             self.guides.append(Guide(
                 id=g["id"], title=g.get("title", ""), carries=list(g.get("carries") or []),
                 final=g.get("final_board") or {}, early=names("early"), middle=names("middle"),
                 traits=[t["name"] for t in g.get("key_traits") or [] if isinstance(t, dict)],
                 environments=list(g.get("environments") or []), tempo=list(g.get("tempo_labels") or []),
-                equip_order=g.get("equip_order") or {}, idea=(g.get("core_idea") or "").strip(),
+                equip_order=g.get("equip_order") or {},
+                # 作者原文最多 200 字(官方上限,详情接口也一样),有的写了逐节点的打法,不再截断
+                idea=(g.get("description") or g.get("core_idea") or "").strip(),
                 augments=list(g.get("recommended_augments") or []), use_count=int(g.get("use_count") or 0),
-                hard=bool(g.get("support_hard"))))
+                hard=bool(g.get("support_hard")), boards=boards, stage_traits=stage_traits,
+                augment_groups=dict(g.get("augments") or {}), author=g.get("author") or ""))
         self.by_id = {g.id: g for g in self.guides}
 
     def score(self, g: Guide, owned: set[str], shop: set[str], environment: str | None) -> Match:
@@ -129,34 +138,67 @@ class GuideAdvisor:
             (g for g in self.guides if key and key in g.title), None)
 
 
+def _name(r) -> str:
+    return (r.get("name") or "") if isinstance(r, dict) else str(r or "")
+
+
+def _traits(items: list) -> str:
+    return "、".join(f"{t.get('count') or ''}{t.get('name')}" for t in items if isinstance(t, dict) and t.get("name"))
+
+
 def card(g: Guide, *, full: bool = True) -> str:
-    """给模型看的攻略卡片。full=False 时只给要点(候选攻略用)。"""
-    def board(b: dict) -> str:
+    """给模型看的攻略卡片。full=False 时只给要点(候选攻略用)。
+
+    完整卡片按阶段排(2026-11-16 起,设计文档第 20.4 节):作者原文(最多 200 字,有的写了逐节点打法)、前期、中期、
+    最终阵容(星级、装备、次选装备、推荐光环)、各阶段羁绊人数、装备顺序、两组推荐投资策略。官方攻略里没有比这更细的
+    逐节点流程;前期 / 中期对应哪个节点,接口没有说。
+    """
+    def unit(r, detail: bool) -> str:
+        if not isinstance(r, dict):
+            return str(r)
+        text = r.get("name", "") + (f" {r['star']}星" if (r.get("star") or 1) > 1 else "")
+        extras = []
+        if detail and r.get("equipment"):
+            extras.append("、".join(r["equipment"]))
+        if detail and r.get("equipment2"):
+            extras.append("次选 " + "、".join(r["equipment2"]))
+        if detail and r.get("spotlights"):
+            extras.append("光环 " + "/".join(r["spotlights"]))
+        return text + (f"[{';'.join(extras)}]" if extras else "")
+
+    def board(b: dict, detail: bool) -> str:
         sides = []
         for side, label in (("front", "前台"), ("back", "后台")):
-            cells = []
-            for r in b.get(side) or []:
-                if isinstance(r, dict):
-                    star = f"{r.get('star')}星" if r.get("star") and r.get("star") > 1 else ""
-                    equip = f"[{'、'.join(r['equipment'])}]" if full and r.get("equipment") else ""
-                    cells.append(f"{r['name']}{star}{equip}")
-                else:
-                    cells.append(str(r))
+            cells = [unit(r, detail) for r in b.get(side) or [] if _name(r)]
             if cells:
                 sides.append(f"{label} " + "、".join(cells))
         return ";".join(sides)
 
-    lines = [f"「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
-             + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else ""),
-             f"  最终阵容:{board(g.final)}", f"  核心羁绊:{'、'.join(g.traits[:4])}"]
-    if full:
-        if g.early or g.middle:
-            lines.append(f"  前期:{'、'.join(sorted(g.early))};中期:{'、'.join(sorted(g.middle))}")
-        eq = g.equip_order
-        if eq.get("compose"):
-            lines.append(f"  装备:先合 {'、'.join(eq['compose'])}(基础件 {'、'.join(eq.get('basic') or [])})")
-        if g.augments:
-            lines.append(f"  推荐投资策略:{'、'.join(g.augments)}")
-        if g.idea:
-            lines.append(f"  思路:{g.idea[:160]}")
+    final_traits = _traits(g.stage_traits.get("final") or []) or "、".join(g.traits[:4])
+    head = (f"「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
+            + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else ""))
+    if not full:
+        return "\n".join([head, f"  最终阵容:{board(g.final, False)}", f"  核心羁绊:{final_traits}"])
+    lines = [head]
+    if g.idea:
+        lines.append("  作者思路(原文):" + g.idea.replace("\n", "\n    "))
+    for key, label in (("early", "前期"), ("middle", "中期")):
+        b = g.boards.get(key) or {}
+        text = board(b, False)
+        traits = _traits(g.stage_traits.get(key) or [])
+        if text or traits:
+            lines.append(f"  {label}阵容:{text or '?'}" + (f";羁绊 {traits}" if traits else ""))
+    lines.append(f"  最终阵容:{board(g.final, True)};羁绊 {final_traits}")
+    eq = g.equip_order
+    if eq.get("basic") or eq.get("compose"):
+        lines.append("  装备:" + ";".join(p for p in (
+            f"基础件先拿 {'、'.join(eq['basic'])}" if eq.get("basic") else "",
+            f"合成顺序 {' → '.join(eq['compose'])}" if eq.get("compose") else "") if p))
+    groups = g.augment_groups
+    if groups.get("first") or groups.get("second"):
+        lines.append("  推荐投资策略:" + ";".join(p for p in (
+            f"第一组 {'、'.join(groups['first'])}" if groups.get("first") else "",
+            f"第二组 {'、'.join(groups['second'])}" if groups.get("second") else "") if p))
+    elif g.augments:
+        lines.append(f"  推荐投资策略:{'、'.join(g.augments)}")
     return "\n".join(lines)

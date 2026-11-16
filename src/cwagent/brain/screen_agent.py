@@ -189,11 +189,11 @@ class ScreenAgent:
         return (format_entities(found) if found else ""), {e.name for e in found}
 
     def opening(self, episode: Episode, boxes: list[TextBox], *, ledger: str, hints: str = "",
-                names: list[str] | None = None) -> tuple[str, list[str]]:
-        """回合的第一条消息:本局档案 + 当前界面 + 条目描述 + 相关经验。"""
+                names: list[str] | None = None, nodes: set[str] | None = None) -> tuple[str, list[str]]:
+        """回合的第一条消息:本局档案 + 当前界面 + 条目描述 + 相关经验。nodes 是当前和下一个节点的类型(记忆按它触发)。"""
         texts = [b.text for b in boxes]
         described, entities = self._entities(boxes, names, episode)
-        cues = Cues(entities=entities, texts=texts, screen=episode.screen,
+        cues = Cues(entities=entities, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
                     layer="战术" if episode.screen == "prepare" else "选择")
         hits = recall(self.memories, cues)
         parts = [
