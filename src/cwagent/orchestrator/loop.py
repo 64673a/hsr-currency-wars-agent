@@ -819,6 +819,8 @@ class Runner:
                 record["note"] = "对局结束"
                 if find(boxes, "^前往结算$"):
                     return [Action(type="click_text", text="前往结算", reason="整局失败")]
+                if not self.in_run and find(boxes, "对局评价|对局总结") and find(boxes, "^下一步$") is None:
+                    return [Action(type="click", x=0.5, y=0.832, reason="离开启动前的旧局结算页")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
                 if find(boxes, "挑战成功"):
