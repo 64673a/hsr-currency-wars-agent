@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+import base64
+from io import BytesIO
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +33,28 @@ class Usage(BaseModel):
     reasoning_tokens: int = 0   # 输出中用于思考的部分(接口提供时才有)
 
 
+class ImageInput(BaseModel):
+    """发给模型的图片,内容与对局记录保存的 JPEG 一致。"""
+
+    data: str
+    media_type: Literal["image/jpeg", "image/png"] = "image/jpeg"
+    width: int = 0
+    height: int = 0
+    label: str = ""
+
+    @classmethod
+    def from_pil(cls, image, *, label: str = "", max_size: tuple[int, int] | None = (1280, 720)):
+        img = image.convert("RGB").copy()
+        if max_size:
+            img.thumbnail(max_size)
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=88)
+        return cls(data=base64.b64encode(buf.getvalue()).decode("ascii"), width=img.width, height=img.height, label=label)
+
+    def block(self) -> dict[str, Any]:
+        return {"type": "image", "source": {"type": "base64", "media_type": self.media_type, "data": self.data}}
+
+
 class Message(BaseModel):
     """多轮对话里的一条消息。
 
@@ -43,6 +67,8 @@ class Message(BaseModel):
 
     role: Literal["user", "assistant", "tool"]
     content: str = ""
+    images: list[ImageInput] = Field(default_factory=list)
+    snapshot: str = ""       # 外部 agent 接管或压缩后恢复用,不发给 API 适配器
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str = ""
     raw: Any = None

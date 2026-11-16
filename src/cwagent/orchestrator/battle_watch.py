@@ -118,7 +118,7 @@ class BattleReport:
             parts.append("没有看到阵亡提示")
         missed = self.drop_count() - len(self.deaths)
         if missed > 0:
-            parts.append(f"另有 {missed} 次行动值骤降 ≥35 没认出阵亡横幅(可能被大招特效挡住,按阵亡算)")
+            parts.append(f"另有 {missed} 次行动值骤降 ≥35,原因未确认,不计入阵亡")
         if self.events:
             parts.append("战斗提示:" + " / ".join(self.events))
         parts.append(f"用时 {self.seconds:.0f} 秒")

@@ -123,8 +123,7 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
             if m:
                 rw.progress = f"{m.group(1)}%→{m.group(2)}%"
             deaths = re.search(r"阵亡 (\d+) 次", summary)
-            missed = re.search(r"另有 (\d+) 次行动值骤降", summary)
-            rw.deaths = (int(deaths.group(1)) if deaths else 0) + (int(missed.group(1)) if missed else 0)
+            rw.deaths = int(deaths.group(1)) if deaths else None
         if screen == "node_result":
             texts = r.get("texts") or []
             joined = " ".join(texts)

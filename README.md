@@ -61,7 +61,7 @@ uv run cwagent models test                      # 连通性测试
 
 - DSH:见 [integrations/dsh](integrations/dsh/README.md)
 - Claude Code:装插件 `/plugin install cwagent --marketplace 64673a/hsr-currency-wars-agent`,再用 `/cwagent:play` 开始,见 [integrations/claude-code](integrations/claude-code/README.md)
-- Codex:`codex mcp add cwagent --url http://127.0.0.1:8770/mcp`(未测试)
+- Codex:HTTP MCP + 游玩 skill,安装与只读测试见 [integrations/codex](integrations/codex/README.md)
 
 ## 网页界面
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import copy
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import Any
@@ -22,13 +23,16 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     TextContent,
+    ImageContent,
     Tool,
 )
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .. import __version__, paths
-from ..brain.screen_agent import ACT_TOOL, PROMPTS, load_rules
+from ..brain.screen_agent import ACT_TOOL, PROMPTS, ActInput, load_rules
+from ..llm.base import ImageInput
+from pydantic import ValidationError
 from ..config import ConfigError
 from ..llm.external import BRIDGE, EXTERNAL, Turn
 from .runs import PlayController
@@ -41,7 +45,8 @@ INSTRUCTIONS = """本服务让你自主游玩《崩坏:星穹铁道》的「货�
 2. 调用 start_run 开始对局;对局已经在网页上开始时调用 wait。
 3. 拿到局面后自己判断,调用 act 提交分析和操作。act 执行完会返回结果和下一个局面,接着判断。
 4. 返回「还在等待」时(战斗、动画进行中),直接再调用 wait,不要停下来问用户。
-5. 一直下到返回「对局结束」为止。每个回合的第一条消息带完整的本局档案,不需要回顾之前的回合。"""
+5. 一直下到返回「对局结束」为止。新回合只追加新增事实和经历;压缩上下文或接手时调用 snapshot 恢复完整档案。
+6. 图片就是当前观察。按截图标号操作,act 的 turn 填本次局面的轮次,避免重复提交旧操作。"""
 
 KEEP_PLAYING = "货币战争对局还在进行,不要停下:调用 wait 取下一个局面,一直下到返回「对局结束」。用户要求停下时先调用 stop_run。"
 
@@ -58,12 +63,23 @@ TOOLS = [
     Tool(name="act", description=ACT_TOOL.description + "执行完后返回执行结果和下一个需要判断的局面。",
          input_schema=ACT_TOOL.parameters),
     Tool(name="status", description="查看对局状态。", input_schema=_EMPTY),
+    Tool(name="snapshot", description="读取完整档案及最近截图,用于接手或上下文压缩后恢复,不执行游戏操作。", input_schema=_EMPTY),
+    Tool(name="observe", description="只截图并标号,用于连通性与读图测试;不开始对局、不发送键鼠。", input_schema=_EMPTY),
     Tool(name="stop_run", description="停止当前对局。", input_schema=_EMPTY),
     Tool(name="hook", description="供 Claude Code 插件的 hook 调用,不要直接调用。",
          input_schema={"type": "object", "properties": {
              "event": {"type": "string", "enum": ["tool", "stop"]}, "session": {"type": "string"}},
              "required": ["event"]}),
 ]
+TOOLS[3].input_schema = copy.deepcopy(ACT_TOOL.parameters)
+TOOLS[3].input_schema["properties"]["turn"] = {"type": "integer", "description": "本次局面的轮次"}
+
+
+class Observation(str):
+    def __new__(cls, text: str, images: list[ImageInput] | None = None):
+        obj = super().__new__(cls, text)
+        obj.images = images or []
+        return obj
 
 
 class ToolError(Exception):
@@ -106,7 +122,7 @@ def _wait_seconds(ctx: ServerRequestContext) -> float:
 
 
 def _turn_text(turn: Turn) -> str:
-    return f"【第 {turn.seq} 轮{' · 新回合' if turn.opening else ''}】\n{turn.text}"
+    return Observation(f"【第 {turn.seq} 轮{' · 新回合' if turn.opening else ''}】\n{turn.text}", turn.images)
 
 
 def _rules_text() -> str:
@@ -147,21 +163,59 @@ class Tools:
 
     async def start_run(self, args: dict[str, Any], wait: float) -> str:
         if BRIDGE.status()["active"]:
-            return "对局已经在进行。\n\n" + await self._take(wait)
+            result = await self._take(wait)
+            return Observation("对局已经在进行。\n\n" + result, getattr(result, "images", []))
         difficulty = args.get("difficulty") or None
         try:
             await anyio.to_thread.run_sync(lambda: self.player.start(model=EXTERNAL, difficulty=difficulty))
         except (RuntimeError, ConfigError) as e:
             raise ToolError(f"没能开始对局:{e}") from None
-        return "对局已开始。\n\n" + await self._take(wait)
+        result = await self._take(wait)
+        return Observation("对局已开始。\n\n" + result, getattr(result, "images", []))
 
     async def wait(self, args: dict[str, Any], wait: float) -> str:
         return await self._take(wait)
 
     async def act(self, args: dict[str, Any], wait: float) -> str:
-        if not BRIDGE.answer(args):
+        payload = {k: v for k, v in args.items() if k != "turn"}
+        try:
+            ActInput.model_validate(payload)
+        except ValidationError as e:
+            raise ToolError(str(e)) from None
+        if not BRIDGE.answer(payload, turn=args.get("turn")):
             raise ToolError("现在没有等你回答的局面(可能已经回答过)。调用 wait 看最新局面。")
         return await self._take(wait)
+
+    async def snapshot(self, args: dict[str, Any], wait: float) -> str:
+        return _turn_text(BRIDGE.snapshot())
+
+    async def observe(self, args: dict[str, Any], wait: float) -> str:
+        from ..vision.annotate import annotate, legend
+        from ..vision.ocr import Ocr
+        from ..orchestrator.screens import classify
+
+        if self.player.running:
+            raise ToolError("对局正在运行,请调用 snapshot 查看最近的局面")
+        if self.player.device_factory is None:
+            raise ToolError("只能在装有游戏的 Windows 上截图")
+
+        def grab():
+            device = self.player.device_factory()
+            try:
+                frame = device.grab()
+                boxes = Ocr()(frame.image)
+                screen = classify(boxes)
+                from ..vision.shop import shop_state
+                picture, marks = annotate(frame.image, boxes, screen=screen, shop_open=shop_state(boxes) is True)
+                return Observation(f"只读截图;程序判断界面:{screen}\n" + legend(marks), [picture])
+            finally:
+                close = getattr(device, "close", None)
+                if close:
+                    close()
+        try:
+            return await anyio.to_thread.run_sync(grab)
+        except Exception as e:
+            raise ToolError(f"只读截图失败:{e}") from None
 
     async def status(self, args: dict[str, Any], wait: float) -> str:
         st = self.player.status()
@@ -204,7 +258,9 @@ def create_mcp(player: PlayController) -> tuple[ASGIApp, Callable[[], AbstractAs
             text = await handler(dict(params.arguments or {}), _wait_seconds(ctx))
         except ToolError as e:
             return CallToolResult(content=[TextContent(type="text", text=str(e))], is_error=True)
-        return CallToolResult(content=[TextContent(type="text", text=text)])
+        content = [TextContent(type="text", text=str(text))]
+        content += [ImageContent(type="image", data=i.data, mime_type=i.media_type) for i in getattr(text, "images", [])]
+        return CallToolResult(content=content)
 
     server = Server("cwagent", version=__version__, title="货币战争 agent", instructions=INSTRUCTIONS,
                     on_list_tools=list_tools, on_call_tool=call_tool)

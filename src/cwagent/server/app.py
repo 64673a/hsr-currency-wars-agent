@@ -196,6 +196,12 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
             raise HTTPException(404, "截图不存在") from None
 
     # ------------------------------------------------------------ 知识库
+    @app.get("/api/runs/{run_id}/vision/{name}")
+    def run_vision(run_id: str, name: str) -> FileResponse:
+        try:
+            return FileResponse(runs.shot(run_id, name, folder="vision"), headers={"Cache-Control": "max-age=86400"})
+        except KeyError:
+            raise HTTPException(404, "模型输入截图不存在") from None
 
     def icon_url(kind: str, entry_id: str, remote: str = "") -> str:
         folder = ICON_DIRS.get(kind)

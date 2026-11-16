@@ -84,6 +84,7 @@ export interface ModelInfo {
 
 export interface TestResult {
   ok: boolean;
+  vision?: boolean;
   error?: string;
   tool_call?: boolean;
   reasoning?: boolean;
@@ -221,6 +222,8 @@ export interface StepRecord {
   screen?: string;
   node?: string | null;
   shot?: string;
+  vision?: string[];
+  perception_issues?: string[];
   texts?: string[];
   decision?: StepDecision;
   actions?: string[];

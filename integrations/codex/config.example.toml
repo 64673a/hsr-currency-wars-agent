@@ -1,0 +1,4 @@
+[mcp_servers.cwagent]
+url = "http://127.0.0.1:8770/mcp?wait=45"
+tool_timeout_sec = 60
+startup_timeout_sec = 20

@@ -14,7 +14,9 @@ _THINK = re.compile(r"^\s*<think>(.*?)</think>\s*", re.S)
 
 def _message(m: Message) -> dict[str, Any]:
     if m.role == "user":
-        return {"role": "user", "content": m.content}
+        content = ([{"type": "text", "text": m.content}] if m.content else []) + [
+            {"type": "image_url", "image_url": {"url": f"data:{i.media_type};base64,{i.data}"}} for i in m.images]
+        return {"role": "user", "content": content if m.images else m.content}
     if m.role == "tool":
         return {"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content}
     if isinstance(m.raw, dict):  # 原样传回,含 reasoning_content(DeepSeek 思考模式带工具时必须传回)
@@ -35,9 +37,20 @@ def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
     if profile.api_key:
         headers["Authorization"] = f"Bearer {profile.api_key}"
     headers.update(profile.extra_headers)
+    converted = []
+    pending_images = []
+    for m in messages:
+        if m.role != "tool" and pending_images:
+            converted.append(_message(Message(role="user", content="操作后的截图", images=pending_images)))
+            pending_images = []
+        converted.append(_message(m))
+        if m.role == "tool" and m.images:
+            pending_images += m.images
+    if pending_images:
+        converted.append(_message(Message(role="user", content="操作后的截图", images=pending_images)))
     body: dict[str, Any] = {
         "model": profile.model,
-        "messages": [{"role": "system", "content": system}, *(_message(m) for m in messages)],
+        "messages": [{"role": "system", "content": system}, *converted],
     }
     if profile.max_tokens:
         body["max_tokens"] = profile.max_tokens

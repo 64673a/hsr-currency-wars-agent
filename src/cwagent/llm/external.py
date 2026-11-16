@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from .base import LLMError, LLMResponse, Message, ToolCall, ToolSpec
+from .base import ImageInput, LLMError, LLMResponse, Message, ToolCall, ToolSpec
 
 EXTERNAL = "外部 agent"     # 网页上选的模型名,也是对局记录里的档案名
 IDLE_SECONDS = 15 * 60      # 局面交出去后这么久没有任何 MCP 调用,就让对局暂停
@@ -24,6 +24,8 @@ class Turn:
     seq: int
     text: str
     opening: bool   # 回合的第一条消息(带本局档案)
+    images: list[ImageInput] = field(default_factory=list)
+    snapshot: str = ""
 
 
 def new_content(messages: list[Message]) -> tuple[str, bool]:
@@ -50,6 +52,8 @@ class ExternalBridge:
         self._stop: threading.Event | None = None
         self._active = False
         self._ended: str | None = None
+        self._snapshot = ""
+        self._images: list[ImageInput] = []
 
     # ------------------------------------------------------------ 对局一侧
 
@@ -58,6 +62,7 @@ class ExternalBridge:
             self._stop, self._active, self._ended = stop, True, None
             self.agent_session = ""
             self._turn = self._reply = None
+            self._snapshot, self._images = "", []
             self.last_seen = time.time()
             self._cond.notify_all()
 
@@ -73,7 +78,18 @@ class ExternalBridge:
         with self._cond:
             self.system = system
             self._seq += 1
-            turn = self._turn = Turn(self._seq, text, opening)
+            tail = []
+            for message in reversed(messages):
+                if message.role == "assistant":
+                    break
+                tail.append(message)
+            images = [image for message in reversed(tail) for image in message.images] or self._images
+            snapshot = next((m.snapshot for m in reversed(messages) if m.snapshot), "")
+            if snapshot:
+                self._snapshot = snapshot
+            if images:
+                self._images = images
+            turn = self._turn = Turn(self._seq, text, opening, images, self._snapshot)
             self._reply = None
             self.last_seen = time.time()   # 从交出局面开始算 agent 多久没动静
             self._cond.notify_all()
@@ -112,15 +128,21 @@ class ExternalBridge:
                     return None
                 self._cond.wait(min(left, 1.0))
 
-    def answer(self, arguments: dict[str, Any]) -> bool:
+    def answer(self, arguments: dict[str, Any], *, turn: int | None = None) -> bool:
         """交回当前局面的回答;没有等待回答的局面时返回 False。"""
         with self._cond:
             self.last_seen = time.time()
             if self._turn is None or self._reply is not None:
                 return False
+            if turn is not None and turn != self._turn.seq:
+                return False
             self._reply = arguments
             self._cond.notify_all()
             return True
+
+    def snapshot(self) -> Turn:
+        with self._cond:
+            return Turn(self._seq, self._snapshot or "还没有观察到局面", True, list(self._images), self._snapshot)
 
     def claim(self, session: str) -> None:
         """记下最近调用工具的 agent 会话:对局进行中时只让它接着下(server/mcp.py 的 hook 工具)。"""

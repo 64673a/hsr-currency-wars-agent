@@ -111,10 +111,12 @@ class RunStore:
                 break
         return out
 
-    def shot(self, run_id: str, name: str) -> Path:
+    def shot(self, run_id: str, name: str, *, folder: str = "shots") -> Path:
         d = self.dir(run_id)
-        target = (d / "shots" / name).resolve()
-        if (d / "shots").resolve() not in target.parents or not target.is_file():
+        if folder not in ("shots", "vision"):
+            raise KeyError(folder)
+        target = (d / folder / name).resolve()
+        if (d / folder).resolve() not in target.parents or not target.is_file():
             raise KeyError(name)
         return target
 

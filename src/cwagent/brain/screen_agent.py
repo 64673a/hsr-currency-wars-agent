@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from ..config import ModelEndpoint
 from ..knowledge.index import NameIndex, format_entities
-from ..llm import LLMError, LLMResponse, Message, ToolSpec, complete
+from ..llm import ImageInput, LLMError, LLMResponse, Message, ToolSpec, complete
 from ..memory import Cues, Memory, format_for_prompt, recall
 from ..vision.ocr import TextBox
 
@@ -27,7 +27,10 @@ PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose",
 
 class Action(BaseModel):
     type: str = Field(
-        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open|take)$")
+        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open|take|zoom|inspect)$")
+    mark: int | None = Field(default=None, ge=1, le=100)
+    region: tuple[float, float, float, float] | None = None
+    mode: str = Field(default="hover", pattern="^(hover|click)$")
     text: str | None = None
     nth: int = 0
     x: float | None = Field(default=None, ge=0, le=1)
@@ -49,13 +52,18 @@ class Action(BaseModel):
 
     @model_validator(mode="after")
     def _required(self) -> "Action":
-        need = {"click_text": ["text"], "click": ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"],
+        need = {"click_text": ["text"], "click": [] if self.mark else ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"],
+                "zoom": ["region"], "inspect": ["mark"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
                 "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"],
                 "take": ["zone", "index", "text"]}
         missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "")]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
+        if self.region is not None:
+            x, y, w, h = self.region
+            if min(x, y) < 0 or min(w, h) <= 0 or x + w > 1 or y + h > 1:
+                raise ValueError("region 必须是客户区内的 x,y,宽,高,范围 0~1")
         return self
 
 
@@ -73,6 +81,15 @@ class ActInput(BaseModel):
     summary: str | None = None
     guide: str | None = None
     notes: list[Note] = []
+    perception_issues: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _observation_actions(self):
+        if len(self.actions) > 1 and any(a.type in ("zoom", "inspect") for a in self.actions):
+            raise ValueError("zoom 和 inspect 要单独提交,取得新观察后再决定操作")
+        if any(a.mark is not None for a in self.actions[1:]):
+            raise ValueError("标号只对应当前截图,只能用于一组操作的第一项")
+        return self
 
 
 _SLOT = {"type": "string", "enum": list(ZONES)}
@@ -90,7 +107,10 @@ ACT_TOOL = ToolSpec(
                     "properties": {
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "buy_exp", "ready",
                                                             "compose", "equip", "open", "take", "click_text", "click", "drag",
-                                                            "scroll", "key", "wait", "pause"]},
+                                                            "scroll", "key", "wait", "pause", "zoom", "inspect"]},
+                        "mark": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                        "mode": {"type": "string", "enum": ["hover", "click"]},
                         "slot": {"type": "integer"}, "zone": _SLOT, "index": {"type": "integer"},
                         "to_zone": _SLOT, "to_index": {"type": "integer"}, "times": {"type": "integer"},
                         "item": {"type": "integer"}, "onto": {"type": "integer"},
@@ -104,6 +124,8 @@ ACT_TOOL = ToolSpec(
                 },
             },
             "run_notes": {"type": "string", "description": "整体改写对局方向与计划(可选)"},
+            "perception_issues": {"type": "array", "items": {"type": "string"},
+                                  "description": "程序识别与截图不一致或不确定的地方,只记录问题,不直接改写事实"},
             "summary": {"type": "string", "description": "回合小结:在结束这个回合的那次 act 里填(备战阶段带 ready 的那次、"
                         "选择界面做出最终选择的那次),写这一回合做了什么、为什么、接下来打算什么,不超过 150 字;"
                         "会记进本局经历,之后的回合都能看到"},
@@ -148,6 +170,12 @@ class Episode:
     cache_at: int = 0                                  # 第一条消息里本局经历的长度(在这里断开打缓存标记)
     summary: str = ""                                  # 模型写的回合小结(最近一次)
     analysis: str = ""                                 # 模型最近一次的判断(没写小结时代替)
+    images: list[ImageInput] = field(default_factory=list)
+    snapshot: str = ""
+    annotation: str = ""
+    request_messages: list[Message] = field(default_factory=list)
+    chosen: dict[str, tuple[str, str]] = field(default_factory=dict)
+    spotlight_role: str = ""
 
     @property
     def last_turn(self) -> bool:
@@ -169,6 +197,7 @@ class Decision:
     role: str = ""
     guide: str | None = None       # 模型改选的攻略(候选编号或标题)
     summary: str | None = None     # 回合小结
+    perception_issues: list[str] = field(default_factory=list)
 
 
 class ScreenAgent:
@@ -187,10 +216,10 @@ class ScreenAgent:
     def _entities(self, boxes: list[TextBox], names: list[str] | None, episode: Episode) -> tuple[str, set[str]]:
         """界面上第一次出现的条目(整局只给一次说明);有本局档案时同时追加进档案的「条目说明」。"""
         found = [e for e in self.index.link([b.text for b in boxes] + (names or [])) if e.name not in episode.seen]
-        episode.seen.update(e.name for e in found)
         if episode.book is not None:
             for e in found:
                 episode.book.add_entry(e.name, format_entities([e]))
+        episode.seen.update(e.name for e in found)
         return (format_entities(found) if found else ""), {e.name for e in found}
 
     def opening(self, episode: Episode, boxes: list[TextBox], *, ledger, hints: str = "",
@@ -208,18 +237,22 @@ class ScreenAgent:
         described, _ = self._entities(boxes, names, episode)
         cues = Cues(entities=present, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
                     layer="战术" if episode.screen == "prepare" else "选择")
-        hits = recall(self.memories, cues)
+        checkpoint = book is None or "战略检查点(" in hints or episode.screen == "environment_choice"
+        hits = recall(self.memories, cues) if checkpoint else []
         if book is not None:
             for r in hits:
                 m = r.memory
                 book.add_lesson(m.id, f"- [{m.label()}] {m.title}\n  {m.content.strip()}")
             episode.cache_at = book.stable_len()
-            head = [book.render()]
+            full = book.render()
+            external = self.endpoint(episode.role).format == "external"
+            head = [book.render_delta() if external else full]
+            episode.snapshot = full
         else:
             head = [ledger]
         parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
-            "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
+            episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
         ]
         if book is None:
             if described:
@@ -227,7 +260,10 @@ class ScreenAgent:
             if hits:
                 parts.append("## 相关经验\n" + format_for_prompt(hits))
         parts.append(self._ask(episode))
-        return "\n\n".join(p for p in parts if p), [r.memory.id for r in hits]
+        text = "\n\n".join(p for p in parts if p)
+        if book is not None:
+            episode.snapshot += "\n\n" + "\n\n".join(parts[len(head):])
+        return text, [r.memory.id for r in hits]
 
     def observation(self, episode: Episode, results: list[str], boxes: list[TextBox], *, screen: str,
                     hints: str = "", names: list[str] | None = None) -> str:
@@ -235,11 +271,14 @@ class ScreenAgent:
         described, _ = self._entities(boxes, names, episode)
         parts = ["## 执行结果\n" + ("\n".join(f"- {r}" for r in results) or "(没有执行任何操作)"),
                  f"## 现在的界面\n程序判断的界面类型:{screen}" + (f"\n{hints}" if hints else ""),
-                 "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)]
+                 episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)]
         if described:
             parts.append("## 新出现的条目\n" + described)
         parts.append(self._ask(episode))
-        return "\n\n".join(parts)
+        text = "\n\n".join(parts)
+        if episode.book is not None:
+            episode.snapshot = episode.book.render() + "\n\n" + text
+        return text
 
     @staticmethod
     def _ask(episode: Episode) -> str:
@@ -257,11 +296,13 @@ class ScreenAgent:
         """
         snapshot = (list(episode.messages), list(episode.pending), episode.turns)
         if episode.pending:
-            episode.messages += [Message(role="tool", tool_call_id=cid, content=text if i == 0 else "没有执行(每轮只执行第一个 act)")
+            episode.messages += [Message(role="tool", tool_call_id=cid, content=text if i == 0 else "没有执行(每轮只执行第一个 act)",
+                                         images=episode.images if i == 0 else [], snapshot=episode.snapshot if i == 0 else "")
                                  for i, cid in enumerate(episode.pending)]
             episode.pending = []
         else:
             episode.messages.append(Message(role="user", content=text,
+                                            images=episode.images, snapshot=episode.snapshot,
                                             cache_at=0 if episode.messages else episode.cache_at))
         episode.turns += 1
         endpoint = self.endpoint(episode.role)
@@ -270,6 +311,7 @@ class ScreenAgent:
         last_error = ""
         for _ in range(2):  # 输出不合法时带着错误重问一次
             try:
+                episode.request_messages = list(episode.messages)
                 resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL])
             except LLMError as e:
                 episode.messages, episode.pending, episode.turns = snapshot
@@ -292,7 +334,7 @@ class ScreenAgent:
                     if data.summary:
                         episode.summary = data.summary.strip()[:200]
                     return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
-                                    guide=data.guide, summary=data.summary, **base)
+                                    guide=data.guide, summary=data.summary, perception_issues=data.perception_issues, **base)
                 except ValidationError as e:
                     last_error = "; ".join(f"{'.'.join(map(str, er['loc']))}: {er['msg']}" for er in e.errors()[:5])
                 except ValueError as e:
@@ -338,7 +380,11 @@ def action_text(a: Action) -> str:
         case "click_text":
             return f"点击「{a.text}」" + (f"(第{a.nth + 1}个)" if a.nth else "")
         case "click":
-            return f"点击 ({_f(a.x)},{_f(a.y)})"
+            return f"点击标号 {a.mark}" if a.mark else f"点击 ({_f(a.x)},{_f(a.y)})"
+        case "zoom":
+            return f"放大区域 {a.region}"
+        case "inspect":
+            return f"查看标号 {a.mark}({a.mode})"
         case "drag":
             return f"拖拽 ({_f(a.x)},{_f(a.y)})→({_f(a.x2)},{_f(a.y2)})"
         case "scroll":
@@ -358,4 +404,4 @@ def to_jsonable(d: Decision) -> dict[str, Any]:
             "error": d.error, "reasoning": r.reasoning if r else "", "usage": r.usage.model_dump() if r else None,
             "latency_s": r.latency_s if r else None, "model": r.model if r else "",
             "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt, "guide": d.guide,
-            "summary": d.summary}
+            "summary": d.summary, "perception_issues": d.perception_issues}

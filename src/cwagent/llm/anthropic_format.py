@@ -37,12 +37,15 @@ def _messages(messages: list[Message]) -> list[dict[str, Any]]:
             out.append({"role": "assistant", "content": content})
             continue
         if m.role == "tool":
-            blocks = [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": m.content}]
+            content = ([{"type": "text", "text": m.content}] if m.content else []) + [i.block() for i in m.images]
+            blocks = [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": content if m.images else m.content}]
         elif 0 < m.cache_at < len(m.content):
             blocks = [{"type": "text", "text": m.content[:m.cache_at], "cache_control": {"type": "ephemeral"}},
                       {"type": "text", "text": m.content[m.cache_at:]}]
         else:
             blocks = [{"type": "text", "text": m.content}]
+        if m.role != "tool":
+            blocks += [i.block() for i in m.images]
         if out and out[-1]["role"] == "user":
             out[-1]["content"] += blocks
         else:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import secrets
 import time
 from collections.abc import Callable
 from email.utils import parsedate_to_datetime
@@ -12,7 +13,7 @@ import httpx
 
 from ..config import ModelEndpoint
 from . import anthropic_format, json_mode, openai_format
-from .base import LLMError, LLMResponse, Message, ToolSpec
+from .base import ImageInput, LLMError, LLMResponse, Message, ToolSpec
 from .external import BRIDGE
 
 _ADAPTERS = {"openai": openai_format, "anthropic": anthropic_format}
@@ -37,13 +38,13 @@ def _json_mode_messages(messages: list[Message], tools: list[ToolSpec]) -> list[
     out: list[Message] = []
     for m in messages:
         if m.role == "tool":
-            out.append(Message(role="user", content=f"工具执行结果:\n{m.content}"))
+            out.append(m.model_copy(update={"role": "user", "content": f"工具执行结果:\n{m.content}"}))
         elif m.role == "assistant":
             out.append(Message(role="assistant", content=m.content))
         else:
             out.append(m)
     first = next(i for i, m in enumerate(out) if m.role == "user")
-    out[first] = Message(role="user", content=out[first].content + "\n" + json_mode.instructions(tools))
+    out[first] = out[first].model_copy(update={"content": out[first].content + "\n" + json_mode.instructions(tools)})
     return out
 
 
@@ -132,23 +133,35 @@ _TEST_TOOL = ToolSpec(
     parameters={
         "type": "object",
         "properties": {"status": {"type": "string", "description": "固定填 ok"},
+                       "digits": {"type": "string", "description": "图片中的六位数字"},
                        "note": {"type": "string", "description": "一句话说明你是谁"}},
-        "required": ["status"],
+        "required": ["status", "digits"],
     },
 )
 
 
 def check_profile(profile: ModelEndpoint, *, http: httpx.Client | None = None) -> dict[str, Any]:
-    """用最小请求检查档案是否可用:能否调用成功、是否返回工具调用和思考内容。"""
+    """检查文字、工具调用和实际读图能力。"""
+    from PIL import Image, ImageDraw, ImageFont
+
+    digits = "".join(secrets.choice("0123456789") for _ in range(6))
+    image = Image.new("RGB", (420, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((25, 16), digits, fill="black", font=ImageFont.load_default(size=64))
+    message = Message(role="user", content="读取图片中的六位数字,调用 report_status,status 填 ok,digits 原样填数字。",
+                      images=[ImageInput.from_pil(image)])
     try:
         resp = complete(profile, "你在接受接口连通性测试。",
-                        "请调用 report_status 工具,status 填 ok,note 用一句话说明你是哪个模型。",
+                        [message],
                         [_TEST_TOOL], http=http, max_retries=1)
     except LLMError as e:
         return {"ok": False, "error": str(e), "status": e.status, "body": e.body[:500]}
     call = next((c for c in resp.tool_calls if c.name == _TEST_TOOL.name), None)
+    vision = bool(call and str(call.arguments.get("digits", "")).strip() == digits)
     return {
-        "ok": True,
+        "ok": bool(vision and call and call.parse_error is None and call.arguments.get("status") == "ok"),
+        "vision": vision,
+        "error": "" if vision else "模型没有正确读出测试图片中的数字",
         "tool_call": call is not None and call.parse_error is None,
         "tool_arguments": call.arguments if call else None,
         "reasoning": bool(resp.reasoning),

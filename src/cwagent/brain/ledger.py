@@ -76,6 +76,7 @@ class RunLedger:
     described: set[str] = field(default_factory=set)         # 已经给过说明的条目名
     lessons: list[str] = field(default_factory=list)         # 想起的经验(记忆):第一次相关时附上
     recalled: set[str] = field(default_factory=set)          # 已经附上的记忆 id
+    delivered: dict[str, int] = field(default_factory=dict)  # 外部 agent 已接收的档案条目数
 
     def node(self, name: str) -> NodeRecord:
         if name not in self.nodes:
@@ -131,7 +132,7 @@ class RunLedger:
         return head + ("".join(f"\n- {h}" for h in self.history) if self.history else "\n(还没有)")
 
     def stable_len(self) -> int:
-        """整局已知事实 + 本局经历的长度:这两块只往后追加,在这里断开打缓存标记,下一个回合能命中到这里。"""
+        """事实和经历之后的缓存边界;新增事实时,后续经历的共同前缀可能改变。"""
         return len(self.render_facts()) + 2 + len(self.render_history())
 
     history_len = stable_len   # 旧名字
@@ -158,6 +159,21 @@ class RunLedger:
         if self.lessons:
             parts.append("## 想起的经验(过去积累的,可能不完整或有错,结合局面判断;第一次相关时附上)\n"
                          + "\n".join(self.lessons))
+        parts.append(self.render_state())
+        return "\n\n".join(parts)
+
+    def render_delta(self) -> str:
+        """外部 agent 保留历史对话,这里只交付上次之后新增的内容和当前状态。"""
+        parts = []
+        if not self.delivered:
+            parts.append("## 本局\n难度 " + (self.difficulty or "?"))
+        for key, title in (("facts", "新增已知事实"), ("history", "新增经历"),
+                           ("entries", "新条目说明"), ("lessons", "新相关经验")):
+            items = getattr(self, key)
+            start = self.delivered.get(key, 0)
+            if len(items) > start:
+                parts.append(f"## {title}\n" + "\n".join(items[start:]))
+            self.delivered[key] = len(items)
         parts.append(self.render_state())
         return "\n\n".join(parts)
 

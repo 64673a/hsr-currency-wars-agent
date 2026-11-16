@@ -196,8 +196,9 @@ def test_json_mode_parse_variants():
 
 # ---------------------------------------------------------------- 连通性测试
 
-def test_check_profile_ok_and_failure():
-    reply = {"content": [{"type": "tool_use", "id": "t", "name": "report_status", "input": {"status": "ok"}}],
+def test_check_profile_ok_and_failure(monkeypatch):
+    monkeypatch.setattr("cwagent.llm.client.secrets.choice", lambda _: "7")
+    reply = {"content": [{"type": "tool_use", "id": "t", "name": "report_status", "input": {"status": "ok", "digits": "777777"}}],
              "stop_reason": "tool_use", "model": "m"}
     http, _ = mock(lambda req, n: httpx.Response(200, json=reply))
     result = check_profile(profile("anthropic"), http=http)

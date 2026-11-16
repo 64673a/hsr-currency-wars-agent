@@ -251,7 +251,7 @@ function TestLine({ result }: { result: TestResult }) {
         可用
       </Badge>
       <span className={page.rowHint}>
-        {result.latency_s}s · 工具调用{result.tool_call ? '正常' : '缺失'} · 思考内容{result.reasoning ? '有' : '本次未返回'}
+        {result.latency_s}s · 读图{result.vision ? '正常' : '未通过'} · 工具调用{result.tool_call ? '正常' : '缺失'} · 思考内容{result.reasoning ? '有' : '本次未返回'}
         {result.usage && ` · token ${result.usage.input_tokens} / ${result.usage.output_tokens}`}
       </span>
     </span>

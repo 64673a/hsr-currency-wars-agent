@@ -57,8 +57,8 @@ export function ShotView({ runId, step }: { runId: string; step: StepRecord }) {
   const marks = step.marks ?? [];
   return (
     <figure className={styles.shot}>
-      {step.shot ? (
-        <img src={`/api/runs/${enc(runId)}/shots/${step.shot.replace(/^shots\//, '')}`} alt={`第 ${step.step} 步截图`} />
+      {step.vision?.[0] || step.shot ? (
+        <img src={`/api/runs/${enc(runId)}/${step.vision?.[0] || step.shot}`} alt={`第 ${step.step} 步${step.vision?.length ? '模型输入' : ''}截图`} />
       ) : (
         <span className={styles.noShot}>这一步没有截图</span>
       )}
@@ -185,6 +185,10 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
 
       {step.error && <Alert tone="danger" title="这一步出错">{step.error}</Alert>}
       {d?.error && <Alert tone="warning" title="模型没有给出有效操作">{d.error}</Alert>}
+      {step.perception_issues?.length ? <Alert tone="warning" title="感知识别待核对">{step.perception_issues.join('；')}</Alert> : null}
+      {step.vision?.slice(1).map((path) => <figure className={styles.shot} key={path}>
+        <img src={`/api/runs/${enc(run?.id ?? '')}/${path}`} alt="模型查看的局部放大图" />
+      </figure>)}
 
       {step.battle && <BattleView battle={step.battle} />}
       {step.battle_summary && !step.battle?.samples && (

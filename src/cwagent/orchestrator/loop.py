@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import re
 import sqlite3
@@ -34,6 +35,8 @@ from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_hud
 from ..vision.ocr import Aliased, Ocr, TextBox, find
 from ..vision.shop import format_shop, read_shop, two_star
+from ..vision.annotate import annotate, legend, save_image
+from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
 from .battle_watch import BattleWatcher
 from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
@@ -130,6 +133,7 @@ class Trace:
         self.root = root
         (root / "shots").mkdir(parents=True, exist_ok=True)
         self._f = (root / "steps.jsonl").open("a", encoding="utf-8")
+        self._image_paths: dict[str, str] = {}
 
     def shot(self, step: int, image: Image.Image) -> str:
         name = f"shots/{step:04d}.jpg"
@@ -137,6 +141,23 @@ class Trace:
         img.thumbnail((960, 540))
         img.save(self.root / name, quality=72)
         return name
+
+    def request(self, step: int, system: str, messages) -> str:
+        """保存实际请求,图片按内容引用,回放保留消息角色和工具结果。"""
+        serialized = []
+        for message in messages:
+            item = message.model_dump(exclude={"images", "snapshot"})
+            item["images"] = []
+            for image in message.images:
+                digest = hashlib.sha256(image.data.encode("ascii")).hexdigest()[:20]
+                if digest not in self._image_paths:
+                    self._image_paths[digest] = save_image(self.root, digest + ".jpg", image)
+                item["images"].append({**image.model_dump(exclude={"data"}), "path": self._image_paths[digest]})
+            serialized.append(item)
+        path = self.root / "requests" / f"{step:04d}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"system": system, "messages": serialized}, ensure_ascii=False, default=_plain), encoding="utf-8")
+        return path.relative_to(self.root).as_posix()
 
     def meta(self, **fields) -> None:
         """合并写入 meta.json(模型、难度、开始与结束时间、结果)。"""
@@ -174,6 +195,8 @@ class Runner:
         self.episode: Episode | None = None
         self._ids = itertools.count(1)
         self._results: list[str] = []     # 上一组操作的执行结果,下一轮交给模型
+        self._vision_marks = {}
+        self._zoom_region = None
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
@@ -242,17 +265,48 @@ class Runner:
 
     def _raw(self, a: Action, boxes: list[TextBox]) -> str:
         """执行一个坐标类操作,返回结果说明。"""
+        if a.mark is not None:
+            mark = self._vision_marks.get(a.mark)
+            if mark is None:
+                return f"{action_text(a)}:当前截图没有这个标号,没有执行"
+            if a.type == "inspect":
+                if a.mode == "click":
+                    self.device.click(mark.x, mark.y)
+                else:
+                    self.device.move(mark.x, mark.y)
+                time.sleep(1.0)
+                return f"{action_text(a)}:{mark.label},说明见新截图和识别结果"
+            a = a.model_copy(update={"x": mark.x, "y": mark.y})
+        if a.type == "zoom":
+            self._zoom_region = a.region
+            return action_text(a)
         if a.type == "click_text":
             matches = [b for b in boxes if b.text == a.text] or [b for b in boxes if a.text and a.text in b.text]
             if len(matches) <= a.nth:
                 return f"{action_text(a)}:界面上没找到这段文字"
             b = matches[a.nth]
+            self._remember_choice(float(b.x), float(b.y), boxes)
             self.device.click(b.x, b.y)
             self._marks.append({"type": "click", "x": float(b.x), "y": float(b.y)})
         elif a.type == "click":
+            chosen = self._remember_choice(a.x, a.y, boxes)
             self.device.click(a.x, a.y)
             self._marks.append({"type": "click", "x": a.x, "y": a.y})
+            target = chosen or next((b.text for b in boxes if abs(b.x - a.x) <= max(b.w / 2, 0.012)
+                           and abs(b.y - a.y) <= max(b.h / 2, 0.012)), None)
+            if target:
+                time.sleep(ACTION_GAP)
+                return f"点击「{target}」"
         elif a.type == "drag":
+            if self.episode is not None and self.episode.screen == "spotlight_choice" and self._board:
+                if abs(a.x2 - 0.5) < 0.04 and abs(a.y2 - 0.407) < 0.06:
+                    coords = {"front": ((0.417, 0.474, 0.528, 0.583), 0.574),
+                              "back": ((0.370, 0.422, 0.474, 0.528, 0.583, 0.630), 0.700)}
+                    for slot in self._board:
+                        if slot.zone in coords:
+                            xs, y = coords[slot.zone]
+                            if slot.index < len(xs) and abs(a.x - xs[slot.index]) < 0.025 and abs(a.y - y) < 0.04:
+                                self.episode.spotlight_role = slot.name or "角色未识别"
             self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
         elif a.type == "scroll":
@@ -267,6 +321,25 @@ class Runner:
             return f"{action_text(a)}:这里不能用"
         time.sleep(ACTION_GAP)
         return action_text(a)
+
+    def _remember_choice(self, x: float, y: float, boxes) -> str | None:
+        ep = self.episode
+        kind = {"environment_choice": "portals", "strategy_choice": "augments", "spotlight_choice": "spotlights"}.get(ep.screen if ep else "")
+        index = getattr(self.brain, "index", None)
+        if not kind or index is None or not 0.18 < y < 0.82:
+            return None
+        candidates = []
+        for box in boxes:
+            if not 0.18 < box.y < 0.65 or abs(box.x - x) > 0.16:
+                continue
+            for entity in index.by_name.get(box.text, []):
+                if entity.kind == kind:
+                    candidates.append((abs(box.x - x) + abs(box.y - y) * 0.1, entity))
+        if candidates:
+            entity = min(candidates, key=lambda p: p[0])[1]
+            ep.chosen[kind] = (entity.name, entity.text)
+            return entity.name
+        return None
 
     def execute(self, actions: list[Action], boxes: list[TextBox]) -> list[str]:
         results = []
@@ -841,7 +914,7 @@ class Runner:
             return
         done = ";".join(ep.done)
         if ep.screen == "environment_choice":
-            picked = self._picked(ep.done, "portals")
+            picked = ep.chosen.get("portals") or self._picked(ep.done, "portals")
             if picked:
                 self.ledger.environment = picked[0]
                 self.ledger.add_fact(f"投资环境 {picked[0]}:{picked[1]}")
@@ -853,9 +926,14 @@ class Runner:
                         self.ledger.environment = env
                         break
         if ep.screen == "strategy_choice":
-            picked = self._picked(ep.done, "augments")
+            picked = ep.chosen.get("augments") or self._picked(ep.done, "augments")
             if picked:
                 self.ledger.add_fact(f"投资策略 {picked[0]}({ep.node or '开局'} 拿到):{picked[1]}")
+        if ep.screen == "spotlight_choice":
+            picked = ep.chosen.get("spotlights") or self._picked(ep.done, "spotlights")
+            if picked:
+                role = f" → {ep.spotlight_role}" if ep.spotlight_role else "(角色未识别)"
+                self.ledger.add_fact(f"主角光环 {picked[0]}{role}({ep.node or '节点未知'} 选择):{picked[1]}")
         if ep.screen == "difficulty":
             return
         # 本局经历里留一行:程序记录的做了什么 + 模型自己写的回合小结(没写就用它最后的判断开头)
@@ -1024,15 +1102,21 @@ class Runner:
             ep = Episode(id=next(self._ids), key=key, screen=screen, node=self._node, role=role_of(screen),
                          max_turns=self.prepare_turns + 1 if screen == "prepare" else OTHER_TURNS)   # 多一轮留给单独的出战
             self.episode = ep
+            self._set_vision(ep, n, screen, frame.image, boxes, record)
             ep.cache_at = self.ledger.stable_len()    # 整局已知事实 + 本局经历在第一条消息的最前面,只增不改
             # 传档案本身:新出现的条目说明、第一次相关的经验追加进档案,不再每回合重发(设计文档第 20.4 节)
             text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger, hints=hints, names=names,
                                                 nodes=self.ledger.kinds_near(self._node))
         else:
+            self._set_vision(ep, n, screen, frame.image, boxes, record)
             text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
                                                     names=names), []
         decision = self.brain.decide(ep, text, recalled)
         record["decision"] = to_jsonable(decision)
+        if ep.request_messages:
+            record["request"] = self.trace.request(n, self.brain.system, ep.request_messages)
+        if decision.perception_issues:
+            record["perception_issues"] = decision.perception_issues
         if decision.error:
             self.log(f"[{n}] 决策失败:{decision.error}")
             time.sleep(3)
@@ -1050,6 +1134,25 @@ class Runner:
         if ep.screen == "prepare":
             return self._finish_prepare(record, decision.actions, boxes, sig, screen)
         return self.finish(record, screen, decision.actions, boxes, sig)
+
+    def _set_vision(self, ep: Episode, step: int, screen: str, image: Image.Image, boxes, record) -> None:
+        picture, marks = annotate(image, boxes, screen=screen, shop_open=self.prepare.shop_now(boxes),
+                                  counts=self.prepare.counts, equipment=(record.get("state") or {}).get("equipment"))
+        self._vision_marks = {m.id: m for m in marks}
+        ep.images = [picture]
+        ep.annotation = legend(marks)
+        if self._results and any("查看标号" in r for r in self._results):
+            ep.annotation += "\n## 查看说明\n" + "\n".join(b.text for b in boxes)
+        record["vision"] = [save_image(self.trace.root, f"{step:04d}-marked.jpg", picture)]
+        if self._zoom_region is not None:
+            x, y, w, h = self._zoom_region
+            crop = image.crop((round(x * image.width), round(y * image.height),
+                               round((x + w) * image.width), round((y + h) * image.height)))
+            zoom = ImageInput.from_pil(crop, label=f"原分辨率局部图:{self._zoom_region}", max_size=None)
+            ep.images.append(zoom)
+            record["vision"].append(save_image(self.trace.root, f"{step:04d}-zoom.jpg", zoom))
+            ep.annotation += f"\n另附原分辨率局部图,区域(x,y,宽,高)={self._zoom_region};点击坐标仍相对完整客户区。"
+            self._zoom_region = None
 
     def _finish_prepare(self, record: dict, actions: list[Action], boxes: list[TextBox], sig: set[str],
                         screen: str) -> str:

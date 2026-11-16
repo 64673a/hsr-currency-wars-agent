@@ -39,6 +39,25 @@ def _fail(message: str) -> None:
     raise typer.Exit(1)
 
 
+@app.command("replay")
+def replay_run(run: Path, models: str = typer.Option(..., "--models"),
+               start: int = typer.Option(0, "--start"), end: int | None = typer.Option(None, "--end")) -> None:
+    """把历史局面及原样截图交给指定模型,只比较回答、不操作游戏。"""
+    from .replay.runner import replay
+    from . import paths
+
+    directory = run if run.is_dir() else paths.runs_dir() / run
+    cfg = ConfigStore().load()
+    for name in models.split(","):
+        endpoint = cfg.endpoint(name.strip())
+        if endpoint.format == "external":
+            _fail("离线回放请指定 API 模型档案")
+        try:
+            typer.echo(str(replay(directory, endpoint, start=start, end=end)))
+        except (OSError, ValueError) as e:
+            _fail(str(e))
+
+
 def _json_option(value: str | None, what: str) -> dict:
     if not value:
         return {}
