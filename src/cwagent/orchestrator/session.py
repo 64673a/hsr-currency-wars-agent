@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .. import paths
 from ..brain.screen_agent import ScreenAgent, load_rules
-from ..config import AppConfig, ModelEndpoint
+from ..config import AppConfig, Effort, ModelEndpoint
 from ..knowledge.companions import CompanionBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import GuideAdvisor
@@ -34,10 +34,11 @@ def load_portraits() -> Portraits | None:
     return Portraits(paths.templates_dir(), names)
 
 
-def endpoints(cfg: AppConfig, model: str | None) -> dict[str, ModelEndpoint]:
+def endpoints(cfg: AppConfig, model: str | None, effort: Effort | None = None) -> dict[str, ModelEndpoint]:
     """各决策层用哪个模型。指定了模型(网页上选的)时,备战、战略、三选一都用它,便于对比模型;
     没指定时按 config.yaml 的 roles。导航层配置了就用配置的(找路不需要强模型)。
-    选外部 agent 时所有决策都交给它(用户可能根本没配 API)。"""
+    选外部 agent 时所有决策都交给它(用户可能根本没配 API)。
+    effort(开局时选的思考强度)覆盖备战、战略、三选一的档案设置,导航层仍按它自己的档案。"""
     if model == EXTERNAL:
         return {"default": ModelEndpoint(name=EXTERNAL, format="external")}
     main = cfg.endpoint(model) if model else cfg.role_endpoint("tactical")
@@ -46,6 +47,8 @@ def endpoints(cfg: AppConfig, model: str | None) -> dict[str, ModelEndpoint]:
         for role in ("strategic", "chooser"):
             if getattr(cfg.roles, role):
                 out[role] = cfg.endpoint(getattr(cfg.roles, role))
+    if effort:
+        out = {k: v.model_copy(update={"reasoning_effort": effort}) for k, v in out.items()}
     if cfg.roles.navigator:
         out["navigator"] = cfg.endpoint(cfg.roles.navigator)
     return out
@@ -65,8 +68,9 @@ def load_guides() -> GuideAdvisor | None:
     return GuideAdvisor(paths.knowledge_db())
 
 
-def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print) -> tuple[Runner, Path]:
-    eps = endpoints(cfg, model)
+def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Effort | None = None,
+                 log=print) -> tuple[Runner, Path]:
+    eps = endpoints(cfg, model, effort)
     endpoint = eps["default"]
     memories = [m for m, _ in MemoryStore().all()]
     brain = ScreenAgent(eps, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"))
@@ -79,8 +83,8 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, log=print)
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
                     guides=load_guides(), trailblazer=cfg.agent.trailblazer_name)
-    trace.meta(profile=endpoint.name, model=endpoint.model, difficulty=cfg.agent.difficulty,
-               roles={k: v.name for k, v in eps.items() if k != "default"},
+    trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
+               difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
     return runner, run_dir
 
@@ -103,8 +107,9 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
     return result
 
 
-def play(cfg: AppConfig, device, *, model: str | None = None, max_steps: int = 600, log=print, stop=None) -> str:
-    runner, run_dir = build_runner(cfg, device, model=model, log=log)
+def play(cfg: AppConfig, device, *, model: str | None = None, effort: Effort | None = None, max_steps: int = 600,
+         log=print, stop=None) -> str:
+    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, log=log)
     log(f"对局记录:{run_dir}")
     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes)
     if stop is not None:

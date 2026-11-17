@@ -118,6 +118,27 @@ def test_anthropic_request_and_parse():
     assert resp.usage.cache_read_tokens == 40 and resp.usage.cache_write_tokens == 5
 
 
+def test_reasoning_effort_in_both_formats():
+    from cwagent.llm import anthropic_format, openai_format
+
+    def body(fmt, effort, extra=None):
+        builder = openai_format if fmt == "openai" else anthropic_format
+        return builder.build_request(profile(fmt, reasoning_effort=effort, extra_body=extra or {}), "s", [], None)[2]
+
+    assert "reasoning_effort" not in body("openai", None) and "output_config" not in body("anthropic", None)
+    assert body("openai", "low")["reasoning_effort"] == "low" and "thinking" not in body("openai", "low")
+    assert body("anthropic", "max")["output_config"] == {"effort": "max"}
+    # DeepSeek 的 thinking 开关优先于 reasoning_effort,写了开关就跟着改
+    on = {"thinking": {"type": "enabled"}}
+    assert body("openai", "none", on)["thinking"] == {"type": "disabled"}
+    assert "thinking" not in body("openai", "high", {"thinking": {"type": "disabled"}})
+    assert "thinking" not in body("anthropic", "high", {"thinking": {"type": "disabled"}})
+    b = body("anthropic", "none", {"output_config": {"effort": "high", "format": {"type": "json_schema"}}})
+    assert b["thinking"] == {"type": "disabled"} and b["output_config"] == {"format": {"type": "json_schema"}}
+    # 开局时选的强度盖过 extra_body 里写死的
+    assert body("openai", "low", {"reasoning_effort": "high"})["reasoning_effort"] == "low"
+
+
 def test_anthropic_base_url_with_v1():
     http, seen = mock(lambda req, n: httpx.Response(200, json={"content": [], "stop_reason": "end_turn"}))
     p = ModelEndpoint(name="gw", format="anthropic", base_url="https://gw.example.com/anthropic/v1",

@@ -9,7 +9,7 @@ from typing import Annotated
 
 import typer
 
-from .config import ConfigError, ConfigStore, ModelProfile, ProviderConfig, mask_key
+from .config import EFFORTS, ConfigError, ConfigStore, ModelProfile, ProviderConfig, mask_key
 
 app = typer.Typer(help="货币战争 LLM 游玩 agent", no_args_is_help=True, add_completion=False)
 providers_app = typer.Typer(help="厂商(接口地址 + key)", no_args_is_help=True)
@@ -129,8 +129,9 @@ def models_list() -> None:
     if not cfg.models:
         typer.echo("(没有模型档案,用 `cwagent models add <厂商>` 添加)")
     for m in cfg.models:
+        effort = f"  思考强度={m.reasoning_effort}" if m.reasoning_effort else ""
         extra = f"  extra_body={json.dumps(m.extra_body, ensure_ascii=False)}" if m.extra_body else ""
-        typer.echo(f"- {m.name}: {m.provider} / {m.model}  tool_mode={m.tool_mode}{extra}")
+        typer.echo(f"- {m.name}: {m.provider} / {m.model}  tool_mode={m.tool_mode}{effort}{extra}")
     roles = cfg.roles.model_dump()
     default = cfg.models[0].name if cfg.models else "-"
     typer.echo("决策层: " + ", ".join(f"{k}={v or default + '(默认)'}" for k, v in roles.items()))
@@ -141,7 +142,8 @@ def models_add(
     provider: str = typer.Argument(..., help="厂商名"),
     model: str = typer.Option(None, "--model", "-m", help="模型 id;不填则拉取列表后选择"),
     name: str = typer.Option(None, "--name", "-n", help="档案名,默认与模型 id 相同"),
-    extra_body: str = typer.Option(None, "--extra-body", help='透传参数 JSON,如 \'{"reasoning_effort": "high"}\''),
+    effort: str = typer.Option(None, "--effort", help="思考强度:" + " / ".join(EFFORTS) + ";不填用厂商默认"),
+    extra_body: str = typer.Option(None, "--extra-body", help='透传参数 JSON,如 \'{"thinking": {"type": "enabled"}}\''),
     max_tokens: int = typer.Option(None, "--max-tokens"),
     tool_mode: str = typer.Option("native", "--tool-mode", help="native 或 json"),
 ) -> None:
@@ -168,7 +170,8 @@ def models_add(
         model = choices[idx - 1]
     try:
         profile = ModelProfile(name=name or model, provider=provider, model=model, max_tokens=max_tokens,
-                               extra_body=_json_option(extra_body, "--extra-body"), tool_mode=tool_mode)
+                               reasoning_effort=effort, extra_body=_json_option(extra_body, "--extra-body"),
+                               tool_mode=tool_mode)
         store.upsert_model(profile)
     except (ConfigError, ValueError) as e:
         _fail(str(e))
@@ -214,7 +217,7 @@ def models_test(names: Annotated[list[str] | None, typer.Argument(help="档案�
                 typer.echo(f"    思考内容: 有  {result['reasoning_preview'][:120]!r}")
             else:
                 typer.echo("    思考内容: 本次未返回(请求很简单时模型可能直接作答;"
-                           "需要思考内容时检查档案的 extra_body)")
+                           "需要思考内容时检查档案的思考强度和 extra_body)")
             if result["text_preview"]:
                 typer.echo(f"    文本: {result['text_preview'][:120]!r}")
             failed |= not result["tool_call"]
@@ -707,6 +710,8 @@ def runs_report(
 @app.command("play")
 def play_cmd(
     model: Annotated[str | None, typer.Option(help="模型档案名,默认用备战环节的设置")] = None,
+    effort: Annotated[str | None, typer.Option(
+        help="这一局的思考强度(" + " / ".join(EFFORTS) + "),默认用档案的设置")] = None,
     max_steps: Annotated[int, typer.Option(help="最多执行多少步")] = 600,
 ) -> None:
     """在本机直接操作游戏,自动打一局(需在 Windows 上以管理员身份运行,游戏处于货币战争界面)。"""
@@ -714,6 +719,8 @@ def play_cmd(
 
     if sys.platform != "win32":
         _fail("play 只能在 Windows 上运行")
+    if effort is not None and effort not in EFFORTS:
+        _fail(f"思考强度只能是 {' / '.join(EFFORTS)}")
     from .device.windows import WindowsDevice
     from .orchestrator.session import play
 
@@ -726,7 +733,7 @@ def play_cmd(
     hotkey = win.register_hotkey(["ctrl+alt+f10", "ctrl+alt+f9", "ctrl+shift+f10"], device.stop.set)
     typer.echo(f"停止:{hotkey.title() if hotkey else '快捷键注册失败,'}" + ("" if hotkey else "把鼠标甩到屏幕角落急停"))
     try:
-        play(ConfigStore().load(), device, model=model, max_steps=max_steps, stop=device.stop,
+        play(ConfigStore().load(), device, model=model, effort=effort, max_steps=max_steps, stop=device.stop,
              log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
     finally:
         device.close()

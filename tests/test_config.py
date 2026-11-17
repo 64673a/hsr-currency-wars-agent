@@ -74,3 +74,40 @@ def test_reference_errors(store):
         ProviderConfig(name="x", format="openai", base_url="ftp://x")
     with pytest.raises(ValueError):
         ModelProfile(name="a/b", provider="ds", model="m")
+
+
+def test_effort_moved_out_of_old_extra_body():
+    """旧档案把思考强度写在 extra_body 里:读进来时搬到 reasoning_effort,思考开关留下(发请求时跟着强度改)。"""
+    def load(extra, **kw):
+        m = ModelProfile(name="m", provider="ds", model="flash", extra_body=extra, **kw)
+        return m.reasoning_effort, m.extra_body
+
+    assert load({"thinking": {"type": "enabled"}, "reasoning_effort": "high"}) == ("high", {"thinking": {"type": "enabled"}})
+    assert load({"thinking": {"type": "disabled"}}) == ("none", {"thinking": {"type": "disabled"}})
+    assert load({"output_config": {"effort": "max"}}) == ("max", {})
+    assert load({"output_config": {"effort": "low", "format": {"type": "json_schema"}}}) == (
+        "low", {"output_config": {"format": {"type": "json_schema"}}})
+    assert load({"reasoning_effort": "turbo"}) == (None, {"reasoning_effort": "turbo"})   # 不认识的档位照旧透传
+    assert load({"reasoning_effort": "high"}, reasoning_effort="low") == ("low", {"reasoning_effort": "high"})
+
+
+def test_effort_saved_and_passed_to_endpoint(store):
+    store.upsert_model(ModelProfile(name="m2", provider="ds", model="flash", reasoning_effort="low"))
+    assert store.load().endpoint("m2").reasoning_effort == "low"
+    assert store.load().endpoint("m1").reasoning_effort is None
+    with pytest.raises(ValueError):
+        ModelProfile(name="m3", provider="ds", model="flash", reasoning_effort="turbo")
+
+
+def test_effort_chosen_at_start_overrides_decision_roles_only(store):
+    from cwagent.orchestrator.session import endpoints
+
+    store.upsert_model(ModelProfile(name="quick", provider="ds", model="flash", reasoning_effort="none"))
+    store.upsert_model(ModelProfile(name="deep", provider="ds", model="flash", reasoning_effort="high"))
+    store.update_settings(roles=Roles(strategic="deep", navigator="quick"))
+    cfg = store.load()
+    eps = endpoints(cfg, "m1", "max")
+    assert eps["default"].reasoning_effort == "max" and eps["navigator"].reasoning_effort == "none"
+    eps = endpoints(cfg, None, "low")   # 没选模型时按 roles,开局选的强度同样覆盖战略层
+    assert eps["strategic"].name == "deep" and eps["strategic"].reasoning_effort == "low"
+    assert endpoints(cfg, None)["strategic"].reasoning_effort == "high"

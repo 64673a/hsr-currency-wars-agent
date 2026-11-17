@@ -10,7 +10,7 @@ import { NumberField } from '@/components/arc/number-field/number-field';
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import { Switch } from '@/components/arc/switch/switch';
-import { api, enc, errorText, type ModelProfile, type Provider, type RoleKey, type Settings, type TestResult } from '@/lib/api';
+import { api, effortName, enc, errorText, type ModelProfile, type Provider, type RoleKey, type Settings, type TestResult } from '@/lib/api';
 import page from '@/lib/page.module.css';
 
 import { ModelDialog, ModelPicker, ProviderDialog } from './dialogs';
@@ -205,6 +205,7 @@ function ModelRow({ model: m, onEdit, onDeleted }: { model: ModelProfile; onEdit
         </span>
         <p className={page.rowHint}>
           {m.provider} / {m.model}
+          {m.reasoning_effort && ` · 思考强度:${effortName(m.reasoning_effort)}`}
         </p>
         {extra && <span className={page.mono}>{extra}</span>}
         {test && test !== 'running' && <TestLine result={test} />}

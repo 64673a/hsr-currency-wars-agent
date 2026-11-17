@@ -65,11 +65,23 @@ export interface Provider {
   models?: string[];
 }
 
+export type Effort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/** 思考强度的选项,和后端 config.EFFORTS 一致,直接用各厂商通用的英文档位;各厂商实际支持的档位不同 */
+export const EFFORTS: { value: Effort; label: string }[] = (['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const).map(
+  (value) => ({ value, label: value }),
+);
+
+export function effortName(effort: Effort | null | undefined): string {
+  return effort ?? '';
+}
+
 export interface ModelProfile {
   name: string;
   provider: string;
   model: string;
   max_tokens: number | null;
+  reasoning_effort: Effort | null;
   extra_body: Record<string, unknown>;
   extra_headers: Record<string, string>;
   tool_mode: 'native' | 'json';
@@ -166,6 +178,7 @@ export interface RunSummary {
   id: string;
   profile: string;
   model: string;
+  effort: Effort | null;
   difficulty: string;
   started_at: string;
   ended_at: string | null;

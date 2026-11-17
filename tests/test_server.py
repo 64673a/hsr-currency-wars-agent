@@ -190,3 +190,17 @@ def test_runs_and_play(tmp_path):
     play = client.get("/api/play").json()
     assert play["available"] is False and play["running"] is False
     assert client.post("/api/play/start", json={}).status_code == 409
+
+    # 删除:进行中的(刚写入、没有结束时间)不删,路径不对的不碰;中途崩掉、很久没写入的可以删
+    import os
+
+    os.utime(d0 / "steps.jsonl", (1, 1))
+    live = runs / "20261114-110000_live"
+    live.mkdir()
+    (live / "steps.jsonl").write_text(json.dumps({"step": 1, "screen": "prepare"}) + "\n", encoding="utf-8")
+    result = client.post("/api/runs/delete", json={"ids": [d0.name, live.name, "..", "nope", d0.name]}).json()
+    assert result["deleted"] == [d0.name]
+    assert {s["id"]: s["reason"] for s in result["skipped"]} == {live.name: "正在进行", "..": "不存在", "nope": "不存在"}
+    assert not d0.exists() and live.exists() and runs.exists()
+    assert [r["id"] for r in client.get("/api/runs").json()] == [live.name, d.name]
+    assert client.post("/api/runs/delete", json={"ids": []}).status_code == 422

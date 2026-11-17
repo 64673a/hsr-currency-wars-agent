@@ -1,20 +1,26 @@
-/* 对局页:左边对局列表,中间截图与步骤,右边这一步的判断 */
+/* 对局页只放当前这一局;对局记录页(pages/runs)左边是列表。回看区(viewer.tsx):左边截图与步骤,右边这一步的判断 */
 /* 开局控件带标签,标题和控件按底边对齐,标题行高等于控件高度,文字落在同一条中线上 */
 .header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
 .title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--control-height-md); }
 
 .controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
 .modelSelect { width: 220px; }
+.effortSelect { width: 160px; }
 .difficulty { width: 120px; }
 .rounds { width: 140px; }
 .round { line-height: var(--control-height-md); font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .controlsError { flex-basis: 100%; }
 
 .skeleton { height: 480px; border-radius: var(--radius-surface); }
-.body { display: grid; grid-template-columns: 200px minmax(0, 1fr) clamp(300px, 24vw, 420px); gap: 20px; align-items: start; }
+.viewer { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 420px); gap: 20px; align-items: start; }
+.current { display: grid; gap: 16px; }
+.currentHead { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: var(--control-height-sm); }
 
-/* 对局列表 */
-.runs { position: sticky; top: 24px; display: grid; align-content: start; gap: 2px; max-height: calc(100vh - 48px); overflow-y: auto; padding-right: 4px; }
+/* 一局的概要 */
+.runLine { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.runLineMeta { min-width: 0; font-size: var(--text-sm); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 对局列表的一项(对局记录页) */
 .run { display: grid; gap: 3px; width: 100%; padding: 10px 12px; border: 0; border-radius: var(--radius-control); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background var(--duration-fast) var(--ease-standard); }
 .run:hover { background: var(--surface-muted); }
 .run[aria-current="true"] { background: var(--accent-subtle); }
@@ -89,8 +95,8 @@
 .foldMono { margin: 10px 0 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: var(--text-xs); line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 1280px) {
-  .body { grid-template-columns: 200px minmax(0, 1fr); }
-  .panel { grid-column: 2; position: static; max-height: none; }
+  .viewer { grid-template-columns: minmax(0, 1fr); }
+  .panel { position: static; max-height: none; }
 }
 
 /* 战斗读数图:细线、发丝网格、文字用文字色,阵亡用危险色的点 + 文字标注 */

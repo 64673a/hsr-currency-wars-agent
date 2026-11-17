@@ -13,7 +13,7 @@ Thumbs.db
 config.yaml
 
 # 运行产物
-runs/
+/runs/
 data/
 
 # 个人开发辅助,不入库

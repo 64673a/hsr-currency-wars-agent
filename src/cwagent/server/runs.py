@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import threading
 import time
@@ -89,7 +90,7 @@ class RunStore:
         live = (not meta.get("ended_at") and not info["outcome"]
                 and time.time() - stat.st_mtime < LIVE_SECONDS)
         profile = meta.get("profile") or (d.name.split("_", 1)[1] if "_" in d.name else "")
-        return {"id": d.name, "profile": profile, "model": meta.get("model", ""),
+        return {"id": d.name, "profile": profile, "model": meta.get("model", ""), "effort": meta.get("effort"),
                 "difficulty": meta.get("difficulty", ""), "started_at": meta.get("started_at") or _started(d.name),
                 "ended_at": meta.get("ended_at"), "result": meta.get("result"), "live": live, **info}
 
@@ -110,6 +111,27 @@ class RunStore:
             if len(out) >= limit:
                 break
         return out
+
+    def delete(self, run_ids: list[str], *, keep: set[str] = frozenset()) -> dict[str, Any]:
+        """删除对局记录目录。进行中的(以及 keep 里的,即网页正在跑的那局)不删。"""
+        deleted, skipped = [], []
+        for run_id in dict.fromkeys(run_ids):
+            try:
+                d = self.dir(run_id)
+            except KeyError:
+                skipped.append({"id": run_id, "reason": "不存在"})
+                continue
+            if run_id in keep or self.summary(d)["live"]:
+                skipped.append({"id": run_id, "reason": "正在进行"})
+                continue
+            try:
+                shutil.rmtree(d)
+            except OSError as e:
+                skipped.append({"id": run_id, "reason": f"删除失败:{e.strerror or e}"})
+                continue
+            self._cache.pop(run_id, None)
+            deleted.append(run_id)
+        return {"deleted": deleted, "skipped": skipped}
 
     def shot(self, run_id: str, name: str, *, folder: str = "shots") -> Path:
         d = self.dir(run_id)
@@ -164,8 +186,8 @@ class PlayController:
         return {"available": self.device_factory is not None, "running": self.running, "hotkey": self._hotkey,
                 "stopping": self.running and self._stop.is_set(), "agent": BRIDGE.status(), **state}
 
-    def start(self, *, model: str | None = None, difficulty: str | None = None, max_steps: int = 700,
-              rounds: int = 1) -> dict[str, Any]:
+    def start(self, *, model: str | None = None, effort: str | None = None, difficulty: str | None = None,
+              max_steps: int = 700, rounds: int = 1) -> dict[str, Any]:
         """连续打 rounds 局(每局一个记录目录),中途可以停止。"""
         from ..orchestrator.loop import RunOptions
         from ..orchestrator.session import build_runner, run_session
@@ -213,7 +235,7 @@ class PlayController:
                     break
                 runner = None
                 try:
-                    runner, run_dir = build_runner(cfg, device, model=model, log=self._log)
+                    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, log=self._log)
                     with self._lock:
                         self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)

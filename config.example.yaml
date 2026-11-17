@@ -31,8 +31,9 @@ models:
     provider: my-openai-compatible
     model: your-model-id
     # max_tokens: 16000                # anthropic 格式默认 16000;openai 格式不填则不发送
-    # extra_body:                      # 原样合并进请求体,用于思考开关、effort 等厂商参数,例如:
-    #   reasoning_effort: high
+    # reasoning_effort: high           # 思考强度:none(关闭)/ low / medium / high / xhigh / max;不填用厂商默认,开局时可另选
+    # extra_body:                      # 原样合并进请求体,用于思考开关等厂商参数,例如 DeepSeek:
+    #   thinking: {type: enabled}
     tool_mode: native                  # native | json(不支持工具调用的模型用 json)
     timeout_seconds: 300
 

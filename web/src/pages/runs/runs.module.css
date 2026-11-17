@@ -1,0 +1,12 @@
+/* 对局记录页:左边对局列表(可批量选择删除),右边选中这局的回看 */
+.header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.bulk { display: flex; align-items: center; gap: 12px; }
+.body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+
+.list { position: sticky; top: 24px; display: grid; align-content: start; gap: 2px; max-height: calc(100vh - 48px); overflow-y: auto; padding-right: 4px; }
+.item { display: flex; align-items: center; gap: 2px; }
+.item > button { flex: 1; min-width: 0; }
+.pick { margin-left: 8px; }
+
+.detail { display: grid; gap: 16px; min-width: 0; }
+.detailHead { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: var(--control-height-sm); }

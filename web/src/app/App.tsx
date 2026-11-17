@@ -1,4 +1,4 @@
-import { BookOpen, MonitorPlay, Settings2 } from 'lucide-react';
+import { BookOpen, History, MonitorPlay, Settings2 } from 'lucide-react';
 import { useEffect, useState, type ComponentType } from 'react';
 
 import SegmentedControl from '@/components/arc/segmented-control/segmented-control';
@@ -6,6 +6,7 @@ import { api, type KnowledgeMeta } from '@/lib/api';
 import { ToastHost } from '@/lib/toast';
 import KnowledgePage from '@/pages/knowledge/KnowledgePage';
 import PlayPage from '@/pages/play/PlayPage';
+import RunsPage from '@/pages/runs/RunsPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 
 import styles from './shell.module.css';
@@ -13,6 +14,7 @@ import styles from './shell.module.css';
 type Page = { path: string; label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }> };
 const ALL: Page[] = [
   { path: '#/play', label: '对局', icon: MonitorPlay },
+  { path: '#/runs', label: '对局记录', icon: History },
   { path: '#/knowledge', label: '知识库', icon: BookOpen },
   { path: '#/settings', label: '设置', icon: Settings2 },
 ];
@@ -90,6 +92,7 @@ export default function App() {
           {path === '#/settings' && <SettingsPage />}
           {path === '#/knowledge' && <KnowledgePage />}
           {path === '#/play' && <PlayPage />}
+          {path === '#/runs' && <RunsPage />}
         </main>
       </div>
     </ToastHost>

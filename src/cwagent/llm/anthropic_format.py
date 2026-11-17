@@ -6,6 +6,8 @@
   靠提示词要求调用工具;
 - 思考内容默认不返回,需要在档案的 extra_body 里写 thinking: {type: adaptive, display: summarized};
   较老的模型用 thinking: {type: enabled, budget_tokens: N}。这些由档案决定,代码不判断;
+- 思考强度(档案的 reasoning_effort,开局时可以改)发成 output_config.effort;none 发 thinking: {type: disabled}
+  (DeepSeek 支持;Claude 新模型思考一直开着,会报错);
 - stop_reason 为 refusal 时视为失败调用;不启用服务端回退到其他模型的功能,以免破坏模型对比。
 """
 
@@ -72,7 +74,20 @@ def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
     if tools:
         body["tools"] = [{"name": t.name, "description": t.description, "input_schema": t.parameters}
                          for t in tools]
-    return endpoint(profile.base_url), headers, deep_merge(body, profile.extra_body)
+    body = deep_merge(body, profile.extra_body)
+    effort = profile.reasoning_effort
+    if effort == "none":
+        body["thinking"] = {"type": "disabled"}
+        output = {k: v for k, v in (body.get("output_config") or {}).items() if k != "effort"}
+        if output:
+            body["output_config"] = output
+        else:
+            body.pop("output_config", None)
+    elif effort:
+        body["output_config"] = {**(body.get("output_config") or {}), "effort": effort}
+        if (body.get("thinking") or {}).get("type") == "disabled":
+            del body["thinking"]   # 档案里关了思考、开局时又选了强度:去掉开关,用厂商默认(DeepSeek 默认开)
+    return endpoint(profile.base_url), headers, body
 
 
 def parse_response(data: dict[str, Any]) -> LLMResponse:

@@ -2,7 +2,7 @@
 
 两层结构:
 - providers(厂商 / 接口):接口格式 + 地址 + key,只填一次,可从接口拉取可用模型列表;
-- models(模型档案):选一个厂商 + 一个模型 id,再加上该模型自己的参数(思考开关等)。
+- models(模型档案):选一个厂商 + 一个模型 id,再加上该模型自己的参数(思考强度等)。
 同一厂商可以建多个模型档案,用来对比不同模型或不同参数。
 """
 
@@ -14,12 +14,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import paths
 
 DEFAULT_ANTHROPIC_VERSION = "2026-10-21"
 ApiFormat = Literal["openai", "anthropic"]
+# 思考强度:none 关闭思考,其余由厂商决定实际档位(DeepSeek 把 medium / xhigh 当 high;OpenAI 没有 max,Claude 不能关思考)。
+# 不设置(None)时不发送,用厂商默认。请求里怎么写由 llm/ 下两种格式各自处理
+Effort = Literal["none", "low", "medium", "high", "xhigh", "max"]
+EFFORTS: tuple[str, ...] = Effort.__args__
 
 
 def _check_name(v: str) -> str:
@@ -63,10 +67,36 @@ class ModelProfile(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    reasoning_effort: Effort | None = None
     tool_mode: Literal["native", "json"] = "native"
     timeout_seconds: float = Field(default=300, gt=0)
 
     _name = field_validator("name")(classmethod(lambda cls, v: _check_name(v)))
+
+    @model_validator(mode="before")
+    @classmethod
+    def _effort_from_extra_body(cls, data: Any) -> Any:
+        """旧档案把思考强度写在 extra_body 里(reasoning_effort、output_config.effort、thinking 关闭),搬到 reasoning_effort。
+        thinking 开关留在 extra_body:DeepSeek 的 thinking 优先于 reasoning_effort,发请求时按思考强度改它。"""
+        if not isinstance(data, dict) or data.get("reasoning_effort") or not isinstance(data.get("extra_body"), dict):
+            return data
+        extra = dict(data["extra_body"])
+        output = extra.get("output_config")
+        effort = extra.get("reasoning_effort")
+        if effort in EFFORTS:
+            del extra["reasoning_effort"]
+        elif isinstance(output, dict) and output.get("effort") in EFFORTS:
+            effort = output["effort"]
+            rest = {k: v for k, v in output.items() if k != "effort"}
+            if rest:
+                extra["output_config"] = rest
+            else:
+                del extra["output_config"]
+        elif isinstance(extra.get("thinking"), dict) and extra["thinking"].get("type") == "disabled":
+            effort = "none"
+        else:
+            return data
+        return {**data, "reasoning_effort": effort, "extra_body": extra}
 
 
 class ModelEndpoint(BaseModel):
@@ -80,6 +110,7 @@ class ModelEndpoint(BaseModel):
     max_tokens: int | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
     extra_headers: dict[str, str] = Field(default_factory=dict)
+    reasoning_effort: Effort | None = None
     tool_mode: Literal["native", "json"] = "native"
     timeout_seconds: float = 300
     anthropic_version: str = DEFAULT_ANTHROPIC_VERSION
@@ -91,6 +122,7 @@ class ModelEndpoint(BaseModel):
             api_key=provider.api_key, model=profile.model, max_tokens=profile.max_tokens,
             extra_body=profile.extra_body,
             extra_headers={**provider.extra_headers, **profile.extra_headers},
+            reasoning_effort=profile.reasoning_effort,
             tool_mode=profile.tool_mode, timeout_seconds=profile.timeout_seconds,
             anthropic_version=provider.anthropic_version,
         )

@@ -11,7 +11,7 @@ import SegmentedControl from '@/components/arc/segmented-control/segmented-contr
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import { Textarea } from '@/components/arc/textarea/textarea';
-import { api, enc, errorText, parseJsonObject, pretty, type ModelInfo, type ModelProfile, type Provider } from '@/lib/api';
+import { api, EFFORTS, enc, errorText, parseJsonObject, pretty, type Effort, type ModelInfo, type ModelProfile, type Provider } from '@/lib/api';
 import page from '@/lib/page.module.css';
 
 import styles from './dialogs.module.css';
@@ -136,7 +136,7 @@ export function ModelPicker({ provider, existing, onClose, onSaved }: { provider
       try {
         await api('/api/models', {
           method: 'POST',
-          body: { name, provider: provider.name, model: id, max_tokens: null, extra_body: {}, extra_headers: {}, tool_mode: 'native', timeout_seconds: 300 },
+          body: { name, provider: provider.name, model: id, max_tokens: null, reasoning_effort: null, extra_body: {}, extra_headers: {}, tool_mode: 'native', timeout_seconds: 300 },
         });
         names.add(name);
       } catch (e) {
@@ -188,12 +188,16 @@ export function ModelPicker({ provider, existing, onClose, onSaved }: { provider
   );
 }
 
+/** 下拉框不能用空字符串当选项值,「不设置」用这个代替 */
+const VENDOR_DEFAULT = 'default';
+
 export function ModelDialog({ model, providers, onClose, onSaved }: { model: ModelProfile | null; providers: Provider[]; onClose: () => void; onSaved: () => void }) {
   const [provider, setProvider] = useState(model?.provider ?? providers[0]?.name ?? '');
   const [modelId, setModelId] = useState(model?.model ?? '');
   const [name, setName] = useState(model?.name ?? '');
   const [maxTokens, setMaxTokens] = useState(model?.max_tokens ?? 0);
   const [toolMode, setToolMode] = useState<ModelProfile['tool_mode']>(model?.tool_mode ?? 'native');
+  const [effort, setEffort] = useState<string>(model?.reasoning_effort ?? VENDOR_DEFAULT);
   const [timeoutS, setTimeoutS] = useState(model?.timeout_seconds ?? 300);
   const [extraBody, setExtraBody] = useState(pretty(model?.extra_body));
   const [extraHeaders, setExtraHeaders] = useState(pretty(model?.extra_headers));
@@ -210,6 +214,7 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
         provider,
         model: modelId.trim(),
         max_tokens: maxTokens > 0 ? maxTokens : null,
+        reasoning_effort: effort === VENDOR_DEFAULT ? null : (effort as Effort),
         extra_body: parseJsonObject(extraBody, '额外请求参数'),
         extra_headers: parseJsonObject(extraHeaders, '额外请求头'),
         tool_mode: toolMode,
@@ -252,11 +257,12 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
             onValueChange={(v) => setToolMode(v as ModelProfile['tool_mode'])}
             fullWidth
           />
+          <Select label="思考强度" options={[{ value: VENDOR_DEFAULT, label: '厂商默认' }, ...EFFORTS]} value={effort} onValueChange={setEffort} />
           <div className={page.fields2}>
             <NumberField label="max_tokens(0 为不限)" min={0} max={200000} step={1000} locale="zh-CN" formatOptions={{ useGrouping: false }} value={maxTokens} onValueChange={setMaxTokens} />
             <NumberField label="超时" suffix=" 秒" min={10} max={3600} step={30} value={timeoutS} onValueChange={setTimeoutS} />
           </div>
-          <Textarea label="额外请求参数" placeholder='{"reasoning_effort": "high"}' rows={4} value={extraBody} onChange={(e) => setExtraBody(e.target.value)} />
+          <Textarea label="额外请求参数" placeholder='{"thinking": {"type": "enabled"}}' rows={4} value={extraBody} onChange={(e) => setExtraBody(e.target.value)} />
           <Textarea label="额外请求头" placeholder='{"X-Header": "value"}' rows={2} value={extraHeaders} onChange={(e) => setExtraHeaders(e.target.value)} />
           {error && <Alert tone="danger" title="没有保存">{error}</Alert>}
           <Footer onClose={onClose} saving={saving} disabled={!provider || !modelId.trim()} label={model ? '保存修改' : '添加模型档案'} onSave={save} />

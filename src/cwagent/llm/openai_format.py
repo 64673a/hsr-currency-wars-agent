@@ -61,7 +61,17 @@ def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
             for t in tools
         ]
         body["tool_choice"] = "auto"
-    return url, headers, deep_merge(body, profile.extra_body)
+    body = deep_merge(body, profile.extra_body)
+    effort = profile.reasoning_effort
+    if effort:
+        body["reasoning_effort"] = effort
+        # DeepSeek 的 thinking 开关优先于 reasoning_effort:档案里写了开关就跟着改(OpenAI 不认 thinking,没写不加)
+        thinking = body.get("thinking")
+        if isinstance(thinking, dict) and effort == "none":
+            body["thinking"] = {**thinking, "type": "disabled"}
+        elif isinstance(thinking, dict) and thinking.get("type") == "disabled":
+            del body["thinking"]
+    return url, headers, body
 
 
 def _text(content: Any) -> str:

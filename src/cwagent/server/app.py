@@ -21,6 +21,7 @@ from ..config import (
     AgentSettings,
     ConfigError,
     ConfigStore,
+    Effort,
     KnowledgeSettings,
     ModelProfile,
     ProviderConfig,
@@ -69,9 +70,14 @@ class StatusIn(BaseModel):
 
 class PlayIn(BaseModel):
     model: str | None = None
+    effort: Effort | None = None   # 不填用档案的设置
     difficulty: str | None = None
     max_steps: int = 700
     rounds: int = Field(1, ge=1, le=50)
+
+
+class RunsDeleteIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=1000)
 
 
 class PreviewIn(BaseModel):
@@ -138,8 +144,8 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     @app.post("/api/play/start")
     def play_start(body: PlayIn) -> dict[str, Any]:
         try:
-            return player.start(model=body.model, difficulty=body.difficulty, max_steps=body.max_steps,
-                                rounds=body.rounds)
+            return player.start(model=body.model, effort=body.effort, difficulty=body.difficulty,
+                                max_steps=body.max_steps, rounds=body.rounds)
         except (RuntimeError, ConfigError) as e:
             raise _bad(e, 409) from None
 
@@ -173,6 +179,12 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     @app.get("/api/runs")
     def run_list() -> list[dict[str, Any]]:
         return runs.list()
+
+    @app.post("/api/runs/delete")
+    def run_delete(body: RunsDeleteIn) -> dict[str, Any]:
+        current = player.status()
+        keep = {current["run_id"]} if current["running"] and current["run_id"] else set()
+        return runs.delete(body.ids, keep=keep)
 
     @app.get("/api/runs/{run_id}")
     def run_get(run_id: str) -> dict[str, Any]:
