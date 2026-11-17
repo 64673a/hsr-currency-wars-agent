@@ -37,7 +37,9 @@ from ..vision.ocr import Aliased, Ocr, TextBox, find
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
 from ..vision.items import read_items
-from ..vision.shop import format_shop, read_prices, read_shop, two_star
+from ..vision.supply import describe as describe_supply
+from ..vision.supply import read_supply
+from ..vision.shop import format_shop, read_prices, read_shop, trial_slots, two_star
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
@@ -270,6 +272,7 @@ class Runner:
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
         self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
+        self._trial: dict[str, bool] = {}                      # 这局见过的角色 → 是不是试用(卡面标签)
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
         self._checked_planes: set[str] = set()                 # 战略检查点:已经过了开头的位面
         self._checked_boss: set[str] = set()                   # 战略检查点:已经过了的首领节点
@@ -436,7 +439,10 @@ class Runner:
                 cards = [(i, name, price if price is not None else (prices.get(i) if name else None))
                          for i, name, price in cards]
             self._shop_names = [name for _, name, _ in cards if name]
-            lines.append("商店(从左到右;「2星」是价格为费用 3 倍的二星卡):" + format_shop(cards, self._role_costs()))
+            trial = trial_slots(boxes)
+            self._note_roster({name: i in trial for i, name, _ in cards if name})
+            lines.append("商店(从左到右;「2星」是价格为费用 3 倍的二星卡;[试用] 是账号里没有、给的试用版):"
+                         + format_shop(cards, self._role_costs(), trial))
         self._board = None
         if self.portraits is not None:
             if shop:
@@ -480,7 +486,8 @@ class Runner:
             costs = self._role_costs()
             two = {slot for slot, name, price in cards if name and two_star(name, price, costs)}
             facts = situation.render(board=self._board, hud=hud, shop=cards, two_star=two, facts=self._role_facts(),
-                                     guide=self._guide, front_slots=(self.prepare.counts or {}).get("front", 4))
+                                     guide=self._guide, front_slots=(self.prepare.counts or {}).get("front", 4),
+                                     trial=self._trial)
             if facts:
                 lines.append(facts)
         except Exception as e:  # noqa: BLE001 - 局面要点算错不影响模型照常决策
@@ -788,6 +795,12 @@ class Runner:
         self.device.click(float(button.x), float(button.y))
         time.sleep(1.0)
         return "打开主角光环选择(首领节点要选完光环才能出战)"
+
+    def _note_roster(self, seen: dict[str, bool]) -> None:
+        """记下这局见到的角色是试用还是自己的(商店、补给卡面上的「试用」标签)。一次标过试用就算试用。"""
+        for name, trial in seen.items():
+            if name and (trial or name not in self._trial):
+                self._trial[name] = trial or self._trial.get(name, False)
 
     def _refresh_knowledge(self) -> None:
         """对局中读到的伙伴、词条刷进知识库(网页知识库马上能看到);失败不影响对局。"""
@@ -1131,6 +1144,19 @@ class Runner:
             hints = TEA_BREAK_HINT
         elif screen in OVERLAY_HINTS:
             hints = OVERLAY_HINTS[screen]
+        if screen == "supply":
+            try:
+                packs = read_supply(frame.image, boxes)
+                self._note_roster({p.role: p.trial for p in packs if p.role})
+                text = describe_supply(packs)
+                if text:
+                    hints = (hints + "\n\n" + text).strip()
+                    record.setdefault("state", {})["supply"] = [
+                        {"index": p.index, "role": p.role, "traits": p.traits, "trial": p.trial, "equipment": p.equipment}
+                        for p in packs]
+                    names = [p.role for p in packs if p.role] + [e for p in packs for e in p.equipment]
+            except Exception as e:  # noqa: BLE001 - 认不出就照旧只给标号
+                self.log(f"[{record['step']}] 补给识别出错:{type(e).__name__}: {e}")
         if screen == "strategy_choice":
             left = investment_hint(boxes, "strategy_choice")
             if left:

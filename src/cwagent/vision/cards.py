@@ -25,6 +25,12 @@ COST_STD = 22          # 色条是纯色,两侧色块的标准差要小(立绘�
 
 def card_cost(card: np.ndarray) -> int | None:
     """卡面(BGR,按格子大小截下来、下方多带一点)最下方色条的费用档 1~5;看不出返回 None。"""
+    bar = _cost_bar(card)
+    return bar[1] if bar else None
+
+
+def _cost_bar(card: np.ndarray) -> tuple[int, int] | None:
+    """最下方费用色条:(色条最上面一行, 费用档);看不出返回 None。"""
     h, w = card.shape[:2]
     left = card[:, int(w * 0.08):int(w * 0.22)].astype(np.int16)
     right = card[:, int(w * 0.78):int(w * 0.92)].astype(np.int16)
@@ -42,13 +48,18 @@ def card_cost(card: np.ndarray) -> int | None:
     # 最下面的一段连续同色的行就是色条(卡片被选中抬起时整张上移,色条仍是最下面那段)
     last_row, cost = hits[-1]
     run = [r for r, c in hits if c == cost and last_row - r <= h * 0.08]
-    return cost if len(run) >= 2 else None
+    return (min(run), cost) if len(run) >= 2 else None
 
 
 def star_colors(card: np.ndarray) -> tuple[int, int]:
     """卡片底部星星:(金星数, 蓝星数)。M7A 的颜色门槛(RGB):金 r>223、g>171、g-b>17;蓝 b>228、g>202、b-r>35。"""
     h, w = card.shape[:2]
-    band = card[int(h * 0.68):int(h * 0.95), int(w * 0.12):int(w * 0.88)].astype(np.int16)
+    bar = _cost_bar(card)
+    # 星星在费用色条正上方。认得出色条时只看色条上方那一段:卡片被选中抬起时,下面露出的装备图标有金色,
+    # 原来按固定比例取下半截会把它们也数成金星(2026-11-17 实机,1 星那刻夏被认成 3 星)
+    top, bottom = ((max(0, bar[0] - int(h * 0.27)), bar[0]) if bar and bar[0] > h * 0.5
+                   else (int(h * 0.68), int(h * 0.95)))
+    band = card[top:bottom, int(w * 0.12):int(w * 0.88)].astype(np.int16)
     b, g, r = band[..., 0], band[..., 1], band[..., 2]
     gold = (r > 223) & (g > 171) & (g - b > 17)
     blue = (b > 228) & (g > 202) & (b - r > 35)
@@ -56,8 +67,13 @@ def star_colors(card: np.ndarray) -> tuple[int, int]:
 
     def count(mask: np.ndarray) -> int:
         n, _, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8))
-        return sum(1 for k in range(1, n) if 12 * scale <= stats[k, cv2.CC_STAT_AREA] <= 160 * scale
-                   and stats[k, cv2.CC_STAT_WIDTH] <= w * 0.2 and stats[k, cv2.CC_STAT_HEIGHT] <= h * 0.16)
+        # 星星是近似正方的小块(实机约 10×11 像素);卡片抬起时下沿的发光边、装备图标上沿是细横条,不算。
+        # 几颗星排在同一行:只数最靠下的那一行,立绘里更高处的金色(金发等)不算
+        rows = [stats[k, cv2.CC_STAT_TOP] + stats[k, cv2.CC_STAT_HEIGHT] / 2 for k in range(1, n)
+                if 12 * scale <= stats[k, cv2.CC_STAT_AREA] <= 160 * scale and stats[k, cv2.CC_STAT_WIDTH] <= w * 0.2
+                and h * 0.03 <= stats[k, cv2.CC_STAT_HEIGHT] <= h * 0.16
+                and 0.5 <= stats[k, cv2.CC_STAT_WIDTH] / stats[k, cv2.CC_STAT_HEIGHT] <= 2.0]
+        return sum(1 for y in rows if max(rows) - y <= h * 0.05) if rows else 0
 
     return min(3, count(gold)), min(3, count(blue))
 

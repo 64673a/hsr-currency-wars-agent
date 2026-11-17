@@ -96,17 +96,33 @@ def read_prices(image: Image.Image, ocr: Ocr) -> dict[int, int]:
     return out
 
 
+TRIAL_Y = (0.10, 0.15)   # 卡面右上角「试用」标签的高度(商店展开时;2026-11-16 实机在卡片中心右边约 0.048)
+
+
+def trial_slots(boxes: list[TextBox]) -> set[int]:
+    """商店里标着「试用」的格子:账号里没有这个角色,给的是试用版(自己有的角色继承账号养成,BWIKI)。"""
+    out = set()
+    for b in boxes:
+        if b.text == "试用" and TRIAL_Y[0] <= b.y <= TRIAL_Y[1]:
+            for i, cx in enumerate(SHOP_X, start=1):
+                if 0.015 <= b.x - cx <= 0.075:
+                    out.add(i)
+    return out
+
+
 def two_star(name: str, price: int | None, costs: dict[str, set[int]]) -> bool:
     """价格是角色费用的 3 倍(又不等于它的某个费用,如星神★阿哈有 4、5、7 费三个版本)就是二星卡。"""
     c = costs.get(re.sub(r"[·•・]", "·", name), set())
     return price is not None and price not in c and any(price == 3 * x for x in c)
 
 
-def format_shop(cards: list[tuple[int, str | None, int | None]], costs: dict[str, set[int]] | None = None) -> str:
+def format_shop(cards: list[tuple[int, str | None, int | None]], costs: dict[str, set[int]] | None = None,
+                trial: set[int] | None = None) -> str:
     def one(i: int, name: str | None, price: int | None) -> str:
         if not name:
             return f"{i}号 (空)"
         star = " 2星" if costs and two_star(name, price, costs) else ""
-        return f"{i}号 {name}{star}" + (f"({price} 金币)" if price is not None else "")
+        return (f"{i}号 {name}{star}" + ("[试用]" if trial and i in trial else "")
+                + (f"({price} 金币)" if price is not None else ""))
 
     return ";".join(one(*c) for c in cards)

@@ -51,3 +51,37 @@ def test_refresh_local_updates_knowledge(tmp_path, monkeypatch):
     con = sqlite3.connect(path)
     assert [r[0] for r in con.execute("SELECT name FROM affixes")] == ["首领强化"]
     assert [r[0] for r in con.execute("SELECT name FROM companions")] == ["汪汪丹"]
+
+
+def test_supply_packs_and_trial(monkeypatch):
+    """补给五组按位置配好角色、羁绊、试用和装备(2026-11-16 Codex 那局 1-5 的文字);装备图标匹配在实机图上另测。"""
+    from PIL import Image
+
+    from cwagent.vision import supply
+
+    monkeypatch.setattr(supply, "_basic_templates", lambda: {})
+    texts = [("试用", 0.554, 0.348), ("击破", 0.105, 0.453), ("梦境交织", 0.116, 0.487), ("大丽花", 0.089, 0.523),
+             ("持续伤害", 0.485, 0.452), ("仙舟舰队", 0.486, 0.487), ("椒丘", 0.451, 0.524),
+             ("量产型装甲", 0.141, 0.646), ("轮滑鞋", 0.495, 0.646)]
+    boxes = [TextBox(t, x, y, 0.04, 0.02, 0.9) for t, x, y in texts]
+    packs = supply.read_supply(Image.new("RGB", (960, 540)), boxes)
+    assert packs[0].text().startswith("1 组 大丽花(击破、梦境交织) + 量产型装甲")
+    assert packs[2].trial and packs[2].equipment == ["轮滑鞋"] and not packs[0].trial
+
+
+def test_shop_trial_slots():
+    from cwagent.vision.shop import format_shop, trial_slots
+
+    boxes = [TextBox("试用", 0.444, 0.124, 0.02, 0.02, 0.9), TextBox("试用", 0.584, 0.124, 0.02, 0.02, 0.9)]
+    assert trial_slots(boxes) == {2, 3}
+    assert format_shop([(2, "赛飞儿", 3)], None, {2}) == "2号 赛飞儿[试用](3 金币)"
+
+
+def test_guide_roster_notes():
+    from cwagent.knowledge.guides import Guide, roster_notes
+
+    g = Guide(id="x", title="【7持续伤害3奇兽花园】上分轮椅,全试用可玩", carries=[], final={}, early=set(), middle=set(),
+              traits=[], environments=[], tempo=[], equip_order={}, idea="刚需雪衣满星魂。前期攒钱。", augments=[],
+              use_count=0, hard=False)
+    notes = roster_notes(g)
+    assert "全试用可玩" in notes and "刚需雪衣满星魂" in notes and "前期攒钱" not in notes

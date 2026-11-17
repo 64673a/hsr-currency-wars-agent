@@ -189,7 +189,7 @@ def direction(guide, board: list, shop: list[tuple[int, str | None, int | None]]
 
 
 def render(*, board: list | None, hud, shop: list | None, two_star: set[int], facts: RoleFacts | None,
-           guide=None, front_slots: int = 4) -> str:
+           guide=None, front_slots: int = 4, trial: dict[str, bool] | None = None) -> str:
     """「局面要点」整块。各项读不出时省略。"""
     parts = []
     eco = economy(hud.gold, hud.exp)
@@ -207,6 +207,9 @@ def render(*, board: list | None, hud, shop: list | None, two_star: set[int], fa
             tl = traits(board, facts)
             if tl:
                 parts.append("- 羁绊(按场上角色算,星徽不计):" + ";".join(tl))
+        tried = sorted({s.name for s in board if s.name and (trial or {}).get(s.name)})
+        if tried:
+            parts.append("- 试用角色(这局在商店或补给卡面上标着「试用」,账号里没有、用的试用版):" + "、".join(tried))
         dl = direction(guide, board, shop or [])
         if dl:
             parts.append("- 相对当前方向:" + ";".join(dl))

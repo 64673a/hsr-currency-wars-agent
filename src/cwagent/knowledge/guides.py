@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -146,6 +147,17 @@ def _traits(items: list) -> str:
     return "、".join(f"{t.get('count') or ''}{t.get('name')}" for t in items if isinstance(t, dict) and t.get("name"))
 
 
+_ROSTER = re.compile(r"试用|星魂|命座|满魂|[0-6一二三四五六]魂|练度|专武|光锥")
+
+
+def roster_notes(g: Guide) -> str:
+    """标题和作者原文里讲试用 / 自有练度的句子(「全试用可玩」「刚需雪衣满星魂」「有命座的砂金都能打」)。
+    自己有的角色继承账号里的养成、没有的给试用版(BWIKI),同一套阵容强弱差很多,选攻略时要看。"""
+    parts = re.split(r"(?<=[。!！?？;；\n])|[,，](?=[^,，]*(?:试用|星魂|命座|魂|练度))", f"{g.title}。{g.idea}")
+    hits = [p.strip(" ,，。;；\n") for p in parts if _ROSTER.search(p)]
+    return ";".join(dict.fromkeys(h for h in hits if h))[:160]
+
+
 def card(g: Guide, *, full: bool = True) -> str:
     """给模型看的攻略卡片。full=False 时只给要点(候选攻略用)。
 
@@ -177,9 +189,13 @@ def card(g: Guide, *, full: bool = True) -> str:
     final_traits = _traits(g.stage_traits.get("final") or []) or "、".join(g.traits[:4])
     head = (f"「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
             + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else ""))
+    roster = roster_notes(g)
     if not full:
-        return "\n".join([head, f"  最终阵容:{board(g.final, False)}", f"  核心羁绊:{final_traits}"])
+        return "\n".join([head, f"  最终阵容:{board(g.final, False)}", f"  核心羁绊:{final_traits}"]
+                         + ([f"  试用 / 练度(作者原文):{roster}"] if roster else []))
     lines = [head]
+    if roster:
+        lines.append(f"  试用 / 练度(作者原文):{roster}")
     if g.idea:
         lines.append("  作者思路(原文):" + g.idea.replace("\n", "\n    "))
     for key, label in (("early", "前期"), ("middle", "中期")):

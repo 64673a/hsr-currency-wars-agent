@@ -102,3 +102,15 @@ def test_back_count(name, shop_open, back):
     assert back_count(img, shop_open, back, 6) == back
     assert back_hint(4, "5/5") == 7 and back_hint(5, "5/5") == 6 and back_hint(None, "5/5") is None
     assert len([s for s in slots(shop_open, {"back": back}) if s.zone == "back"]) == back
+
+
+def test_lifted_card_star_count():
+    """2026-11-17 实机:选中抬起的 1 星那刻夏,下面露出的装备图标上沿是金色细条,原来被数成 3 星(这张是缩略图放大的)。"""
+    from pathlib import Path
+
+    import cv2
+
+    from cwagent.vision.cards import star_colors
+
+    card = cv2.imread(str(Path(__file__).parent / "fixtures" / "board" / "lifted-card-1star.png"))
+    assert star_colors(card) == (1, 0)
