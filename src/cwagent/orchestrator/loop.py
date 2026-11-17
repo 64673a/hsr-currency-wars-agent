@@ -45,6 +45,7 @@ from ..vision.shop import format_shop, read_prices, read_shop, trial_slots, two_
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
+from .entry import EntryNavigator
 from .battle_watch import BattleWatcher
 from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
 from ..vision.boxes import item_slots
@@ -257,6 +258,7 @@ class Runner:
         self._waits = 0
         self._quits = 0
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
+        self.entry = EntryNavigator()
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
         self._stop: threading.Event | None = None              # 网页上的停止(战斗监视里也要随时能停)
@@ -1049,10 +1051,14 @@ class Runner:
                 if find(boxes, "^备战阶段$", region=(0.3, 0.35, 0.4, 0.25)):
                     return [Action(type="wait", seconds=1.5, reason="备战阶段开场动画")]
             case "other":
-                if len(meaningful(boxes)) < 2:
-                    return [Action(type="wait", seconds=1.5, reason="过场或加载中")]
                 if find(boxes, TRANSIENT):
                     return [Action(type="wait", seconds=1.5, reason="自动消失的过场")]
+                entry_actions = self.entry.plan(screen, image, boxes, in_run=self.in_run)
+                if entry_actions is not None:
+                    record["entry"] = {"page": self.entry.page}
+                    return entry_actions
+                if len(meaningful(boxes)) < 2:
+                    return [Action(type="wait", seconds=1.5, reason="过场或加载中")]
                 ep = self.episode
                 if ep is not None and ep.waiting and similar(sig, self._last_sig) > 0.6 and self._waits < 10:
                     self._waits += 1
