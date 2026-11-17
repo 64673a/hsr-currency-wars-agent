@@ -100,6 +100,15 @@ def match(img: np.ndarray, name: str, box: tuple[int, int, int, int]) -> float:
     return float(cv2.matchTemplate(area, t, cv2.TM_CCOEFF_NORMED).max())
 
 
+PEPPY = "佩佩"
+
+
+def is_peppy(img: np.ndarray, x: int, y: int) -> bool:
+    """后台格子 (x, y)(1920x1080 像素)站的是不是佩佩:占后台格和上场人数,不能拖动、不能出售。
+    照 M7A v2026.11.18 对每个后台格子匹配头像(之前有误拖佩佩的 bug),不假设它只站在最右边。"""
+    return match(img, "s2_peppy", (x - 52, y - 54, x + 52, y + 39)) >= 0.85
+
+
 def bench_marks(img: np.ndarray, x: int, y: int) -> str:
     """备战席格子 (x, y)(1920x1080 像素)的特殊标记:「乱流格」「锁定」或空串。门槛和位置照搬 M7A。"""
     if match(img, "s2_black_hole_slot", (x - 47, y - 48, x + 47, y + 48)) >= 0.60:

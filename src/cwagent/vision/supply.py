@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -20,7 +21,10 @@ from PIL import Image
 
 from .ocr import TextBox
 
-COLS = (0.115, 0.300, 0.485, 0.670, 0.855)   # 五组卡片的中心 x
+# 每组的文字中心 x(比卡片中心偏左约 0.015)。五张:M7A SUPPLY_CENTERS (250, 605, 960, 1315, 1670);
+# 四张(M7A v2026.11.18 新加的布局):SUPPLY_FOUR_CENTERS (428, 783, 1137, 1492)
+COLS = (0.115, 0.300, 0.485, 0.670, 0.855)
+COLS_FOUR = (0.208, 0.393, 0.577, 0.762)
 HALF = 0.09                                  # 每组左右各这么宽
 NAME_Y = (0.505, 0.545)                      # 角色名那一行
 TRAIT_Y = (0.405, 0.50)                      # 羁绊那几行
@@ -99,11 +103,30 @@ def _equipment(img: np.ndarray, cx: float, templates: dict[str, np.ndarray]) -> 
     return sorted((k[1], k[3]) for k in kept)
 
 
+def layout(boxes: list[TextBox]) -> tuple[float, ...]:
+    """五张还是四张:看角色名那一行的文字落在哪种布局的列上(都对不上时按五张)。"""
+    names = [b.x for b in boxes if NAME_Y[0] <= b.y <= NAME_Y[1]]
+
+    def hits(cols):
+        return sum(1 for x in names if min(abs(x - c) for c in cols) <= 0.05)
+
+    return COLS_FOUR if hits(COLS_FOUR) > hits(COLS) else COLS
+
+
+def required(boxes: list[TextBox]) -> int | None:
+    """右下角「已选择 x/N」的 N:这次要选几组(一般 1,有时 2,M7A)。"""
+    for b in boxes:
+        m = re.search(r"已选择\s*(\d)\s*/\s*(\d)", b.text)
+        if m:
+            return int(m.group(2))
+    return None
+
+
 def read_supply(image: Image.Image, boxes: list[TextBox]) -> list[Pack]:
     img = cv2.cvtColor(np.asarray(image.convert("RGB")), cv2.COLOR_RGB2BGR)
     templates = _basic_templates()
     packs = []
-    for i, cx in enumerate(COLS, start=1):
+    for i, cx in enumerate(layout(boxes), start=1):
         col = [b for b in boxes if abs(b.x - cx) <= HALF]
         p = Pack(i, x=cx)
         names = [b for b in col if NAME_Y[0] <= b.y <= NAME_Y[1]]
@@ -118,8 +141,9 @@ def read_supply(image: Image.Image, boxes: list[TextBox]) -> list[Pack]:
     return packs
 
 
-def describe(packs: list[Pack]) -> str:
+def describe(packs: list[Pack], need: int | None = None) -> str:
     if not any(p.role for p in packs):
         return ""
-    return ("## 补给包(程序按位置配好的;每组一个角色 + 装备,点卡面选中再点「确认」)\n"
+    pick = f"这次要选 {need} 组" if need else "选一组"
+    return (f"## 补给包(程序按位置配好的;{len(packs)} 组,{pick};每组一个角色 + 装备,点卡面选中再点「确认」)\n"
             + "\n".join(f"- {p.text()}" for p in packs))

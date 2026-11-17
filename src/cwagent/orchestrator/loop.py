@@ -33,12 +33,13 @@ from ..vision.battle import has_marker, read_action_value
 from ..vision.board import Portraits, Slot, back_hint, detail_name, format_board
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_gold, read_hud
-from ..vision.ocr import Aliased, Ocr, TextBox, find
+from ..vision.ocr import Aliased, Ocr, TextBox, find, has
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
 from ..vision.items import read_items
 from ..vision.supply import describe as describe_supply
 from ..vision.supply import read_supply
+from ..vision.supply import required as supply_required
 from ..vision.shop import format_shop, read_prices, read_shop, trial_slots, two_star
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
@@ -90,7 +91,7 @@ TRANSIENT = "阿哈帮大忙了|啊哈帮大忙了"
 SPOTLIGHT_BUTTON = "^选择主角$"   # 首领节点备战界面右下的按钮(实机:商店开着时点不到)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
-                  "ranger", "dance", "garden", "hack", "tea_break"}
+                  "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor", "equipment_reward"}
 CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
@@ -1103,6 +1104,13 @@ class Runner:
                 self._notice = ""
             if find(boxes, "^幕后茶歇$", region=(0.85, 0.64, 0.15, 0.1)):
                 hints += "\n- 这个节点是「幕后茶歇」:右侧按钮是「幕后茶歇」而不是「出战」,ready 会进入茶歇。"
+            # 出战按钮那个位置会换字(M7A v2026.11.18):ready 点的是同一个位置
+            if find(boxes, "^开启宝库$", region=(0.80, 0.60, 0.20, 0.15)):
+                hints += "\n- 右侧按钮是「开启宝库」而不是「出战」:这是宝库节点,ready 会开启宝库。"
+            skip = find(boxes, r"^跳过\s*[(（]\d+/\d+[)）]$", region=(0.80, 0.60, 0.20, 0.15))
+            if skip:
+                hints += (f"\n- 右侧按钮是「{skip.text}」而不是「出战」:ready 会用掉一次跳过、直接跳过这场战斗"
+                          "(M7A 资料,跳过的结果待实测)。")
             full = self._crystal_full
             if full and full[0] == self._node:
                 hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席,"
@@ -1148,7 +1156,7 @@ class Runner:
             try:
                 packs = read_supply(frame.image, boxes)
                 self._note_roster({p.role: p.trial for p in packs if p.role})
-                text = describe_supply(packs)
+                text = describe_supply(packs, supply_required(boxes))
                 if text:
                     hints = (hints + "\n\n" + text).strip()
                     record.setdefault("state", {})["supply"] = [
@@ -1157,6 +1165,9 @@ class Runner:
                     names = [p.role for p in packs if p.role] + [e for p in packs for e in p.equipment]
             except Exception as e:  # noqa: BLE001 - 认不出就照旧只给标号
                 self.log(f"[{record['step']}] 补给识别出错:{type(e).__name__}: {e}")
+        if screen == "strategy_choice" and has(boxes, "两个都带走"):
+            hints = (hints + "\n\n这一页是泡泡狼(奇遇伙伴)改过的布局(M7A 资料):左边「选择一个」只有 1 张卡;右边「两个都带走」"
+                     "是 2 张金卡,选右边就两张一起拿,两张共用一个刷新按钮。").strip()
         if screen == "strategy_choice":
             left = investment_hint(boxes, "strategy_choice")
             if left:

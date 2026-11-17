@@ -83,7 +83,8 @@ def banner_text(image: Image.Image, ocr: Ocr, rows: tuple[int, int]) -> str:
     a, b = rows
     pad = 6 * H / 1080
     region = (BANNER_OCR_X[0], max(0.0, (a - pad) / H), BANNER_OCR_X[1] - BANNER_OCR_X[0], (b - a + 2 * pad) / H)
-    return "".join(t.text for t in ocr(image, region))
+    # 横幅两端会蹭到左侧行动条、羁绊栏的单个字(实机「……行动提前！霸」「第二阶段羁」),单字的框不要
+    return "".join(t.text for t in ocr(image, region) if len(t.text) > 1)
 
 
 def is_death(text: str) -> bool:

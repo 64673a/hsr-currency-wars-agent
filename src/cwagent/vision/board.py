@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .cards import bench_marks, card_cost, star_colors
+from .cards import PEPPY, bench_marks, card_cost, is_peppy, star_colors
 from .ocr import TextBox
 
 # 每格卡片的中心和大小(归一化)。前台、后台每排居中、等距。前台固定 4 格;后台 6 格起,每个佩佩 / 叽米、
@@ -338,6 +338,10 @@ class Portraits:
             if s.zone == "bench":
                 s.mark = bench_marks(img, round(s.x * 1920), round(s.y * 1080))
             if not _filled(card) or s.mark == "乱流格":     # 空的乱流格上只有一个标记,不是角色
+                out.append(s)
+                continue
+            if s.zone == "back" and is_peppy(img, round(s.x * 1920), round(s.y * 1080)):
+                s.name, s.score, s.mark = PEPPY, 1.0, "固定,不能拖动或出售"
                 out.append(s)
                 continue
             rid, score = self.identify(card)

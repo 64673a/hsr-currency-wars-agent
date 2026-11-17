@@ -16,6 +16,7 @@ from ..brain.screen_agent import Action, action_text, slot_text
 from .. import paths
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, occupied_slots, slots
+from ..vision.cards import PEPPY
 from ..vision.boxes import CLOSE_POINT, read_panel
 from ..vision.equipment import (
     EquipmentReader,
@@ -272,6 +273,9 @@ class PrepareExecutor:
                     if occupied is not None and src not in occupied:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是空的")
                         continue
+                    if occupied is not None and occupied[src] == PEPPY and a.type in ("move", "sell"):
+                        out.results.append(f"{text}:{slot_text(a.zone, a.index)}是佩佩,固定在后台,不能拖动、不能出售")
+                        continue
                     is_item = occupied is not None and occupied[src].startswith(ITEM_PREFIX)
                     if a.type in ("move", "sell") and is_item:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是道具,不是角色,不能上场或出售")
@@ -303,6 +307,9 @@ class PrepareExecutor:
                         dst = (a.to_zone, a.to_index - 1)
                         if dst not in layout:
                             out.results.append(f"{text}:没有{slot_text(a.to_zone, a.to_index)}这个格子")
+                            continue
+                        if occupied is not None and occupied.get(dst) == PEPPY:
+                            out.results.append(f"{text}:{slot_text(a.to_zone, a.to_index)}是佩佩,不能换位,换一个格子")
                             continue
                         up = a.zone == "bench" and a.to_zone != "bench"
                         if up and occupied is not None and dst not in occupied and full(self.deployed):

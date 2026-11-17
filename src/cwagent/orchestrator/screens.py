@@ -84,6 +84,16 @@ def classify(boxes: list[TextBox]) -> str:
         return "garden"
     if has(boxes, "骇入效果") and (find(boxes, "^确认选择$") or find(boxes, "^详情$")):
         return "hack"
+    # 以下三个界面取自 M7A v2026.11.18(local/ref/m7a-2026.11.18.md),还没实机核对;原来都落到 other 交给导航层
+    if find(boxes, "机心巧匠", region=(0.45, 0.04, 0.17, 0.07)) and (
+            has(boxes, "请选择1个强化效果|请选择一个强化效果") or find(boxes, "^确认选择$")):
+        return "clara_mod"
+    if find(boxes, "^从师$", region=(0.40, 0.03, 0.25, 0.10)) and (
+            has(boxes, "作为师父|请选择一名角色") or find(boxes, "^确认选择$")):
+        return "mentor"
+    if find(boxes, "^选择装备$", region=(0.43, 0.0, 0.21, 0.07)) and (
+            has(boxes, "请选择1个|请选择一个") or find(boxes, "^查看详情$")):
+        return "equipment_reward"
     if has(boxes, "替换该角色原有光环"):
         return "spotlight_replace"
     if has(boxes, "主角光环与奇遇详情"):
@@ -122,7 +132,7 @@ ROLES = {
     "spotlight_replace": "strategic",
     "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
     "rail_shop": "chooser", "black_market": "chooser", "ranger": "chooser", "dance": "chooser", "garden": "chooser",
-    "hack": "chooser",
+    "hack": "chooser", "clara_mod": "chooser", "equipment_reward": "chooser", "mentor": "strategic",
 }
 
 
@@ -135,6 +145,7 @@ SCREEN_NAMES = {
     "encounter_choice": "遭遇节点", "supply": "补给", "tea_break": "幕后茶歇", "difficulty": "难度选择",
     "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
     "dance": "梦境交织共舞", "garden": "奇兽花园", "hack": "骇入效果",
+    "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备",
     "other": "其他界面",
 }
 
@@ -225,6 +236,12 @@ OVERLAY_HINTS = {
     "hack": """骇入效果:二选一(M7A S2 资料,待实测)。
 - 两列中心约 x 0.41 / 0.68,名字约 y 0.375,上方是效果说明。点名字选中,再点「确认选择」(约 0.777, 0.555)。""",
     "spotlight_replace": """这个角色已经有主角光环,确认就会替换掉原来的光环;不想替换就点「取消」。""",
+    "clara_mod": """机心巧匠改装(克拉拉专属羁绊,每进 2 个新节点出一次;M7A S2 资料,待实测):3 张或 4 张强化卡选 1 张,
+每张卡右上标着金币价格,有的是 0(免费);选中后点「确认选择」。花金币改装要和经济计划(利息、升级)一起权衡。""",
+    "mentor": """从师(主角光环选了「从师」后出现;M7A S2 资料,待实测):选 1 名角色当师父,主角受益于师父的羁绊效果。
+候选卡可以横向滚动(scroll),没选时上方写着「请选择一名角色」;选中后「确认选择」才亮。""",
+    "equipment_reward": """选择装备(投资策略「独家代言」等给的;M7A S2 资料,待实测):几件进阶装备选 1 件,
+每张卡有「查看详情」可看效果;选完可能还要点确认。""",
 }
 GREY_CONFIRM = "「{text}」按钮现在是灰色的(还没选够,点了没用):先选中选项再确认。"
 
