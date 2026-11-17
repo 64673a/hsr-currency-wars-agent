@@ -436,6 +436,10 @@ score = w1·log(1+use_count) + w2·support_hard(高难时)
 
 每帧先判当前界面:`home` / `mode_select` / `difficulty` / `environment_choice` / `companion_reveal` / `node_select`(若有节点选择或地图) / `prepare` / `battle` / `augment_choice` / `supply` / `spotlight_choice` / `tea_break`(幕后茶歇) / `commission`(委托) / `special_shop`(羁绊专属商店等) / `event_choice`(其他带选项的事件) / `settlement` / `popup_*` / `unknown`。带括号的几类界面的样子和交互方式待游戏内确认;列表会随采集到的界面增加。
 
+M7A v2026.11.18 的新增页已接入分类:`clara_mod`(机心巧匠改装,战略层)、`mentor`(从师,战略层)、
+`equipment_reward`(选择装备,选择层)。从师光环后的备战画面先等待后续页,等待约 18 秒仍未出现时交回模型核对。
+配对投资策略按左 1 张 / 右 2 张分组选择和刷新,右组的两张策略一起记入已选事实;布局和机制仍待实机核对。
+
 每个界面 1–3 个锚点:固定 UI 元素的模板匹配 + 关键区域 OCR 关键词。界面定义集中在一个注册表里(界面名、锚点、对应的提取器、是否需要决策),新增界面只加一条。
 
 ### 6.3 状态提取

@@ -88,8 +88,9 @@ def classify(boxes: list[TextBox]) -> str:
     if find(boxes, "机心巧匠", region=(0.45, 0.04, 0.17, 0.07)) and (
             has(boxes, "请选择1个强化效果|请选择一个强化效果") or find(boxes, "^确认选择$")):
         return "clara_mod"
-    if find(boxes, "^从师$", region=(0.40, 0.03, 0.25, 0.10)) and (
-            has(boxes, "作为师父|请选择一名角色") or find(boxes, "^确认选择$")):
+    if find(boxes, "请选择[1一]名角色作为师父", region=(0.25, 0.05, 0.50, 0.10)) or (
+            find(boxes, "^从师$", region=(0.40, 0.03, 0.25, 0.10)) and (
+            has(boxes, "作为师父|请选择一名角色") or find(boxes, "^确认选择$"))):
         return "mentor"
     if find(boxes, "^选择装备$", region=(0.43, 0.0, 0.21, 0.07)) and (
             has(boxes, "请选择1个|请选择一个") or find(boxes, "^查看详情$")):
@@ -132,7 +133,7 @@ ROLES = {
     "spotlight_replace": "strategic",
     "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
     "rail_shop": "chooser", "black_market": "chooser", "ranger": "chooser", "dance": "chooser", "garden": "chooser",
-    "hack": "chooser", "clara_mod": "chooser", "equipment_reward": "chooser", "mentor": "strategic",
+    "hack": "chooser", "clara_mod": "strategic", "equipment_reward": "chooser", "mentor": "strategic",
 }
 
 
@@ -237,7 +238,7 @@ OVERLAY_HINTS = {
 - 两列中心约 x 0.41 / 0.68,名字约 y 0.375,上方是效果说明。点名字选中,再点「确认选择」(约 0.777, 0.555)。""",
     "spotlight_replace": """这个角色已经有主角光环,确认就会替换掉原来的光环;不想替换就点「取消」。""",
     "clara_mod": """机心巧匠改装(克拉拉专属羁绊,每进 2 个新节点出一次;M7A S2 资料,待实测):3 张或 4 张强化卡选 1 张,
-每张卡右上标着金币价格,有的是 0(免费);选中后点「确认选择」。花金币改装要和经济计划(利息、升级)一起权衡。""",
+每张卡右上标着金币价格,有的是 0(免费);选中后点「确认选择」,确认会消耗卡面标出的金币。""",
     "mentor": """从师(主角光环选了「从师」后出现;M7A S2 资料,待实测):选 1 名角色当师父,主角受益于师父的羁绊效果。
 候选卡可以横向滚动(scroll),没选时上方写着「请选择一名角色」;选中后「确认选择」才亮。""",
     "equipment_reward": """选择装备(投资策略「独家代言」等给的;M7A S2 资料,待实测):几件进阶装备选 1 件,
@@ -249,10 +250,18 @@ GREY_CONFIRM = "「{text}」按钮现在是灰色的(还没选够,点了没用):
 # 投资环境 / 投资策略三张卡的标题行(M7A S2 版坐标换算,环境标题下沿按实机收紧:标题约 y 0.36、效果说明从 0.389 起;环境标题 y 0.333~0.383,策略标题 y 0.425~0.478,三列中心 x 0.24/0.5/0.76)
 INVEST_TITLE_Y = {"environment_choice": (0.333, 0.383), "strategy_choice": (0.425, 0.478)}
 INVEST_X = (0.24, 0.5, 0.76)
+PAIRED_INVEST_X = (514 / 1920, 1005 / 1920, 1409 / 1920)
+PAIRED_INVEST_TITLE_Y = (537 / 1080, 597 / 1080)
+PAIRED_INVEST_REFRESH = ((441 / 1920, 841 / 1080), (1135 / 1920, 841 / 1080))
 
 
 INVEST_REFRESH_ENV = (0.25, 0.86, 0.45, 0.10)      # 投资环境底部那行「剩余次数:1」(实机 0.402, 0.910)
 INVEST_REFRESH_STRAT = (0.76, 0.82)                 # 投资策略每张卡下面的「刷新次数N」(实机 y 0.791)
+
+
+def paired_investment(boxes: list[TextBox], screen: str) -> bool:
+    """泡泡狼的左一张、右两张布局,按顶部组标题判断。"""
+    return screen == "strategy_choice" and find(boxes, "^(选择一个|两个都带走)$", region=(0.15, 0.20, 0.70, 0.08)) is not None
 
 
 def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
@@ -268,6 +277,12 @@ def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
         b = find(boxes, "剩余次数|刷新次数", region=INVEST_REFRESH_ENV)
         if b is not None:
             out["env"] = int(re.sub(r"\D", "", b.text) or 0)
+    elif paired_investment(boxes, screen):
+        out["groups"] = []
+        for columns, (x, y) in zip(((1,), (2, 3)), PAIRED_INVEST_REFRESH, strict=True):
+            b = find(boxes, "刷新", region=(x + 18 / 1920, y - 31 / 1080, 158 / 1920, 62 / 1080))
+            digits = re.search(r"\d+", b.text) if b is not None else None
+            out["groups"].append({"columns": columns, "remaining": int(digits[0]) if digits else None})
     else:
         for i, cx in enumerate(INVEST_X):
             b = find(boxes, "刷新", region=(cx - 0.10, INVEST_REFRESH_STRAT[0], 0.20,
@@ -280,6 +295,12 @@ def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
 def investment_hint(boxes: list[TextBox], screen: str) -> str:
     """把刷新次数讲清楚交给模型:数字由程序读,规则由这里说明,免得模型以为不能刷新或者刷错对象。"""
     info = invest_refresh(boxes, screen)
+    if "groups" in info:
+        counts = [f"{'左侧' if i == 0 else '右侧'}刷新剩余 {g['remaining']} 次" if g["remaining"] is not None
+                  else f"{'左侧' if i == 0 else '右侧'}刷新次数没读出" for i, g in enumerate(info["groups"])]
+        return ("泡泡狼的投资策略布局(M7A 资料,待实测):左边「选择一个」选 1 张;右边「两个都带走」两张一起拿。"
+                "右侧两张共用刷新,刷新右侧会一起更换这两张,左侧不变;左侧刷新只换左侧一张。"
+                + "、".join(counts) + "。")
     if screen == "environment_choice" and info["env"] is not None:
         if info["env"] <= 0:
             return "刷新:这一屏的「剩余次数」已经是 0,只能在三张里选一张确认。"
@@ -299,8 +320,10 @@ def investment_hint(boxes: list[TextBox], screen: str) -> str:
 def investment_cards(boxes: list[TextBox], screen: str) -> int:
     """投资界面已经显示出标题的卡有几张。卡片是翻牌动画依次出现的,截图太快会少一张(2026-11-15 实机:第三张投资环境
     只认出了半句效果说明)。"""
-    y0, y1 = INVEST_TITLE_Y[screen]
-    return sum(1 for cx in INVEST_X if any(abs(b.x - cx) < 0.12 and y0 <= b.y <= y1
+    paired = paired_investment(boxes, screen)
+    y0, y1 = PAIRED_INVEST_TITLE_Y if paired else INVEST_TITLE_Y[screen]
+    centers = PAIRED_INVEST_X if paired else INVEST_X
+    return sum(1 for cx in centers if any(abs(b.x - cx) < 0.10 and y0 <= b.y <= y1
                                             and re.search(r"[一-鿿]{2}", b.text) for b in boxes))
 
 

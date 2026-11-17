@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -101,6 +102,24 @@ def match(img: np.ndarray, name: str, box: tuple[int, int, int, int]) -> float:
 
 
 PEPPY = "佩佩"
+FIXED_UNITS = frozenset((PEPPY, "杨叔"))
+
+
+@lru_cache(maxsize=1)
+def _fixed_templates() -> dict[str, np.ndarray]:
+    folder = ASSETS.parent / "fixed_units"
+    return {"杨叔": cv2.imread(str(folder / "yang_shu.png"))}
+
+
+def fixed_companion(card: np.ndarray) -> tuple[str | None, float]:
+    """按实机头像识别奇遇的后台占位单位,不根据占格位置猜身份。"""
+    image = cv2.resize(card, (128, 128))
+    for name, template_ in _fixed_templates().items():
+        if template_ is not None:
+            score = float(cv2.matchTemplate(image, template_, cv2.TM_CCOEFF_NORMED).max())
+            if score >= 0.9:
+                return name, score
+    return None, 0.0
 
 
 def is_peppy(img: np.ndarray, x: int, y: int) -> bool:

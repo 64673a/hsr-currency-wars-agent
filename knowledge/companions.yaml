@@ -10,7 +10,7 @@
 #   source        信息来源
 #
 # 伙伴很多、维护者也没有全部解锁,所以不事先采集完整列表:对局中遇到一个就自动记进本机档案
-# data/companions.local.yaml,核对后用 `cwagent companions export <名称>` 导出到这里。目前只有维护者告知的两条。
+# data/companions.local.yaml,核对后用 `cwagent companions export <名称>` 导出到这里。
 
 - name: 三月兔
   type: ""
@@ -31,3 +31,22 @@
   screens: [tea_break, commission]
   verified: true
   source: 游戏内「主角光环与奇遇详情」(2026-11-14 实测);维护者告知
+
+- name: 泡泡狼
+  type: ""
+  desc: ""
+  flow_effects:
+    - 投资策略出现「选择一个 / 两个都带走」布局:左侧 1 张,右侧 2 张一起选择
+    - 右侧两张投资策略共用一个刷新按钮
+  screens: [strategy_choice]
+  verified: false
+  source: M7A v2026.11.18 的配对投资策略界面;维护者整理文档,待游戏内核实
+
+- name: 杨叔
+  type: ""
+  desc: ""
+  flow_effects:
+    - 后台有杨叔头像的奇遇占位单位,与佩佩区分;不能拖动或出售
+  screens: []
+  verified: false
+  source: 维护者确认 2026-11-17 对局后台头像身份;机械支援效果待游戏内核实

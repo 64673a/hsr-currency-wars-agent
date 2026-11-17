@@ -37,6 +37,7 @@ from ..vision.ocr import Aliased, Ocr, TextBox, find, has
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
 from ..vision.items import read_items
+from ..vision.cards import FIXED_UNITS
 from ..vision.supply import describe as describe_supply
 from ..vision.supply import read_supply
 from ..vision.supply import required as supply_required
@@ -63,6 +64,9 @@ from .screens import (
     companion_name,
     investment_cards,
     investment_hint,
+    paired_investment,
+    PAIRED_INVEST_X,
+    PAIRED_INVEST_TITLE_Y,
     trait_shop,
     intro_text,
     meaningful,
@@ -276,6 +280,7 @@ class Runner:
         self._difficulty_llm = 0                               # 交给模型后在难度界面走了几步
         self._notice = ""                                      # 反射层处理掉的、下一个备战回合要告诉模型的事
         self._spotlight_opened: set[str] = set()               # 程序已经替模型打开过「选择主角」的节点
+        self._mentor_until = 0.0                              # 从师光环后的过渡备战画面等待截止时间
         self._facts: situation.RoleFacts | None = None         # 角色 → 羁绊、羁绊档位(局面要点用)
         self._last_hud = None                                  # 最近一次读到的备战数字
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
@@ -345,6 +350,10 @@ class Runner:
                 time.sleep(ACTION_GAP)
                 return f"点击「{target}」"
         elif a.type == "drag":
+            fixed = next((s for s in self._board or [] if s.name in FIXED_UNITS and any(
+                abs(s.x - x) < 0.03 and abs(s.y - y) < 0.05 for x, y in ((a.x, a.y), (a.x2, a.y2)))), None)
+            if fixed is not None:
+                return f"{fixed.name}是后台固定单位,不能拖动或换位,没有执行"
             if self.episode is not None and self.episode.screen == "spotlight_choice" and self._board:
                 if abs(a.x2 - 0.5) < 0.04 and abs(a.y2 - 0.407) < 0.06:
                     coords = {"front": ((0.417, 0.474, 0.528, 0.583), 0.574),
@@ -400,6 +409,26 @@ class Runner:
         under = [b for b in boxes if abs(b.x - x) <= max(b.w / 2, 0.012) and abs(b.y - y) <= max(b.h / 2, 0.012)]
         if any(re.search(r"刷新|确认|返回|放弃|跳过", b.text) for b in under):
             return None   # 卡片下面的「刷新」等按钮:不是选卡(Codex 2026-11-16:点刷新被记成选了「白银投资」)
+        if paired_investment(boxes, ep.screen):
+            if y >= 0.70:
+                return None
+            column = min(range(3), key=lambda i: abs(PAIRED_INVEST_X[i] - x))
+            columns = (0,) if column == 0 else (1, 2)
+            picked = []
+            for i in columns:
+                names = [b for b in boxes if PAIRED_INVEST_TITLE_Y[0] <= b.y <= PAIRED_INVEST_TITLE_Y[1]
+                         and abs(b.x - PAIRED_INVEST_X[i]) < 0.10]
+                entities = [e for b in names for e in index.by_name.get(b.text, []) if e.kind == kind]
+                if entities:
+                    picked.append(entities[0])
+            if picked:
+                name = "、".join(e.name for e in picked)
+                text = "\n".join(f"{e.name}:{e.text}" for e in picked)
+                if len(picked) < len(columns):
+                    text += "\n右侧另一张策略名称没认出,以截图为准。"
+                ep.chosen[kind] = (name, text)
+                return name
+            return None
         candidates = []
         for box in boxes:
             if not 0.18 < box.y < 0.65 or abs(box.x - x) > 0.16:
@@ -475,6 +504,9 @@ class Runner:
                               for b in board if not b.empty or b.mark]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
+            if ("杨叔" in names and "佩佩" not in names
+                    and re.search(r"(后台|固定|占位).{0,20}佩佩|佩佩.{0,20}(后台|固定|占位)", self.ledger.direction)):
+                lines.append("当前后台固定单位按头像识别为「杨叔」;笔记中把它称作佩佩的判断与当前识别不一致,请核对并修正笔记。")
             self._roles = names
         try:
             self._items = read_items(image, self.ocr)
@@ -1061,8 +1093,12 @@ class Runner:
         if ep.screen == "spotlight_choice":
             picked = ep.chosen.get("spotlights") or self._picked(ep.done, "spotlights")
             if picked:
+                if picked[0] == "从师":
+                    self._mentor_until = time.monotonic() + 18
                 role = f" → {ep.spotlight_role}" if ep.spotlight_role else "(角色未识别)"
                 self.ledger.add_fact(f"主角光环 {picked[0]}{role}({ep.node or '节点未知'} 选择):{picked[1]}")
+        if ep.screen == "mentor":
+            self._mentor_until = 0.0
         if ep.screen == "difficulty":
             return
         # 本局经历里留一行:程序记录的做了什么 + 模型自己写的回合小结(没写就用它最后的判断开头)
@@ -1178,9 +1214,6 @@ class Runner:
                     names = [p.role for p in packs if p.role] + [e for p in packs for e in p.equipment]
             except Exception as e:  # noqa: BLE001 - 认不出就照旧只给标号
                 self.log(f"[{record['step']}] 补给识别出错:{type(e).__name__}: {e}")
-        if screen == "strategy_choice" and has(boxes, "两个都带走"):
-            hints = (hints + "\n\n这一页是泡泡狼(奇遇伙伴)改过的布局(M7A 资料):左边「选择一个」只有 1 张卡;右边「两个都带走」"
-                     "是 2 张金卡,选右边就两张一起拿,两张共用一个刷新按钮。").strip()
         if screen == "strategy_choice":
             left = investment_hint(boxes, "strategy_choice")
             if left:
@@ -1423,6 +1456,22 @@ class Runner:
         self.trace.write(record)
         return "battle"
 
+    def _mentor_transition(self, screen: str) -> list[Action] | None:
+        """从师光环选完后先等后续页面,过渡备战画面不启动固定流程。"""
+        ep = self.episode
+        if screen in ("prepare", "mentor") and ep is not None and ep.screen == "spotlight_choice":
+            picked = ep.chosen.get("spotlights") or self._picked(ep.done, "spotlights")
+            if picked and picked[0] == "从师":
+                self.close_episode()
+        if screen == "mentor":
+            self._mentor_until = 0.0
+        if screen == "prepare" and self._mentor_until:
+            if time.monotonic() < self._mentor_until:
+                return [Action(type="wait", seconds=2, reason="从师光环后等待师父选择页")]
+            self._mentor_until = 0.0
+            self._notice = "选择了「从师」光环,等待后仍未识别出师父选择页;请核对当前截图。"
+        return None
+
     def step(self, n: int) -> str:
         frame = self.settle()
         boxes = self.ocr(frame.image)
@@ -1453,7 +1502,9 @@ class Runner:
         if screen == "battle":
             return self.watch_battle(n, record, sig)
 
-        actions = self.reflex(screen, frame.image, boxes, record, sig)
+        actions = self._mentor_transition(screen)
+        if actions is None:
+            actions = self.reflex(screen, frame.image, boxes, record, sig)
         if actions is not None:
             if screen in CLOSES:
                 self.close_episode()
