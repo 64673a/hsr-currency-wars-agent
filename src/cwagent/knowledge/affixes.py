@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -19,11 +20,33 @@ from .. import paths
 _HEADER = "# 本机读到的敌人词条(收集位面节点时点开词条自动记录,不入库)。核对后可以挪到 knowledge/affixes.yaml。\n"
 
 
+# 位面详情下方首领节点的说明;原来点开词条后把新出现的文字都当说明,这句常混进来(2026-11-17 本机档案里 3 条)
+_NODE_NOTE = re.compile(r"进入本节点时[,，]可为你的角色选择主角光环[,，]为其提供独特强化[,，]使其成为主角[!！]?")
+
+
+def valid_name(name: str) -> bool:
+    """词条名至少两个汉字(OCR 残字如「al」不算)。"""
+    return len(re.findall(r"[\u4e00-\u9fff]", name or "")) >= 2
+
+
+def clean_desc(desc: str) -> str:
+    """去掉混进来的节点说明,和句首图标被认成的字(「图」「回」「0一」「_」……):说明从第一个正文字开始。"""
+    text = _NODE_NOTE.sub("", desc or "").strip()
+    m = re.search(r"(我方|敌方|敌人|首领|普通|精英|商店|刷新|战斗|进入|每|当|第|在|所有|全体|【)", text)
+    if m and m.start() <= 3:
+        text = text[m.start():]
+    return text.strip()
+
+
 def _read(path: Path) -> list[dict]:
     if not path.exists():
         return []
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or []
-    return [d for d in data if isinstance(d, dict) and d.get("name")]
+    out = []
+    for d in data:
+        if isinstance(d, dict) and valid_name(d.get("name")):
+            out.append({**d, "desc": clean_desc(d.get("desc") or "")})
+    return out
 
 
 class AffixBook:
@@ -74,6 +97,9 @@ class AffixBook:
         return self.public
 
     def record(self, name: str, desc: str) -> None:
+        if not valid_name(name):
+            return
+        desc = clean_desc(desc)
         items = _read(self.local)
         entry = next((d for d in items if d["name"] == name), None)
         if entry is None:

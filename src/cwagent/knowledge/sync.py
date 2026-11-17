@@ -53,6 +53,16 @@ def load_affixes() -> list[dict]:
     return AffixBook().list()
 
 
+def refresh_local(db_path: Path | None = None) -> None:
+    """把本机档案里的奇遇伙伴、敌人词条刷进知识库(不联网、不动别的表):对局中读到新的就调用,网页知识库马上能看到。
+    原来只在 knowledge sync / rebuild 时才并进去(维护者 2026-11-17:对局里读到的伙伴和词条在知识库里看不到)。"""
+    from .build import affix_entries, companion_entries
+
+    path = db_path or paths.knowledge_db()
+    db.replace_entries(path, "companions", companion_entries(load_companions()))
+    db.replace_entries(path, "affixes", affix_entries(load_affixes()))
+
+
 def export_yaml(knowledge: Knowledge, out_dir: Path) -> None:
     """每类条目导出一个 YAML 文件,便于人工查看和比较版本差异。"""
     tmp = out_dir.with_name(out_dir.name + ".tmp")

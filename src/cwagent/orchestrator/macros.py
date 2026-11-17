@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from ..knowledge.affixes import clean_desc, valid_name
 from ..vision.ocr import Ocr, TextBox, find, has
 
 TOP_FIRST_NODE = (0.307, 0.058)     # 备战界面顶部节点轨道的第一个图标
@@ -65,13 +66,24 @@ def _panel_text(boxes: list[TextBox]) -> str:
     return " ".join(b.text for b in inside)
 
 
+def affix_tooltip(boxes: list[TextBox], affix: TextBox) -> str:
+    """点开词条后它正上方弹出的说明小框:第一行是词条名,下面左对齐的几行是说明(2026-11-17 实机截图)。
+    只取这个框里的字;位面详情里上一次点开的节点说明还开着,不能把新出现的字都当说明。"""
+    title = next((t for t in boxes if t.text == affix.text and affix.y - 0.12 < t.y < affix.y - 0.03), None)
+    if title is None:
+        return ""
+    left = title.x - title.w / 2
+    lines = [t for t in boxes if title.y < t.y < affix.y - 0.02 and abs((t.x - t.w / 2) - left) < 0.015]
+    return "".join(t.text for t in sorted(lines, key=lambda t: t.y))
+
+
 def read_affixes(device, ocr: Ocr, boxes: list[TextBox], book, log: Callable[[str], None],
                  debug: Path | None = None) -> list[tuple[str, str]]:
     """位面详情底部的敌人词条:[(名字, 说明)]。词条库里有说明的直接用;没有的点开读,说明存进词条库(维护者:官方接口
     没有词条数据,边点边存)。点开后界面上新出现的文字就是说明;每张说明截一张图到 debug 里,方便核对。"""
     x, y, w, h = AFFIX_ROW
     row = sorted((b for b in boxes if x <= b.x <= x + w and y <= b.y <= y + h and not b.text.startswith("敌人难度")
-                  and len(b.text) >= 2 and not b.text[0].isdigit()), key=lambda b: b.x)
+                  and valid_name(b.text) and not b.text[0].isdigit()), key=lambda b: b.x)
     out: list[tuple[str, str]] = []
     for b in row:
         desc = book.get(b.text) if book is not None else ""
@@ -81,14 +93,16 @@ def read_affixes(device, ocr: Ocr, boxes: list[TextBox], book, log: Callable[[st
             time.sleep(0.8)
             shot = device.grab()
             now = ocr(shot.image)
-            fresh = [t for t in now if t.text not in before and not (y <= t.y <= y + h)]
-            desc = "".join(t.text for t in sorted(fresh, key=lambda t: (round(t.y, 2), t.x)))
+            desc = affix_tooltip(now, b) or "".join(
+                t.text for t in sorted((t for t in now if t.text not in before and not (y <= t.y <= y + h)),
+                                       key=lambda t: (round(t.y, 2), t.x)))
             if debug is not None:
                 debug.mkdir(parents=True, exist_ok=True)
                 shot.image.convert("RGB").save(debug / f"{time.strftime('%H%M%S')}-词条-{b.text}.jpg", quality=80)
             device.click(*AFFIX_BLANK)
             time.sleep(0.6)
             boxes = ocr(device.grab().image)
+            desc = clean_desc(desc)
             if desc:
                 book.record(b.text, desc)
             if not has(boxes, "位面详情"):
@@ -170,20 +184,24 @@ def _bubble(ocr: Ocr, image: Image.Image) -> str:
     return " ".join(b.text for b in rows)
 
 
-def companion_of_bubble(text: str) -> tuple[str, str]:
+def companion_of_bubble(text: str, known=()) -> tuple[str, str]:
     """气泡文字 → (伙伴名, 效果原文)。
 
-    实机见过两种写法:「不死狼将在【幕后茶歇】找你聊聊新的委托。」(名字在句首)、
-    「你会在幕后茶歇遇到三月兔。」(名字在「遇到」后面)。都抽不到就返回 ("", 全文),名字交给调用方兜底。
+    实机见过的写法:「不死狼将在【幕后茶歇】找你聊聊新的委托。」(名字在句首)、
+    「你会在幕后茶歇遇到三月兔。」(名字在「遇到」后面)、「汪汪丹想要保护你！ 本局奇遇：？？？」(2026-11-17,
+    效果还没揭晓)。先找已知的伙伴名(开局界面读到的、档案里有的),再按句式抽;都抽不到就返回 ("", 全文)。
     """
-    m = re.match(r"^([\u4e00-\u9fffA-Za-z0-9·★]{2,10}?)(?:将在|会|找你)", text)
+    for name in sorted({n for n in known if n}, key=len, reverse=True):
+        if name in text:
+            return name, text
+    m = re.match(r"^([\u4e00-\u9fffA-Za-z0-9·★]{2,10}?)(?:将在|会|找你|想要|想|要|正在|已经|来)", text)
     if m:
         return m.group(1), text
     m = re.search(r"(?:遇到|遇见|碰上)([\u4e00-\u9fffA-Za-z0-9·★]{2,10})[。,，]", text)
     return (m.group(1), text) if m else ("", text)
 
 
-def read_companions(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] | None:
+def read_companions(device, ocr: Ocr, log: Callable[[str], None], debug: Path | None = None) -> list[str] | None:
     """点备战界面左上角的奇遇伙伴头像,在「主角光环与奇遇详情」页面左下角逐个悬停,读出本局的奇遇伙伴。
 
     奇遇伙伴的出场时机不定(维护者 2026-11-16);这一页左下角列着本局所有的伙伴,鼠标停在头像上会弹气泡,
@@ -200,7 +218,11 @@ def read_companions(device, ocr: Ocr, log: Callable[[str], None]) -> list[str] |
     for i in range(COMPANION_SLOTS):
         device.move(COMPANION_FIRST_X + i * COMPANION_STEP, COMPANION_Y)
         time.sleep(0.7)
-        text = _bubble(ocr, device.grab().image)
+        shot = device.grab()
+        text = _bubble(ocr, shot.image)
+        if text and text not in lines and debug is not None:   # 每个伙伴的气泡存一张,核对读得对不对
+            debug.mkdir(parents=True, exist_ok=True)
+            shot.image.convert("RGB").save(debug / f"{time.strftime('%H%M%S')}-奇遇伙伴-{len(lines) + 1}.jpg", quality=80)
         if not text or text in lines:
             misses += 1
             if misses >= 2:      # 连续两个位置读不到就认为没有更多伙伴

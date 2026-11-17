@@ -268,34 +268,8 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
         if s.get("icon"):
             icons["spotlights"][sid] = s["icon"]
 
-    # ---------------------------------------------------------------- 奇遇(人工整理)
-    companion_entries = []
-    for i, comp in enumerate(companions or []):
-        cid = str(comp.get("id") or i + 1)
-        desc = comp.get("desc") or ""
-        flow_notes = comp.get("flow_effects") or []  # 人工记录的流程影响,如新节点、新界面
-        effects = effect_tags(desc + " " + " ".join(flow_notes))
-        data = {"id": cid, "name": comp.get("name", ""), "type": comp.get("type", ""), "desc": desc,
-                "flow_effects": flow_notes, "screens": comp.get("screens") or [], "effects": effects,
-                "flow": bool(flow_notes) or bool(FLOW_EFFECTS & set(effects)),
-                "verified": bool(comp.get("verified")), "source": comp.get("source", "人工整理"),
-                "origin": comp.get("origin", ""), "seen_count": int(comp.get("seen_count") or 0)}
-        companion_entries.append(Entry(cid, data["name"], data,
-                                       summary={"type": data["type"], "desc": desc or "；".join(flow_notes),
-                                                "effects": effects, "flow": data["flow"],
-                                                "verified": data["verified"]},
-                                       sort=i, search=" ".join([data["name"], data["type"], desc, *flow_notes])))
-
-    # ---------------------------------------------------------------- 敌人词条(对局中收集位面节点时点开读到的)
-    affix_entries = []
-    for i, a in enumerate(affixes or []):
-        desc = a.get("desc") or ""
-        data = {"id": str(i + 1), "name": a.get("name", ""), "desc": desc, "origin": a.get("origin", ""),
-                "source": a.get("source", ""), "seen_count": int(a.get("seen_count") or 0),
-                "last_seen": a.get("last_seen", "")}
-        affix_entries.append(Entry(data["id"], data["name"], data,
-                                   summary={"desc": desc, "origin": data["origin"]},
-                                   sort=i, search=" ".join([data["name"], desc])))
+    companion_list = companion_entries(companions)
+    affix_list = affix_entries(affixes)
 
     # ---------------------------------------------------------------- 指引卡
     guides = []
@@ -316,10 +290,43 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
     return Knowledge(
         meta=meta,
         entries={"roles": roles, "traits": traits, "equipment": equipment, "augments": augments,
-                 "portals": portals, "spotlights": spotlights, "companions": companion_entries,
-                 "affixes": affix_entries, "guides": guides},
+                 "portals": portals, "spotlights": spotlights, "companions": companion_list,
+                 "affixes": affix_list, "guides": guides},
         trait_layers=trait_layers, recipes=recipes, icons=icons, warnings=warnings,
     )
+
+
+def companion_entries(companions: list[dict[str, Any]] | None) -> list[Entry]:
+    """奇遇伙伴(人工整理 + 本机遇到的)→ 知识库条目。对局中读到新伙伴时也用它单独刷新这张表。"""
+    out = []
+    for i, comp in enumerate(companions or []):
+        cid = str(comp.get("id") or i + 1)
+        desc = comp.get("desc") or ""
+        flow_notes = comp.get("flow_effects") or []  # 人工记录的流程影响,如新节点、新界面
+        effects = effect_tags(desc + " " + " ".join(flow_notes))
+        data = {"id": cid, "name": comp.get("name", ""), "type": comp.get("type", ""), "desc": desc,
+                "flow_effects": flow_notes, "screens": comp.get("screens") or [], "effects": effects,
+                "flow": bool(flow_notes) or bool(FLOW_EFFECTS & set(effects)),
+                "verified": bool(comp.get("verified")), "source": comp.get("source", "人工整理"),
+                "origin": comp.get("origin", ""), "seen_count": int(comp.get("seen_count") or 0)}
+        out.append(Entry(cid, data["name"], data,
+                         summary={"type": data["type"], "desc": desc or "；".join(flow_notes),
+                                  "effects": effects, "flow": data["flow"], "verified": data["verified"]},
+                         sort=i, search=" ".join([data["name"], data["type"], desc, *flow_notes])))
+    return out
+
+
+def affix_entries(affixes: list[dict[str, Any]] | None) -> list[Entry]:
+    """敌人词条(对局中收集位面节点时点开读到的)→ 知识库条目。"""
+    out = []
+    for i, a in enumerate(affixes or []):
+        desc = a.get("desc") or ""
+        data = {"id": str(i + 1), "name": a.get("name", ""), "desc": desc, "origin": a.get("origin", ""),
+                "source": a.get("source", ""), "seen_count": int(a.get("seen_count") or 0),
+                "last_seen": a.get("last_seen", "")}
+        out.append(Entry(data["id"], data["name"], data, summary={"desc": desc, "origin": data["origin"]},
+                         sort=i, search=" ".join([data["name"], desc])))
+    return out
 
 
 def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[str, Any] | None:

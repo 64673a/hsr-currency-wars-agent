@@ -64,6 +64,27 @@ def write(path: Path, knowledge: Knowledge, raw: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def replace_entries(path: Path, kind: str, entries) -> None:
+    """只换掉一类条目(对局中读到新的奇遇伙伴、敌人词条时用),其他表不动;meta 里的条数跟着改。"""
+    if kind not in KINDS or not path.exists():
+        return
+    con = sqlite3.connect(path)
+    try:
+        with con:
+            con.execute(f"DELETE FROM {kind}")
+            con.executemany(
+                f"INSERT INTO {kind} (id, name, sort, search, summary, data) VALUES (?, ?, ?, ?, ?, ?)",
+                [(e.id, e.name, e.sort, e.search.lower(), json.dumps(e.summary, ensure_ascii=False),
+                  json.dumps(e.data, ensure_ascii=False)) for e in entries])
+            row = con.execute("SELECT value FROM meta WHERE key = 'counts'").fetchone()
+            if row:
+                counts = json.loads(row[0])
+                counts[kind] = len(entries)
+                con.execute("UPDATE meta SET value = ? WHERE key = 'counts'", (json.dumps(counts, ensure_ascii=False),))
+    finally:
+        con.close()
+
+
 class KnowledgeDB:
     """只读查询。每次调用打开新连接,可在多线程中使用。"""
 

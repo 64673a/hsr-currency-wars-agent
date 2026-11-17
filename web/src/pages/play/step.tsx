@@ -203,6 +203,18 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
           <p className={styles.foldText}>{step.plane_nodes}</p>
         </section>
       )}
+      {step.affixes?.length ? (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>敌人词条</h2>
+          <p className={styles.foldText}>{step.affixes.map((a) => `${a.name}：${a.desc || '没读到说明'}`).join('\n')}</p>
+        </section>
+      ) : null}
+      {step.companions?.length ? (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>本局奇遇伙伴</h2>
+          <p className={styles.foldText}>{step.companions.map((c) => `${c.name}：${c.text}`).join('\n')}</p>
+        </section>
+      ) : null}
       {step.state && <StateView state={step.state} />}
 
       {d?.analysis && (

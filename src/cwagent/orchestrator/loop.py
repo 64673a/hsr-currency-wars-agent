@@ -118,6 +118,15 @@ FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect)不占
 GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
 
 
+def _companion_book() -> list[dict]:
+    try:
+        from ..knowledge.companions import CompanionBook
+
+        return CompanionBook().all()
+    except Exception:  # noqa: BLE001 - 档案读不出就只靠句式认名字
+        return []
+
+
 def _tail(text: str, room: int) -> str:
     """超长时留后面 room 个字,前面用「…」代替。"""
     return text if len(text) <= room else "…" + text[-(room - 1):]
@@ -260,6 +269,7 @@ class Runner:
         self._last_hud = None                                  # 最近一次读到的备战数字
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
         self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
+        self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
         self._checked_planes: set[str] = set()                 # 战略检查点:已经过了开头的位面
         self._checked_boss: set[str] = set()                   # 战略检查点:已经过了的首领节点
@@ -745,6 +755,9 @@ class Runner:
                 self.ledger.node_kinds.update(node_types(lines))
                 self.ledger.add_fact(f"位面 {plane} 的节点(从左到右):" + " | ".join(compact_node(t) for t in lines))
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
+            if affixes:
+                self._macro_detail["affixes"] = [{"name": n, "desc": d} for n, d in affixes]
+                self._refresh_knowledge()
             if affixes and affixes != self._affixes:
                 # 有的词条会左右全局方向(如「虚数熄火」不用虚数主 C、「能量逃逸」不用靠能量放大招的主 C,维护者举例)
                 self._affixes = affixes
@@ -776,13 +789,22 @@ class Runner:
         time.sleep(1.0)
         return "打开主角光环选择(首领节点要选完光环才能出战)"
 
+    def _refresh_knowledge(self) -> None:
+        """对局中读到的伙伴、词条刷进知识库(网页知识库马上能看到);失败不影响对局。"""
+        try:
+            from ..knowledge.sync import refresh_local
+
+            refresh_local()
+        except Exception as e:  # noqa: BLE001
+            self.log(f"刷新知识库里的伙伴、词条出错:{type(e).__name__}: {e}")
+
     def _read_companions(self) -> None:
         """点左上角读本局的奇遇伙伴(详情页左下角),记进本局经历。整局一次。"""
         if self._companion_done or self._companion_tries >= 2:
             return
         self._companion_tries += 1
         try:
-            lines = read_companions(self.device, self.ocr, self.log)
+            lines = read_companions(self.device, self.ocr, self.log, debug=self.trace.root / "debug")
         except Exception as e:  # noqa: BLE001 - 读伙伴出错不耽误备战
             self.log(f"读奇遇伙伴出错:{type(e).__name__}: {e}")
             lines = None
@@ -796,11 +818,15 @@ class Runner:
             # 开局界面上那条只有名字(见 reflex 的 run_intro)
             self.ledger.add_fact(f"本局奇遇伙伴(详情页读到):{text}")
             self.log(f"本局奇遇伙伴:{text[:300]}")
-            if self.on_companion:
-                for line in lines:      # 名字和效果一起交给档案(本机 companions.local.yaml)
-                    name, desc = companion_of_bubble(line)
-                    if name:
-                        self.on_companion(name, desc)
+            known = {self.ledger.companion} | {c.get("name", "") for c in _companion_book()}
+            found = []
+            for line in lines:      # 名字和效果一起交给档案(本机 companions.local.yaml)
+                name, desc = companion_of_bubble(line, known)
+                found.append({"name": name or "(没认出名字)", "text": line})
+                if name and self.on_companion:
+                    self.on_companion(name, desc)
+            self._macro_detail["companions"] = found
+            self._refresh_knowledge()
 
     def _open_crystals(self, image) -> str | None:
         """开晶矿,返回结果说明;没有晶矿返回 None。没开成只记在当前节点上,下个节点照常再开
@@ -865,6 +891,7 @@ class Runner:
                     self.ledger.add_fact(f"奇遇伙伴 {name}(开局界面,效果见之后读到的那条)")
                     if self.on_companion:
                         self.on_companion(name, "")          # 开局界面只有名字,效果等第一位面读完再补
+                        self._refresh_knowledge()
                 intro = intro_text(boxes)[:600]
                 if intro and intro != self.ledger.intro:
                     self.ledger.intro = intro
@@ -1145,6 +1172,8 @@ class Runner:
                 self.log(f"[{n}] 固定流程出错:{type(e).__name__}: {e}")
             if did:
                 record["actions"] = [did]
+                record.update(self._macro_detail)     # 读到的词条、伙伴,网页这一步显示详情
+                self._macro_detail = {}
                 if did.startswith("收集") and self.ledger.plane_nodes:
                     record["plane_nodes"] = self.ledger.plane_nodes
                 self._last_sig = sig

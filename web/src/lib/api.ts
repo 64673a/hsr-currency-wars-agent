@@ -232,6 +232,8 @@ export interface StepRecord {
   battle?: BattleRecord;
   battle_summary?: string;
   plane_nodes?: string;
+  affixes?: { name: string; desc: string }[];
+  companions?: { name: string; text: string }[];
   note?: string;
   error?: string;
 }
