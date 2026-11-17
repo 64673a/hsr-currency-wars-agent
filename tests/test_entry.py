@@ -53,7 +53,7 @@ def test_live_game_is_never_sent_back_to_the_menu(monkeypatch):
     assert nav.plan("quit_dialog", image, [], in_run=False) is None
 
 
-@pytest.mark.parametrize("screen", ["home", "mode_select", "difficulty", "run_intro", "prepare", "battle", "supply"])
+@pytest.mark.parametrize("screen", ["home", "mode_select", "mode_resume", "difficulty", "run_intro", "prepare", "battle", "supply"])
 def test_currency_wars_pages_skip_the_entry_route(monkeypatch, screen):
     monkeypatch.setattr(entry, "targets", lambda _: pytest.fail("已在货币战争页面,不应重走导航"))
     nav = entry.EntryNavigator()
@@ -110,3 +110,18 @@ def test_real_guide_page_enters_the_selected_currency_wars():
     nav = entry.EntryNavigator()
     action = nav.plan("other", image, Ocr()(image), in_run=False)[0]
     assert action.type == "click" and action.x > .7 and action.y > .7 and nav.joining
+
+
+def test_saved_match_resumes_without_returning_to_world(tmp_path):
+    from cwagent.orchestrator.loop import Runner, Trace
+    from cwagent.orchestrator.screens import classify
+
+    text = words(("进行中", .08, .18), ("标准博弈", .34, .145), ("当前进度 1-3", .84, .8),
+                 ("结束并结算", .73, .89), ("继续进度", .88, .89))
+    assert classify(text) == "mode_resume"
+    r = Runner(None, None, Trace(tmp_path / "run"), ocr=object(), settle=False)
+    actions = r.reflex("mode_resume", Image.new("RGB", (1920, 1080)), text, {}, set())
+    assert len(actions) == 1 and actions[0].text == "继续进度"
+    assert not r.entry.actions
+    text[1] = TextBox("超频博弈", .34, .145, .05, .02, .9)
+    assert r.reflex("mode_resume", None, text, {}, set())[0].type == "pause"

@@ -105,7 +105,7 @@ CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、�
 # 当成弹窗后每个备战回合都等满 8 秒、跳过了开晶矿和收集节点)
 BOARD_TEXT = re.compile(r"^(前台区域|后台区域|备战阶段|试用|打开商店|有商品可购买|\d+(/\d+)*)$|备战席已满")
 # 出现这些界面说明之前的回合已经结束
-CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "previous_run"}
+CLOSES = {"battle", "battle_end", "node_result", "settlement", "run_intro", "home", "mode_select", "mode_resume", "previous_run"}
 
 
 @dataclass
@@ -976,6 +976,10 @@ class Runner:
                 return None
             case "mode_select":
                 return [Action(type="click_text", text="标准博弈"), Action(type="click_text", text="进入标准博弈")]
+            case "mode_resume":
+                if find(boxes, "^标准博弈$", region=(0.28, 0.10, 0.65, 0.12)) is not None:
+                    return [Action(type="click_text", text="继续进度", reason="接回已保存的标准博弈")]
+                return [Action(type="pause", reason="已有对局的模式未确认为标准博弈,保留进度")]
             case "settlement":
                 record["note"] = "对局结束"
                 if find(boxes, "^前往结算$"):

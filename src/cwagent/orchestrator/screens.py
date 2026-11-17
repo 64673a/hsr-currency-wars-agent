@@ -119,6 +119,8 @@ def classify(boxes: list[TextBox]) -> str:
         return "prepare"
     if has(boxes, "开始「货币战争」"):
         return "home"
+    if find(boxes, "^继续进度$") and has(boxes, "当前进度"):
+        return "mode_resume"
     if find(boxes, "^进入(标准|超频)博弈$"):
         return "mode_select"
     if has(boxes, "^开始对局$") and has(boxes, "敌人难度"):
@@ -147,6 +149,7 @@ SCREEN_NAMES = {
     "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
     "dance": "梦境交织共舞", "garden": "奇兽花园", "hack": "骇入效果",
     "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备",
+    "mode_resume": "继续已有对局",
     "other": "其他界面",
 }
 
