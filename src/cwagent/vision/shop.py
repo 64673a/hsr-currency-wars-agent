@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import re
 
+import cv2
+import numpy as np
+from PIL import Image
+
 from .board import SHOP_NAME_Y, SHOP_X
-from .ocr import TextBox, find
+from .ocr import Ocr, TextBox, find
 
 HALF_CARD = 0.065
 NAME = r"[\u3400-\u9fffA-Za-z&＆·•.★☆]{2,18}(?:\d{1,3})?"   # M7A 的角色名写法
@@ -60,6 +64,35 @@ def read_shop(boxes: list[TextBox]) -> list[tuple[int, str | None, int | None]]:
         if name is not None and price is None:
             name, price = _split(name)
         out.append((i, name, price))
+    return out
+
+
+def read_prices(image: Image.Image, ocr: Ocr) -> dict[int, int]:
+    """每张卡名字栏右边「金币图标 + 价格」里的价格:{格子: 价格}。
+
+    价格是单个数字,整屏识别经常检测不到(2026-11-16 Codex 那局五张卡的价格全没读出来,模型只能看图):
+    按 hud.read_gold 的办法先按颜色找到金币图标,只把它右边的白字放大识别。卡片买走了(没有金币图标)就不给。
+    """
+    from .hud import _ocr_mask
+
+    img = np.asarray(image.convert("RGB"))
+    H, W = img.shape[:2]
+    out = {}
+    for i, cx in enumerate(SHOP_X, start=1):
+        crop = img[int(SHOP_NAME_Y[0] * H):int(SHOP_NAME_Y[1] * H) + 2, int(cx * W):int((cx + 0.075) * W)]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_RGB2HSV)
+        coin = ((hsv[..., 0] >= 12) & (hsv[..., 0] <= 35) & (hsv[..., 1] >= 120) & (hsv[..., 2] >= 120)).astype(np.uint8)
+        n, _, stats, _ = cv2.connectedComponentsWithStats(coin)
+        if n < 2:
+            continue
+        k = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        if stats[k, cv2.CC_STAT_AREA] < 60 * (H / 540) ** 2:
+            continue
+        d = hsv[:, stats[k, cv2.CC_STAT_LEFT] + stats[k, cv2.CC_STAT_WIDTH] + 1:]
+        white = ((d[..., 2] >= 200) & (d[..., 1] <= 60)).astype(np.uint8) * 255
+        text = re.sub(r"\D", "", _ocr_mask(ocr, white).replace("O", "0").replace("o", "0"))
+        if re.fullmatch(r"\d{1,2}", text) and 0 < int(text) <= 30:
+            out[i] = int(text)
     return out
 
 

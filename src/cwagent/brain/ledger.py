@@ -77,6 +77,7 @@ class RunLedger:
     lessons: list[str] = field(default_factory=list)         # 想起的经验(记忆):第一次相关时附上
     recalled: set[str] = field(default_factory=set)          # 已经附上的记忆 id
     delivered: dict[str, int] = field(default_factory=dict)  # 外部 agent 已接收的档案条目数
+    delivered_state: dict[str, str] = field(default_factory=dict)   # 外部 agent 上次收到的当前状态各小节
 
     def node(self, name: str) -> NodeRecord:
         if name not in self.nodes:
@@ -118,7 +119,17 @@ class RunLedger:
         return self.node_kinds.get(node, set()) | self.node_kinds.get(next_node(node) or "", set())
 
     def equip(self, role: str, item: str) -> None:
-        self.equipped.setdefault(role, []).append(item)
+        """程序执行 equip 成功后记一笔。一个角色最多穿 3 件(规则卡),多出来的说明前面的记录已经过期,只留最近 3 件。"""
+        items = self.equipped.setdefault(role, [])
+        items.append(item)
+        del items[:-3]
+
+    def unequip(self, role: str | None = None) -> None:
+        """角色卖掉、或者用了拆装道具:去掉对应记录(role 为 None 时全部清空,拆的是谁看不出来)。"""
+        if role is None:
+            self.equipped.clear()
+        else:
+            self.equipped.pop(role, None)
 
     def set_direction(self, text: str) -> None:
         self.direction = text.strip()[:MAX_DIRECTION]
@@ -137,19 +148,22 @@ class RunLedger:
 
     history_len = stable_len   # 旧名字
 
-    def render_state(self) -> str:
-        parts = []
+    def state_sections(self) -> list[tuple[str, str]]:
+        """当前状态的各小节:(标题, 内容)。"""
+        out = []
         if self.guide:
-            parts.append("### 当前参考的攻略(只是方向,买谁、怎么站、给谁装备看局面判断)\n" + self.guide)
+            out.append(("当前参考的攻略(只是方向,买谁、怎么站、给谁装备看局面判断)", self.guide))
         if self.equipped:
-            parts.append("### 角色身上的装备(程序记录,角色卖掉或换下后可能不准)\n" + "\n".join(
-                f"- {r}:{'、'.join(items)}" for r, items in self.equipped.items()))
+            out.append(("程序给角色穿上的装备(只记程序执行的 equip;用拆装道具、卖掉角色后会清掉,其他变化以截图为准)",
+                        "\n".join(f"- {r}:{'、'.join(items)}" for r, items in self.equipped.items())))
         if self.items:
-            parts.append("### 备战席里还没开的道具(程序看过的选项)\n" + "\n".join(
-                f"- 备战席{i}号 {name}:{'、'.join(opts)}" for i, (name, opts) in sorted(self.items.items())))
-        parts.append("### 我的笔记(只有你能改:在 run_notes 里整体改写,写方向、主 C、经济计划、待办)\n"
-                     + (self.direction or "(还没写)"))
-        return "## 当前状态\n" + "\n\n".join(parts)
+            out.append(("备战席里还没开的道具(程序看过的选项)", "\n".join(
+                f"- 备战席{i}号 {name}:{'、'.join(opts)}" for i, (name, opts) in sorted(self.items.items()))))
+        out.append(("我的笔记(只有你能改:在 run_notes 里整体改写,写方向、主 C、经济计划、待办)", self.direction or "(还没写)"))
+        return out
+
+    def render_state(self) -> str:
+        return "## 当前状态\n" + "\n\n".join(f"### {t}\n{c}" for t, c in self.state_sections())
 
     def render(self) -> str:
         """从稳定到易变:整局已知事实、本局经历(只追加,命中缓存),条目说明、想起的经验(只追加),当前状态。"""
@@ -163,7 +177,7 @@ class RunLedger:
         return "\n\n".join(parts)
 
     def render_delta(self) -> str:
-        """外部 agent 保留历史对话,这里只交付上次之后新增的内容和当前状态。"""
+        """外部 agent 保留历史对话,这里只交付上次之后新增的内容;当前状态只发变了的小节(攻略卡片很长,不变就不再发)。"""
         parts = []
         if not self.delivered:
             parts.append("## 本局\n难度 " + (self.difficulty or "?"))
@@ -174,8 +188,20 @@ class RunLedger:
             if len(items) > start:
                 parts.append(f"## {title}\n" + "\n".join(items[start:]))
             self.delivered[key] = len(items)
-        parts.append(self.render_state())
+        sections = self.state_sections()
+        changed = [(t, c) for t, c in sections if self.delivered_state.get(t) != c]
+        gone = [t for t in self.delivered_state if t not in {t for t, _ in sections}]
+        self.delivered_state = dict(sections)
+        if changed or gone:
+            parts.append("## 当前状态(只列有变化的小节,其余和之前相同)\n" + "\n\n".join(
+                [f"### {t}\n{c}" for t, c in changed] + [f"### {t}\n(已清空)" for t in gone]))
+        else:
+            parts.append("## 当前状态\n(和之前相同)")
         return "\n\n".join(parts)
+
+    def mark_delivered(self, key: str) -> None:
+        """回合中途已经随观察发出去的内容(新出现的条目),下个回合开场不再作为新增发一遍。"""
+        self.delivered[key] = len(getattr(self, key))
 
 
 def compact_node(line: str) -> str:

@@ -54,6 +54,8 @@ class PrepareResult:
     equipped: list[tuple[str, str]] = field(default_factory=list)   # (角色, 装备):这次给谁装了什么
     seen: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号:(道具名, 选项)
     taken: list[int] = field(default_factory=list)                         # 已经开掉的道具格子
+    sold: list[str] = field(default_factory=list)                          # 卖掉的角色名(清掉他的装备记录)
+    ready_image: object = None   # 同一轮先做了别的操作再出战时,点出战前的画面(出战时的金币要按它读)
 
     def lineup(self) -> str:
         if self.occupied is None:
@@ -339,7 +341,9 @@ class PrepareExecutor:
                             self.sleep(GAP)
                             boxes = self._look()
                         if occupied is not None:
-                            occupied.pop(src, None)
+                            gone = occupied.pop(src, None)
+                            if gone:
+                                out.sold.append(gone)
                         if a.zone != "bench" and self.deployed:
                             self.deployed = shift(self.deployed, -1)
                         out.results.append(text)
@@ -378,6 +382,8 @@ class PrepareExecutor:
                         out.results.append(note)
                         out.observe = True
                         break
+                    if others and self.frame is not None:
+                        out.ready_image = self.frame.image
                     self._click(out, *READY_BUTTON)
                     self.sleep(1.0)
                     blocked = self.answer_understaffed(out, self._look())

@@ -119,11 +119,11 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
                 rw.stars2 = sum(1 for b in field_ if (b.get("stars") or 0) >= 2)
         if screen == "battle" and r.get("battle_summary"):
             summary = r["battle_summary"]
-            m = re.search(r"进度 (\d+)% → (\d+)%", summary)
+            m = re.search(r"进度 (\d+)% → (?:最后读到 )?(\d+)%", summary)
             if m:
                 rw.progress = f"{m.group(1)}%→{m.group(2)}%"
-            deaths = re.search(r"阵亡 (\d+) 次", summary)
-            rw.deaths = int(deaths.group(1)) if deaths else None
+            deaths = re.search(r"阵亡(?:横幅)? (\d+) 次", summary)   # 只数认出的横幅;旧记录里「另有 N 次行动值骤降」不算
+            rw.deaths = int(deaths.group(1)) if deaths else (0 if re.search(r"没有看到阵亡提示|没认出阵亡横幅", summary) else None)
         if screen == "node_result":
             texts = r.get("texts") or []
             joined = " ".join(texts)
@@ -136,7 +136,15 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
                 rw.hp_after = hp
     if pending_choices and order:
         rows[order[-1]].choices.extend(pending_choices)
-    return [rows[n] for n in order]
+    out = [rows[n] for n in order]
+    # 没截到结算界面的战斗(进度最后读到 87% 不等于输了):看下一个节点的进场血量,胜利固定回 2 点,输了扣血
+    for i, rw in enumerate(out):
+        if rw.result or not rw.progress or rw.hp_in is None:
+            continue
+        nxt = next((o.hp_in for o in out[i + 1:] if o.hp_in is not None), None)
+        if nxt is not None and nxt != rw.hp_in:
+            rw.result = "胜(按血量)" if nxt > rw.hp_in else "负(按血量)"
+    return out
 
 
 def _cell(v) -> str:
@@ -158,9 +166,9 @@ def render(run: Path) -> str:
     lines = [f"# 对局报表 {run.name}", "",
              f"- 模型 {meta.get('profile') or meta.get('model') or '?'},难度 {meta.get('difficulty') or '?'},"
              f"结果 {meta.get('result') or '?'}",
-             f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result == '胜' for r in fights)} 场;"
+             f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
              f"模型调用 {calls} 次,输入 {tokens} token", "",
-             "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡 | 胜负 | 战后血量 | 调用 | 输入token |",
+             "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡横幅 | 胜负 | 战后血量 | 调用 | 输入token |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         level = _cell(r.level_in) + (f"→{r.level_out}" if r.level_out and r.level_out != r.level_in else "")

@@ -16,13 +16,13 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from ..brain.ledger import RunLedger, compact_node, node_types
+from ..brain.ledger import MAX_LINE, RunLedger, compact_node, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import Guide, GuideAdvisor, card
@@ -32,9 +32,12 @@ from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value
 from ..vision.board import Portraits, Slot, back_hint, detail_name, format_board
 from ..vision.buttons import lit
-from ..vision.hud import read_crop, read_hud
+from ..vision.hud import read_crop, read_gold, read_hud
 from ..vision.ocr import Aliased, Ocr, TextBox, find
-from ..vision.shop import format_shop, read_shop, two_star
+from ..vision.items import catalog as item_catalog
+from ..vision.items import describe as describe_items
+from ..vision.items import read_items
+from ..vision.shop import format_shop, read_prices, read_shop, two_star
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
@@ -103,6 +106,21 @@ class RunOptions:
     approve: Callable[[Decision], bool] | None = None   # 逐步确认(返回 False 则跳过本次操作)
     stop: threading.Event = field(default_factory=threading.Event)
     on_step: Callable[[dict], None] | None = None       # 每一步的记录,给网页实时推送
+
+
+ITEM_BAR = (0.87, 0.08, 0.22)   # 右上角道具栏:x 下限、y 范围(实机 960 宽截图里两个道具在 x≈0.905、0.95;商店第 5 张卡到 x≈0.885)
+
+
+GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、冶金炉:用了会取下或重掷角色身上的装备
+ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
+SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
+FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect)不占决策次数
+GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
+
+
+def _tail(text: str, room: int) -> str:
+    """超长时留后面 room 个字,前面用「…」代替。"""
+    return text if len(text) <= room else "…" + text[-(room - 1):]
 
 
 def _plain(o):
@@ -240,6 +258,8 @@ class Runner:
         self._spotlight_opened: set[str] = set()               # 程序已经替模型打开过「选择主角」的节点
         self._facts: situation.RoleFacts | None = None         # 角色 → 羁绊、羁绊档位(局面要点用)
         self._last_hud = None                                  # 最近一次读到的备战数字
+        self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
+        self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
         self._checked_planes: set[str] = set()                 # 战略检查点:已经过了开头的位面
         self._checked_boss: set[str] = set()                   # 战略检查点:已经过了的首领节点
@@ -309,6 +329,9 @@ class Runner:
                                 self.episode.spotlight_role = slot.name or "角色未识别"
             self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
+            if a.x >= ITEM_BAR[0] and ITEM_BAR[1] <= a.y <= ITEM_BAR[2]:
+                time.sleep(ACTION_GAP)
+                return self._used_item(a)
         elif a.type == "scroll":
             x, y = (a.x if a.x is not None else 0.5), (a.y if a.y is not None else 0.5)
             self.device.scroll(x, y, a.notches or -3)
@@ -322,12 +345,34 @@ class Runner:
         time.sleep(ACTION_GAP)
         return action_text(a)
 
+    def _used_item(self, a: Action) -> str:
+        """从右上角道具栏拖出了道具:说清拖的是什么、拖到了谁身上;会动装备的道具让程序记的穿戴作废。"""
+        item = next((it for it in self._items if abs(it.x - a.x) < 0.02 and abs(it.y - a.y) < 0.035), None)
+        target = None
+        for slot in self._board or []:
+            if slot.name and not slot.empty and abs(slot.x - a.x2) < 0.03 and abs(slot.y - a.y2) < 0.05:
+                target = slot
+                break
+        what = f"道具「{item.name}」" if item else "道具栏里的道具(没认出是哪个)"
+        onto = f"{ZONE_NAMES.get(target.zone, target.zone)}{target.index + 1}号 {target.name}" if target else \
+            f"({a.x2:.3f},{a.y2:.3f})"
+        text = f"把{what}拖到 {onto}"
+        if item is None or item.id in GEAR_ITEMS:
+            # 拆装扳手、冶金炉会取下或重掷装备:拖到谁身上就清掉谁的记录,看不出是谁就全部作废
+            self.ledger.unequip(target.name if target and item is not None else None)
+            text += ";程序记的这名角色的装备已清掉,以截图为准" if target and item is not None else \
+                ";程序记的角色装备已全部清掉,以截图为准"
+        return text + "(结果看新截图)"
+
     def _remember_choice(self, x: float, y: float, boxes) -> str | None:
         ep = self.episode
         kind = {"environment_choice": "portals", "strategy_choice": "augments", "spotlight_choice": "spotlights"}.get(ep.screen if ep else "")
         index = getattr(self.brain, "index", None)
         if not kind or index is None or not 0.18 < y < 0.82:
             return None
+        under = [b for b in boxes if abs(b.x - x) <= max(b.w / 2, 0.012) and abs(b.y - y) <= max(b.h / 2, 0.012)]
+        if any(re.search(r"刷新|确认|返回|放弃|跳过", b.text) for b in under):
+            return None   # 卡片下面的「刷新」等按钮:不是选卡(Codex 2026-11-16:点刷新被记成选了「白银投资」)
         candidates = []
         for box in boxes:
             if not 0.18 < box.y < 0.65 or abs(box.x - x) > 0.16:
@@ -372,6 +417,14 @@ class Runner:
         cards: list = []
         if shop:
             cards = read_shop(boxes)
+            if any(name and price is None for _, name, price in cards):
+                try:
+                    prices = read_prices(image, self.ocr)
+                except Exception as e:  # noqa: BLE001 - 价格读不出就照旧不给
+                    prices = {}
+                    self.log(f"读商店价格出错:{type(e).__name__}: {e}")
+                cards = [(i, name, price if price is not None else (prices.get(i) if name else None))
+                         for i, name, price in cards]
             self._shop_names = [name for _, name, _ in cards if name]
             lines.append("商店(从左到右;「2星」是价格为费用 3 倍的二星卡):" + format_shop(cards, self._role_costs()))
         self._board = None
@@ -393,6 +446,20 @@ class Runner:
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
             names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
             self._roles = names
+        try:
+            self._items = read_items(image, self.ocr)
+        except Exception as e:  # noqa: BLE001 - 道具栏认不出就不给
+            self._items = []
+            self.log(f"读道具栏出错:{type(e).__name__}: {e}")
+        if self._items:
+            state["items"] = [{"slot": it.slot, "id": it.id, "name": it.name, "count": it.count, "score": it.score}
+                              for it in self._items]
+            lines.append(describe_items(self._items))
+            for it in self._items:   # 每种道具第一次出现时附上官方说明(回合中途出现的直接写在这里)
+                desc = (item_catalog().get(it.id) or {}).get("desc", "").replace("\n", "")
+                if desc and self.ledger.add_entry(f"道具:{it.name}", f"- [道具] {it.name}:{desc}") \
+                        and self.episode is not None:
+                    lines.append(f"(新道具)【{it.name}】{desc}")
         if self.equipment is not None and self.equipment_reader is not None:
             items = self.equipment_reader.read(image)
             state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]
@@ -654,6 +721,12 @@ class Runner:
             return None   # 没有要做的
         ready = self.ready_prepare()
         if ready is None:
+            if plane != self._surveyed and self._survey_waits.get(node, 0) < SURVEY_WAITS:
+                # 新位面还没收集节点和词条:先别叫模型(Codex 2026-11-16 那局 1-1 开局弹窗没静下来,
+                # 固定流程被跳过,模型在 1-1 决策时没有节点序列和词条,1-2 才补上)
+                self._survey_waits[node] = self._survey_waits.get(node, 0) + 1
+                time.sleep(1.5)
+                return f"等界面静下来再收集本位面的节点(第 {self._survey_waits[node]} 次)"
             return None
         image = ready[0].image
         if plane != self._surveyed:
@@ -945,16 +1018,22 @@ class Runner:
             tail = f" | 判断:{ep.analysis[:150]}" + ("…" if len(ep.analysis) > 150 else "")
         else:
             tail = ""
+        # 一条最长 MAX_LINE 字,超出时只截操作流水的前段(完整流水在 steps.jsonl),小结和阵容留全:
+        # 原来整条截到 600 字,操作和阵容长的时候末尾的小结整个丢掉(Codex 2026-11-16 复现)
         if ep.screen == "prepare" and ep.node:
             rec = self.ledger.node(ep.node)
-            parts = [f"进场 {rec.start}" if rec.start and not rec.logged else "",
-                     f"操作:{done[-300:]}" if done else "没有操作",
-                     f"阵容:{rec.lineup or self._lineup()}" if rec.lineup or self._lineup() else ""]
+            lineup = (rec.lineup or self._lineup())[:200]
+            head = f"[{ep.node} 备战] " + (f"进场 {rec.start};" if rec.start and not rec.logged else "")
+            rest = (f";阵容:{lineup}" if lineup else "") + tail
+            room = max(60, MAX_LINE - len(head) - len(rest) - 4)
+            ops = f"操作:{_tail(done, room)}" if done else "没有操作"
             rec.logged, rec.lineup = True, ""
-            self.ledger.add(f"[{ep.node} 备战] " + ";".join(p for p in parts if p) + tail)
+            self.ledger.add(head + ops + rest)
         elif done or tail:
             name = SCREEN_NAMES.get(ep.screen, "其他界面")
-            self.ledger.add(f"[{ep.node or '开局'} {name}] {done[-300:] or '没有操作'}{tail}")
+            head = f"[{ep.node or '开局'} {name}] "
+            room = max(60, MAX_LINE - len(head) - len(tail) - 4)
+            self.ledger.add(head + (_tail(done, room) if done else "没有操作") + tail)
 
     def _picked(self, done: list[str], kind: str) -> tuple[str, str] | None:
         """选择界面最后点中的条目(按「点击「名字」」的文字查知识库):(名字, 官方描述)。点的是坐标就认不出,返回 None。
@@ -1029,6 +1108,12 @@ class Runner:
             left = investment_hint(boxes, "strategy_choice")
             if left:
                 hints = (hints + "\n\n" + left).strip()
+        if opening and screen in CHOICE_SCREENS and screen != "environment_choice" and self._last_hud is not None:
+            # 选择界面上看不到金币、生命和阵容,判断时要回翻旧回合(Codex 2026-11-16):附上最近一次备战读到的
+            last = f"\n\n## 最近一次备战时读到的(不是这个界面上的)\n{self._last_hud.text()}"
+            if self._lineup():
+                last += f"\n阵容:{self._lineup()}"
+            hints = (hints + last).strip()
         if screen in CHOICE_SCREENS:
             grey = [b.text for b in boxes if b.text in ("确认", "确认选择") and not lit(frame.image, b)]
             if grey:
@@ -1133,13 +1218,19 @@ class Runner:
         for note in decision.notes:   # 本局学到的,之后的回合也要知道
             self.ledger.add(f"[{self._node or '开局'} {note.kind}] {note.title}:{note.content}")
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
+        if (decision.actions and all(a.type in ("zoom", "inspect") for a in decision.actions)
+                and ep.free_looks < FREE_LOOKS):
+            # 只看不操作的一轮不占备战决策次数(Codex 2026-11-16:1-1 放大一次、查看两次后就被强制出战)
+            ep.free_looks += 1
+            ep.max_turns += 1
         if ep.screen == "prepare":
             return self._finish_prepare(record, decision.actions, boxes, sig, screen)
         return self.finish(record, screen, decision.actions, boxes, sig)
 
     def _set_vision(self, ep: Episode, step: int, screen: str, image: Image.Image, boxes, record) -> None:
         picture, marks = annotate(image, boxes, screen=screen, shop_open=self.prepare.shop_now(boxes),
-                                  counts=self.prepare.counts, equipment=(record.get("state") or {}).get("equipment"))
+                                  counts=self.prepare.counts, equipment=(record.get("state") or {}).get("equipment"),
+                                  items=self._items if screen == "prepare" else None)
         self._vision_marks = {m.id: m for m in marks}
         ep.images = [picture]
         ep.annotation = legend(marks)
@@ -1163,6 +1254,11 @@ class Runner:
         self._marks = []
         ep = self.episode
         result = self.prepare.run(actions, boxes, self._board, final=ep is not None and ep.turns >= ep.max_turns)
+        if (ep is not None and result.observe and not result.ready and ep.turns >= ep.max_turns
+                and ep.grace < GRACE_TURNS):
+            # 最后一轮被程序打断(合成后装备栏重排、上场没成功):给模型看一眼结果再出战,不直接强制出战
+            ep.grace += 1
+            ep.max_turns += 1
         record["actions"] = result.results
         marks = result.marks + self._marks
         if marks:
@@ -1170,6 +1266,8 @@ class Runner:
         if self.episode is not None:
             self.episode.done += [r for r in result.results if not r.startswith("等待")]
             self._results = result.results
+        for role in result.sold:
+            self.ledger.unequip(role)
         for role, item in result.equipped:
             self.ledger.equip(role, item)
         self.ledger.items.update(result.seen)
@@ -1178,7 +1276,13 @@ class Runner:
         if result.ready:
             if self.episode is not None and self.episode.node and result.lineup():
                 self.ledger.node(self.episode.node).lineup = result.lineup()
-            self._ready_facts = situation.at_ready(self._board, self._last_hud,
+            hud = self._last_hud
+            if result.ready_image is not None and hud is not None:
+                # 最后一轮连着买卖再出战:金币按点出战前那一刻读(Codex 2026-11-16:出战前买了 3 张,记录还是操作前的 14)
+                gold = read_gold(result.ready_image, self.ocr)
+                if gold is not None:
+                    hud = replace(hud, gold=gold)
+            self._ready_facts = situation.at_ready(self._board, hud,
                                                    (self.prepare.counts or {}).get("front", 4), self.prepare.deployed)
             self.close_episode()
         self._same = 0

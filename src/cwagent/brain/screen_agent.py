@@ -176,6 +176,8 @@ class Episode:
     request_messages: list[Message] = field(default_factory=list)
     chosen: dict[str, tuple[str, str]] = field(default_factory=dict)
     spotlight_role: str = ""
+    free_looks: int = 0                                # 只做了 zoom / inspect 的轮数(不占决策次数,有上限)
+    grace: int = 0                                     # 最后一轮操作被打断(合成后重排、操作没成功)后多给的一轮
 
     @property
     def last_turn(self) -> bool:
@@ -277,6 +279,8 @@ class ScreenAgent:
         parts.append(self._ask(episode))
         text = "\n\n".join(parts)
         if episode.book is not None:
+            if self.endpoint(episode.role).format == "external":
+                episode.book.mark_delivered("entries")   # 这里已经发过,下个回合开场别再当新条目发一遍
             episode.snapshot = episode.book.render() + "\n\n" + text
         return text
 

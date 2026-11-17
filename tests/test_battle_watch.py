@@ -47,6 +47,8 @@ def test_watcher_counts_deaths_and_events(monkeypatch):
         banner = None
         if 2.0 <= t < 3.0:
             banner = "受到致命攻击，战斗倒计时减少！"         # 停留约 1 秒,连续几帧都看得到,只算一次
+        elif 3.5 <= t < 4.0:
+            banner = "onxn819超击破"                         # 伤害数字、特效字凑出的碎字,不算敌方提示
         elif 4.0 <= t < 4.6:
             banner = "守护者之影的责罚降临了！"
         av = 300 - int(t * 5) - (35 if t >= 2.0 else 0)
@@ -83,7 +85,7 @@ def test_watcher_counts_deaths_and_events(monkeypatch):
     assert 8.0 <= rep.seconds <= 9.0              # 条目消失 2.5 秒后整屏核对
     assert len(screens) <= 3                       # 整屏识别很少(每 8 秒一次 + 结束时)
     text = rep.text()
-    assert "阵亡 1 次(第 2 秒,行动值 295→252)" in text and "守护者之影" in text
+    assert "认出阵亡横幅 1 次(第 2 秒,行动值 295→252)" in text and "守护者之影" in text
 
 
 def test_watcher_stops():
@@ -96,13 +98,12 @@ def test_watcher_stops():
     assert rep.end == "stopped"
 
 
-def test_drop_count_flags_missed_banner():
-    """横幅漏检时也要让模型知道:行动值的 35 的整数倍骤降是独立信号(2026-11-16 实机两场一次横幅都没认出)。"""
+def test_av_jumps_are_not_deaths():
+    """阵亡只认横幅(维护者 2026-11-16「别猜」):行动值跳变多半是误读,不再按阵亡算,也不在文字里提。"""
     rep = bw.BattleReport()
     rep.samples = [(0.0, 145, None), (1.0, 105, None), (2.0, 88, None), (3.0, 101, None), (4.0, 55, None)]
-    assert rep.drop_count() == 2                       # 145→105(-40)、88→101 上涨不算、101→55(-46)
-    rep.deaths = [{"t": 1.0, "av": 145, "after": 105}]
+    rep.curve = [(a, None) for _, a, _ in rep.samples]
     text = rep.text()
-    assert "阵亡 1 次" in text and "另有 1 次行动值骤降" in text
-    rep.deaths = [{"t": 1.0, "av": 145, "after": 105}, {"t": 4.0, "av": 101, "after": 55}]
-    assert "另有" not in rep.text()                    # 两个信号对得上就不再提
+    assert "没认出阵亡横幅" in text and "骤降" not in text and "按阵亡算" not in text
+    rep.deaths = [{"t": 1.0, "av": 145, "after": 105}]
+    assert "认出阵亡横幅 1 次(第 1 秒,行动值 145→105)" in rep.text()

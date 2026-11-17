@@ -32,7 +32,10 @@ def test_battle_summary():
     assert read_progress([TextBox("1-4 40%", 0.4, 0.03, 0.05, 0.02, 0.9)]) == 40
     assert read_progress([TextBox("40%", 0.9, 0.5, 0.05, 0.02, 0.9)]) is None
     text = summarize([(164, 0), (164, 10), (150, 20), (110, 30), (None, 45), (40, 60), (0, 70)])
-    assert text.startswith("进度 0% → 70%;行动值 164 → 150 → 110 → 40 → 0") and "有 3 次单次下降" in text
+    assert text == "进度 0% → 最后读到 70%;行动值 164 → 最后读到 40"
+    # 单次误读(实机「104 → 6 → 90」)不影响首尾,也不报「骤降」
+    text = summarize([(104, None), (6, None), (90, None), (6, None), (69, None), (63, None), (35, None)])
+    assert text == "行动值 90 → 最后读到 63" and "阵亡" not in text
 
 
 def test_avatar_roles_skins_and_paths():

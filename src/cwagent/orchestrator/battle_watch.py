@@ -6,6 +6,9 @@
   每 0.25 秒按颜色找横幅(只看一小块,很便宜),找到再对横幅那一条做文字识别确认;同一条横幅只算一次。
   同样的横幅也用来报敌方机制(对局截图里见过「守护者之影的责罚降临了!」「【堕神之血•亚婆离】受到攻击,所有其他
   敌方目标行动提前并锁定攻击者景元!」),这些记成战斗事件;红色的大招特效颜色也像,靠文字区分。
+  实机第一次认出是 2026-11-16(Codex 那局 1-7,runs/20261116-182223_外部-agent/debug/190927-阵亡横幅.jpg):
+  颜色 HSV 约 (2, 152, 194),横幅那几行色占比 0.6~1,在阈值内。漏检率还不知道(横幅被大招特效挡住时颜色、文字都可能认不出),
+  所以「没认出」不等于没阵亡;也不拿行动值的跳变去补(见 vision/battle.py summarize)。
 - 行动值:左侧行动顺序条里的「⧗N 数字」,每秒读一次;被挡住读不到的跳过。阵亡后 0.6 秒再读一次,看掉了多少。
 - 进度:顶部节点号旁的百分比,每 2 秒读一次(只识别顶部那一条)。
 战斗结束:行动值条目(金色六边形)连续 2.5 秒看不到,或者每 8 秒一次的整屏识别认出已经不是战斗界面。
@@ -97,15 +100,6 @@ class BattleReport:
     end: str = ""          # 怎么结束的:screen=<界面> / gone / timeout / stopped
     candidates: int = 0    # 颜色像横幅、文字没确认的次数(调检测用)
 
-    def drop_count(self) -> int:
-        """行动值单次下降 ≥35 的次数:1 回合 100 行动值,阵亡一次 -35、两个同时 -70。
-
-        这是独立于横幅的第二个信号(横幅只停留约 1 秒,被大招特效挡住时颜色和文字都可能认不出来,
-        2026-11-16 实机有两场一次横幅都没认出),两个对不上时要让模型知道。
-        """
-        av = [a for _, a, _ in self.samples if a is not None]
-        return sum(1 for prev, a in zip(av, av[1:]) if prev - a >= 35)
-
     def text(self) -> str:
         parts = [summarize(self.curve)]
         if self.deaths:
@@ -113,12 +107,9 @@ class BattleReport:
             for d in self.deaths:
                 drop = f",行动值 {d['av']}→{d['after']}" if d.get("av") is not None and d.get("after") is not None else ""
                 items.append(f"第 {d['t']:.0f} 秒{drop}")
-            parts.append(f"阵亡 {len(self.deaths)} 次(" + ";".join(items) + ")")
+            parts.append(f"认出阵亡横幅 {len(self.deaths)} 次(" + ";".join(items) + ")")
         else:
-            parts.append("没有看到阵亡提示")
-        missed = self.drop_count() - len(self.deaths)
-        if missed > 0:
-            parts.append(f"另有 {missed} 次行动值骤降 ≥35,原因未确认,不计入阵亡")
+            parts.append("没认出阵亡横幅")
         if self.events:
             parts.append("战斗提示:" + " / ".join(self.events))
         parts.append(f"用时 {self.seconds:.0f} 秒")
@@ -143,6 +134,7 @@ class BattleWatcher:
         self.debug = debug
         self.saved = 0
         self.saved_miss = 0    # 颜色像横幅、文字没确认的存图数(核对为什么漏检用)
+        self.saved_frames = 0  # 阵亡横幅那一刻的整张画面
 
     def _save(self, image: Image.Image, rows: tuple[int, int], label: str) -> None:
         if self.debug is None:
@@ -160,6 +152,16 @@ class BattleWatcher:
         crop.save(self.debug / f"{time.strftime('%H%M%S')}-{label}.jpg", quality=80)
         if not label.startswith("候选"):
             self.saved += 1
+
+    def _save_frame(self, image: Image.Image, label: str) -> None:
+        """阵亡横幅那一刻的整张画面(缩到 960 宽),核对检测对不对:是谁倒下、有没有同时漏掉别的横幅。"""
+        if self.debug is None or self.saved_frames >= DEBUG_CROPS:
+            return
+        self.saved_frames += 1
+        img = image.convert("RGB").copy()
+        img.thumbnail((960, 540))
+        self.debug.mkdir(parents=True, exist_ok=True)
+        img.save(self.debug / f"{time.strftime('%H%M%S')}-{label}.jpg", quality=80)
 
     def run(self) -> BattleReport:
         rep = BattleReport()
@@ -191,8 +193,9 @@ class BattleWatcher:
                     rep.deaths.append(death)
                     pending_after = (now + AV_AFTER_DEATH, death)
                     self._save(image, rows, "阵亡横幅")
+                    self._save_frame(image, "阵亡横幅-全图")
                     self.log(f"战斗第 {rep.seconds:.0f} 秒:有角色阵亡(第 {len(rep.deaths)} 次)")
-                elif len(re.sub(r"\W", "", text)) >= 6:
+                elif len(re.findall(r"[\u4e00-\u9fff]", text)) >= 4:   # 伤害数字、「超击破」之类的碎字不算提示
                     next_banner = now + BANNER_GAP
                     if len(rep.events) < MAX_EVENTS and all(SequenceMatcher(None, text, e).ratio() < 0.6
                                                             for e in rep.events):

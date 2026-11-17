@@ -1,0 +1,209 @@
+# 货币战争消耗品(右上角道具栏)。官方文案来自游戏解包数据;维护者确认 S1、S2 的道具没有变化(2026-11-17),
+# S2 另有绑定羁绊的变体(开拓·、阿哈·、幻月·、奇美拉投影仪、奇巧零食)。
+# 来源:static.nanoka.cc/hsr/4.7.51/zh|en/currency/item.json(type=Consumable),与 FortOfFans/HSRMaps
+# chs/modes/currencywars/GridFightConsumables.json 的 ConsumableDesc 一致(2026-11-17 取)。
+# 图标:src/cwagent/assets/items/<id>.png(Fandom 英文 wiki「Equipment <英文名>.png」,128px;开拓·、阿哈·六种变体 wiki 上没有)。
+# rule:游戏里的道具规则类型;params:Copy 是 [费用上限, 复制星级(, 限定羁绊 id)],UpgradeByRefresh 是 [初始次数, 每刷新几次 +1]。
+# stack:同名能否叠放;consume:用后是否消失。
+- id: 350101
+  name: 拆装扳手
+  en: Disassembly Wrench
+  rule: ''
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到一个角色上使用，可以取下该角色穿戴的所有装备。
+
+    该道具使用后消失。'
+- id: 350102
+  name: 精密拆装扳手
+  en: Precision Disassembly Wrench
+  rule: ''
+  params: []
+  stack: false
+  consume: false
+  desc: '拖动到一个角色上使用，可以取下该角色穿戴的所有装备，可无限次使用。
+
+    拥有该道具后，再获得拆装扳手时，改为获得1金币。'
+- id: 350103
+  name: 冶金炉
+  en: Smelting Furnace
+  rule: Roll
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到一件装备上使用，使其变为同类型的随机装备。
+
+    拖动到一个角色上使用，取下所有装备并使其变为同类型的随机装备。
+
+    该道具使用后消失。'
+- id: 350104
+  name: 特权赋予卡
+  en: Special Privilege Card
+  rule: Upgrade
+  params: []
+  stack: false
+  consume: true
+  desc: '拖动到一件进阶装备上使用，使其变为对应的特权装备。
+
+    拖动到一个角色上使用，从角色已穿戴的进阶装备中选择一件变为特权装备。
+
+    该道具使用后消失。'
+- id: 350105
+  name: 员工投影仪
+  en: Staff Projector
+  rule: Copy
+  params:
+  - 3
+  - 1
+  stack: true
+  consume: true
+  desc: '拖动到一个3费及以下的角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350106
+  name: 完美投影仪
+  en: Perfect Projector
+  rule: Copy
+  params:
+  - 5
+  - 1
+  stack: true
+  consume: true
+  desc: '拖动到一个任意角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350107
+  name: 好运令牌
+  en: Good Fortune Token
+  rule: GainRecommendEquip
+  params:
+  - 4
+  stack: false
+  consume: true
+  desc: '拖动到一个角色上使用，从该角色的四件推荐进阶装备中选择一件获得。
+
+    该道具使用后消失。'
+- id: 350110
+  name: 千星特权卡
+  en: Astropolis Privilege Card
+  rule: UpgradeByRefresh
+  params:
+  - 1
+  - 15
+  stack: false
+  consume: false
+  desc: '拖动到一件进阶装备上使用，使其变为对应的特权装备。初始具有一定使用次数。
+
+    每刷新15次商店后增加1次使用次数。'
+- id: 350108
+  name: 实习生投影仪
+  en: Intern Projector
+  rule: Copy
+  params:
+  - 1
+  - 1
+  stack: true
+  consume: true
+  desc: '拖动到一个1费角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350111
+  name: 幻月·主角光环
+  en: 'Phantasmoon: Plot Armor'
+  rule: SpotLight
+  params: []
+  stack: false
+  consume: true
+  desc: '拖动到角色上使用，可以选择1次主角光环。
+
+    该道具使用后消失。'
+- id: 350112
+  name: 开拓·实习生投影仪
+  en: 'Trailblaze: Intern Projector'
+  rule: Copy
+  params:
+  - 1
+  - 1
+  - 100502
+  stack: true
+  consume: true
+  desc: '拖动到一个1费【开拓银轨】角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350113
+  name: 开拓·员工投影仪
+  en: 'Trailblaze: Staff Projector'
+  rule: Copy
+  params:
+  - 3
+  - 1
+  - 100502
+  stack: true
+  consume: true
+  desc: '拖动到一个3费及以下的【开拓银轨】角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350114
+  name: 开拓·完美投影仪
+  en: 'Trailblaze: Perfect Projector'
+  rule: Copy
+  params:
+  - 5
+  - 1
+  - 100502
+  stack: true
+  consume: true
+  desc: '拖动到一个任意【开拓银轨】角色上使用，在备战席创造一个该角色的1星复制。
+
+    该道具使用后消失。'
+- id: 350115
+  name: 阿哈·拆装扳手
+  en: 'Aha: Disassembly Wrench'
+  rule: ''
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到阿哈指示器上使用，可以取下所有阿哈装备。
+
+    该道具使用后消失。'
+- id: 350116
+  name: 阿哈·冶金炉
+  en: 'Aha: Smelting Furnace'
+  rule: Roll
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到阿哈指示器上使用，可选择一件阿哈装备将其重铸，并在四件同类型装备中选择一件作为重铸结果。
+
+    该道具使用后消失。'
+- id: 350117
+  name: 阿哈·特权赋予卡
+  en: 'Aha: Special Privilege Card'
+  rule: Upgrade
+  params: []
+  stack: false
+  consume: true
+  desc: '拖动到阿哈指示器上使用，可选择一件阿哈进阶装备，使其变为对应的特权装备。
+
+    该道具使用后消失。'
+- id: 350118
+  name: 奇美拉投影仪
+  en: Chimera Projector
+  rule: CopyChimera
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到奇兽花园上使用，选择1个角色专属奇美拉，获得它的1星复制。
+
+    该道具使用后消失。'
+- id: 350119
+  name: 奇巧零食
+  en: Trick Snack
+  rule: UpgradeChimera
+  params: []
+  stack: true
+  consume: true
+  desc: '拖动到奇兽花园上使用，选择1个角色专属奇美拉，使其提升1星。
+
+    该道具使用后消失。'

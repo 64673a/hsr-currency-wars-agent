@@ -49,7 +49,8 @@ def crosses(image: Image.Image) -> list[tuple[float, float]]:
 
 
 def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open: bool = False,
-             counts: dict | None = None, equipment: list | None = None) -> tuple[ImageInput, list[Mark]]:
+             counts: dict | None = None, equipment: list | None = None,
+             items: list | None = None) -> tuple[ImageInput, list[Mark]]:
     marks: list[Mark] = []
 
     def add(x, y, label):
@@ -64,6 +65,8 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
         for item in equipment or []:
             i = item["index"] if isinstance(item, dict) else item.index
             add(*cell_center(i), f"装备{i}")
+        for it in items or []:   # 右上角道具栏(vision.items.Item)
+            add(it.x, it.y, f"道具{it.slot} {it.name}")
     for b in boxes:
         if not b.text.strip() or b.y > 0.95 or b.score < 0.55:
             continue

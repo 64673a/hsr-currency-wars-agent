@@ -24,6 +24,8 @@ class RoleFacts:
 
     traits_of: dict[str, list[str]] = field(default_factory=dict)
     layers: dict[str, list[int]] = field(default_factory=dict)
+    star_req: dict[str, int] = field(default_factory=dict)   # 只数这个星级及以上的人(千星商会:每上场 1 位 3 星激活 1 级)
+    exact: set[str] = field(default_factory=set)              # 人数恰好等于某档才激活(少女乐队:恰好 1 或 4 人)
 
     @classmethod
     def load(cls, db: Path) -> "RoleFacts":
@@ -35,9 +37,16 @@ class RoleFacts:
             for name, summary in con.execute("SELECT name, summary FROM roles"):
                 out.traits_of[_key(name)] = list(json.loads(summary).get("traits") or [])
             for name, data in con.execute("SELECT name, data FROM traits"):
-                counts = sorted({int(l["count"]) for l in json.loads(data).get("layers") or [] if l.get("count")})
+                d = json.loads(data)
+                counts = sorted({int(l["count"]) for l in d.get("layers") or [] if l.get("count")})
                 if counts:
                     out.layers[name] = counts
+                head = (d.get("desc") or "").split("\n")[0]
+                m = re.search(r"每上场\s*1\s*位\s*(\d)\s*星", head)
+                if m:
+                    out.star_req[name] = int(m.group(1))
+                if "恰好" in head:
+                    out.exact.add(name)
         except (sqlite3.Error, ValueError, KeyError):
             pass
         finally:
@@ -115,18 +124,39 @@ def shop_upgrades(shop: list[tuple[int, str | None, int | None]], count: Counter
 
 
 def traits(board: list, facts: RoleFacts) -> list[str]:
-    """场上(前台 + 后台)的羁绊:当前人数和档位,`*` 是已激活的档。同名只算一次;星徽等装备带来的羁绊没算进去。"""
-    names = {_key(s.name) for s in board if s.zone in ("front", "back") and s.name}
+    """场上(前台 + 后台)的羁绊:当前人数和档位,`*` 是已激活的档。同名只算一次;星徽等装备带来的羁绊没算进去。
+
+    计数规则特殊的按官方说明算(2026-11-16 实机:千星商会按人头算成「1 人已激活」,游戏里是 1/2):
+    千星商会只数 3 星的人,少女乐队只在人数恰好等于某档时激活。
+    """
+    stars: dict[str, int] = {}
+    for s in board:
+        if s.zone in ("front", "back") and s.name:
+            stars[_key(s.name)] = max(stars.get(_key(s.name), 0), s.stars or 0)
     count: Counter = Counter()
-    for n in names:
+    heads: Counter = Counter()
+    for n, st in stars.items():
         for t in facts.traits_of.get(n, []):
-            count[t] += 1
+            heads[t] += 1
+            if st >= facts.star_req.get(t, 0):
+                count[t] += 1
     lines = []
-    for t, c in sorted(count.items(), key=lambda kv: (-kv[1], kv[0])):
+    for t, h in sorted(heads.items(), key=lambda kv: (-count[kv[0]], kv[0])):
+        c = count[t]
         layers = facts.layers.get(t) or []
-        marks = ",".join(f"{l}*" if c >= l else str(l) for l in layers)
-        nxt = next((l for l in layers if l > c), None)
-        lines.append(f"{t} {c} 人" + (f"(档位 {marks})" if marks else "") + (f",下一档差 {nxt - c} 人" if nxt else ""))
+        on = (lambda l: c == l) if t in facts.exact else (lambda l: c >= l)
+        marks = ",".join(f"{l}*" if on(l) else str(l) for l in layers)
+        if t in facts.star_req:
+            text = f"{t} {facts.star_req[t]} 星 {c} 人(场上 {h} 人)"
+        else:
+            text = f"{t} {c} 人"
+        text += f"(档位 {marks})" if marks else ""
+        if t in facts.exact:
+            text += ",人数恰好等于某档才激活"
+        else:
+            nxt = next((l for l in layers if l > c), None)
+            text += f",下一档差 {nxt - c} 人" if nxt else ""
+        lines.append(text)
     return lines
 
 

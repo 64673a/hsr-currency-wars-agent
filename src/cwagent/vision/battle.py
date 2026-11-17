@@ -70,17 +70,22 @@ def read_progress(boxes: list[TextBox]) -> int | None:
     return None
 
 
+def _steady(values: list[int]) -> int:
+    """头尾各取三次读数的中位数:单次误读(2026-11-16 实机常见「104 → 6 → 90」)不影响结果。"""
+    return sorted(values)[len(values) // 2]
+
+
 def summarize(curve: list[tuple[int | None, int | None]]) -> str:
-    """一场战斗的行动值 / 进度采样 → 给模型看的一行。"""
+    """一场战斗的行动值 / 进度采样 → 给模型看的一行。只给首尾,不给中间的跳变。
+
+    中间的跳变不能拿来推阵亡:2026-11-16 两局实机里单次下降 ≥35 的十几处,要么是一次误读(下一秒又回到原值),
+    要么是大招动画挡住、几十秒没读到;唯一认出阵亡横幅的那场一次行动值都没读到。阵亡只认横幅(battle_watch)。
+    """
     av = [a for a, _ in curve if a is not None]
     pr = [p for _, p in curve if p is not None]
     parts = []
     if pr:
-        parts.append(f"进度 {pr[0]}% → {pr[-1]}%")
+        parts.append(f"进度 {pr[0]}% → 最后读到 {pr[-1]}%")
     if av:
-        seq = [av[0]] + [a for prev, a in zip(av, av[1:]) if a != prev]
-        parts.append("行动值 " + " → ".join(map(str, seq[:16])) + (" …" if len(seq) > 16 else ""))
-        drops = [prev - a for prev, a in zip(seq, seq[1:]) if prev - a >= 35]
-        if drops:
-            parts.append(f"有 {len(drops)} 次单次下降 ≥35(可能有角色阵亡)")
+        parts.append(f"行动值 {_steady(av[:3])} → 最后读到 {_steady(av[-3:])}")
     return ";".join(parts) if parts else "没有读到行动值和进度"
