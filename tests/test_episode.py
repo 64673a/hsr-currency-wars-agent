@@ -25,6 +25,18 @@ def agent():
     return ScreenAgent(endpoint(), FakeIndex(), [], "规则")
 
 
+def test_selected_environment_is_a_memory_cue(tmp_path):
+    from cwagent.memory import MemoryStore
+
+    a = agent()
+    a.memories = MemoryStore(local_path=tmp_path / "memory.sqlite").public()
+    book = RunLedger(environment="经济严重过热")
+    ep = Episode(id=1, key=("prepare", "1-1"), screen="prepare", node="1-1", role="tactical", max_turns=4)
+    _, recalled = a.opening(ep, [], ledger=book, nodes={"reward"}, hints="战略检查点(1-1)")
+    assert "m-20261114-piggy-bank" in recalled and "m-20261116-piggy-chase" in recalled
+    assert "m-20261114-feiying-stack" not in recalled
+
+
 def reply(args=None, *, call_id="c1", raw=None):
     calls = [ToolCall(id=call_id, name="act", arguments=args)] if args is not None else []
     return LLMResponse(text="", tool_calls=calls, message_raw=raw or {"role": "assistant", "reasoning_content": "想"})

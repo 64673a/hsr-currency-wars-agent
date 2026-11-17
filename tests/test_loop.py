@@ -10,6 +10,51 @@ from cwagent.vision.board import SHOP_X
 from cwagent.vision.ocr import TextBox
 
 
+def test_settle_waits_through_a_delayed_animation(tmp_path, monkeypatch):
+    from cwagent.orchestrator import loop
+
+    black = Image.new("RGB", (192, 108), "black")
+    flash = Image.new("RGB", (192, 108), "white")
+
+    class Frames:
+        def __init__(self):
+            self.frames = iter([black, black, flash, black, black, black, black])
+            self.count = 0
+
+        def grab(self):
+            self.count += 1
+            return Frame(image=next(self.frames), timestamp=0.0)
+
+    device = Frames()
+    monkeypatch.setattr(loop.time, "sleep", lambda _: None)
+    r = Runner(device, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda _: None)
+    r._last_screen = "battle"
+    assert r.settle().image is black
+    assert device.count == 7
+
+
+def test_local_animation_is_not_diluted_by_the_full_screen():
+    from cwagent.orchestrator.loop import STABLE_DIFF, frame_diff, frame_motion
+
+    black = Image.new("RGB", (192, 108), "black")
+    flash = black.copy()
+    flash.paste((128, 128, 128), (0, 0, 20, 20))
+    assert frame_diff(black, flash) < STABLE_DIFF < frame_motion(black, flash)
+
+
+def test_settle_honors_stop_before_deciding(tmp_path):
+    import threading
+
+    from cwagent.device import UserInterrupt
+
+    sim = Sim({"prepare": []}, "prepare", lambda *_: None)
+    r = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda _: None)
+    r._stop = threading.Event()
+    r._stop.set()
+    with pytest.raises(UserInterrupt, match="已停止"):
+        r.settle()
+
+
 class Sim:
     """假游戏:按状态返回截图(颜色编码状态),操作按规则切换状态;FakeOcr 按截图颜色返回这一状态的文字。"""
 

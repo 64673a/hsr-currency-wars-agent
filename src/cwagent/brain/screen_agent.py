@@ -239,6 +239,8 @@ class ScreenAgent:
         described, _ = self._entities(boxes, names, episode)
         cues = Cues(entities=present, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
                     layer="战术" if episode.screen == "prepare" else "选择")
+        if book is not None:
+            cues.entities.update(name for name in (book.environment, book.companion) if name)
         checkpoint = book is None or "战略检查点(" in hints or episode.screen == "environment_choice"
         hits = recall(self.memories, cues) if checkpoint else []
         if book is not None:

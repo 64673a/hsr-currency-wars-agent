@@ -4,8 +4,8 @@
 每格是八边形裁切的道具图标,右下角是数量。图标模板在 assets/items/<id>.png(Fandom 的游戏原图,128px),
 只拿中间 60% 比,避开八边形的角和数量。7 张实机截图上真道具得分 0.73~0.89,别的道具在同一格最高 0.65。
 
-数量是图标右下角的白色小字。对局记录里的 960 宽截图上读不稳(扳手图标本身是白色,「1」会读成「11」),
-实机 1920 宽的原图应该好些;只在读出 1 个数字时给,其余让模型看截图。
+数量是图标右下角的白色小字。先识别完整角标,读不出时缩小到数字所在的区域直接识别,
+避开道具图标里的白色部分;只在读出 1 个数字时给,其余让模型看截图。
 """
 
 from __future__ import annotations
@@ -97,6 +97,15 @@ def _count(image: Image.Image, ocr: Ocr, cx: float, cy: float) -> int | None:
         return None
     m = cv2.copyMakeBorder(np.where(white, 0, 255).astype(np.uint8), 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
     text = re.sub(r"\D", "", "".join(b.text for b in ocr(Image.fromarray(m).convert("RGB"))))
+    if re.fullmatch(r"[1-9]", text):
+        return int(text)
+    from .hud import _ocr_mask
+
+    crop = image.convert("RGB").crop((int((cx + 0.010) * W), int((cy + 0.013) * H),
+                                      int((cx + 0.025) * W), int((cy + 0.035) * H)))
+    hsv = cv2.cvtColor(np.asarray(crop), cv2.COLOR_RGB2HSV)
+    white = ((hsv[..., 2] >= 180) & (hsv[..., 1] <= 60)).astype(np.uint8) * 255
+    text = _ocr_mask(ocr, white, detect=False)
     return int(text) if re.fullmatch(r"[1-9]", text) else None
 
 

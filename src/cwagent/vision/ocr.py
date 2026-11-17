@@ -45,7 +45,7 @@ class Ocr:
             box = (round(x * W), round(y * H), round((x + w) * W), round((y + h) * H))
             img = img.crop(box)
             ox, oy = box[0] / W, box[1] / H
-        res = self._get()(img)
+        res = self._get()(img, use_det=True, use_cls=True, use_rec=True)
         out: list[TextBox] = []
         if res.boxes is None:
             return out
@@ -58,6 +58,12 @@ class Ocr:
                                w=(max(xs) - min(xs)) / W, h=(max(ys) - min(ys)) / H, score=float(score)))
         out.sort(key=lambda b: (round(b.y, 2), b.x))
         return out
+
+    def line(self, image: Image.Image, *, min_score: float = 0.9) -> str:
+        """已定位的单行文字直接识别,避免检测器漏掉单个数字。"""
+        res = self._get()(image.convert("RGB"), use_det=False, use_cls=False, use_rec=True)
+        return "".join(text for text, score in zip(res.txts or [], res.scores or [], strict=False)
+                       if score >= max(self.min_score, min_score)).strip()
 
 
 def find(boxes: list[TextBox], pattern: str, *, region: tuple[float, float, float, float] | None = None) -> TextBox | None:
@@ -86,3 +92,7 @@ class Aliased:
     def __call__(self, image: Image.Image, region: tuple[float, float, float, float] | None = None) -> list[TextBox]:
         boxes = self.ocr(image, region) if region is not None else self.ocr(image)
         return [replace(b, text=self.aliases[b.text]) if b.text in self.aliases else b for b in boxes]
+
+    def line(self, image: Image.Image, *, min_score: float = 0.9) -> str:
+        text = self.ocr.line(image, min_score=min_score)
+        return self.aliases.get(text, text)

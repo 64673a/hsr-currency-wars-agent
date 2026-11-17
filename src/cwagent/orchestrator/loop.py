@@ -73,8 +73,9 @@ from .screens import (
 )
 
 ACTION_GAP = 0.7      # 每个操作之后等画面响应
-STABLE_GAP = 0.3      # 判断画面是否稳定:隔这么久再截一张比较
-STABLE_TRIES = 6
+STABLE_GAP = 0.6      # 判断画面是否稳定:隔这么久再截一张比较
+STABLE_TRIES = 30
+STABLE_CONFIRMATIONS = 3
 STABLE_DIFF = 3.0     # 缩略灰度图逐像素平均差(0~255)低于这个值算稳定
 OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开一个回合(清掉对话)
 STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
@@ -158,6 +159,13 @@ def frame_diff(a: Image.Image, b: Image.Image) -> float:
     return float(np.abs(small[0] - small[1]).mean())
 
 
+def frame_motion(a: Image.Image, b: Image.Image) -> float:
+    """取九宫格中变化最大的一块,局部动画不会被整屏平均值稀释。"""
+    small = [np.asarray(im.convert("L").resize((96, 54)), dtype=np.int16) for im in (a, b)]
+    delta = np.abs(small[0] - small[1])
+    return float(delta.reshape(3, 18, 3, 32).mean(axis=(1, 3)).max())
+
+
 class Trace:
     def __init__(self, root: Path):
         self.root = root
@@ -230,7 +238,7 @@ class Runner:
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
-                                       before_ready=self._crystals_before_ready)
+                                       before_ready=self._crystals_before_ready, capture=self.settle)
         self.guides = guides
         self._guide: Guide | None = None                       # 当前参考的攻略
         self._guide_pinned = False                             # 模型自己选的攻略不再自动换
@@ -285,14 +293,19 @@ class Runner:
     def settle(self):
         """等画面稳定再返回(过场动画、界面切换中途不识别)。一直在动的画面(战斗)最多等 STABLE_TRIES 次。"""
         frame = self.device.grab()
-        if not self.settle_frames or self._last_screen == "battle":
+        if not self.settle_frames:
             return frame
+        stable = 0
         for _ in range(STABLE_TRIES):
+            if self._stop is not None and self._stop.is_set():
+                raise UserInterrupt("已停止")
             time.sleep(STABLE_GAP)
             nxt = self.device.grab()
-            if frame_diff(frame.image, nxt.image) < STABLE_DIFF:
+            stable = stable + 1 if frame_motion(frame.image, nxt.image) < STABLE_DIFF else 0
+            if stable >= STABLE_CONFIRMATIONS:
                 return nxt
             frame = nxt
+        self.log("等待画面稳定达到上限,使用最后一帧")
         return frame
 
     # ---------------------------------------------------------------- 执行

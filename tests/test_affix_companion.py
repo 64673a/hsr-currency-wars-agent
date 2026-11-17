@@ -21,6 +21,13 @@ def test_clean_affix_desc_and_name():
     assert not valid_name("al") and valid_name("首领强化")
 
 
+def test_clean_truncated_node_note_keeps_affix_effect():
+    effect = "敌人受到攻击期间，若生命值百分比小于1%，使当前生命值变为生命上限的10%。"
+    assert clean_desc("进入本节点时，可为你的角" + effect) == effect
+    assert clean_desc("进入本节点时，可为你的角……") == ""
+    assert clean_desc("进入战斗时，敌方全体速度提高10%。") == "进入战斗时，敌方全体速度提高10%。"
+
+
 def test_affix_book_cleans_old_records(tmp_path):
     local = tmp_path / "affixes.local.yaml"
     local.write_text("- name: 霸凌弱者\n  desc: 图回敌人对1星的我方队员造成的伤害提高20%。\n- name: al\n  desc: 残字\n",

@@ -90,7 +90,10 @@ def read_prices(image: Image.Image, ocr: Ocr) -> dict[int, int]:
             continue
         d = hsv[:, stats[k, cv2.CC_STAT_LEFT] + stats[k, cv2.CC_STAT_WIDTH] + 1:]
         white = ((d[..., 2] >= 200) & (d[..., 1] <= 60)).astype(np.uint8) * 255
-        text = re.sub(r"\D", "", _ocr_mask(ocr, white).replace("O", "0").replace("o", "0"))
+        text = _ocr_mask(ocr, white)
+        if not text:
+            text = _ocr_mask(ocr, white, detect=False)
+        text = re.sub(r"\D", "", text.replace("O", "0").replace("o", "0"))
         if re.fullmatch(r"\d{1,2}", text) and 0 < int(text) <= 30:
             out[i] = int(text)
     return out

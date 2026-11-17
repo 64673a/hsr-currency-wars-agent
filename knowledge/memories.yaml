@@ -29,7 +29,6 @@
     选投资环境时也要考虑:前期阵容弱时选「经济严重过热」,奖励节点可能抓不到猪,有玩家建议慎选。
   triggers:
     entities: [经济严重过热, 经济过热, 次元扑满, 扑满]
-    nodes: [reward]
   scope: [选择, 战术, 战略]
   status: approved
   confidence: medium
@@ -44,7 +43,6 @@
     扑满主题的奖励节点不适用(扑满会逃跑,需要正常输出)。
   triggers:
     entities: [绯英]
-    nodes: [reward]
   scope: [战术, 战略]
   status: approved
   confidence: medium
@@ -127,7 +125,6 @@
     反过来,纯靠 1 星角色平砍是抓不到猪的:与其上三个白板,不如上一个能触发基础伤害或破韧的角色。
   triggers:
     entities: [经济过热, 经济严重过热, 次元扑满, 扑满]
-    nodes: [reward]
   scope: [战术, 选择]
   status: approved
   confidence: high

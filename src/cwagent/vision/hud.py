@@ -53,15 +53,17 @@ def _crop(image: Image.Image, box: tuple[float, float, float, float]) -> np.ndar
     return np.asarray(image.convert("RGB").crop((int(x * W), int(y * H), int((x + w) * W), int((y + h) * H))))
 
 
-def _ocr_mask(ocr: Ocr, mask: np.ndarray, scale: int = 4) -> str:
+def _ocr_mask(ocr: Ocr, mask: np.ndarray, scale: int = 4, *, detect: bool = True) -> str:
     """把二值化的字形(白色前景)转成白底黑字、放大后识别。"""
     ys, xs = np.nonzero(mask)
-    if len(xs) < 15:
+    if len(xs) < (15 if detect else 3):
         return ""
     m = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
     img = cv2.resize(255 - m, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    img = cv2.copyMakeBorder(img, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255)
-    return "".join(b.text for b in ocr(Image.fromarray(img).convert("RGB")))
+    pad = 40 if detect else 8
+    img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+    image = Image.fromarray(img).convert("RGB")
+    return "".join(b.text for b in ocr(image)) if detect else ocr.line(image)
 
 
 def read_gold(image: Image.Image, ocr: Ocr) -> int | None:

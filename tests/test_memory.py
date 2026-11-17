@@ -93,3 +93,11 @@ def test_repo_memories_file_is_valid(tmp_path):
     cues = Cues(entities={"经济严重过热", "绯英"}, nodes={"reward"}, layer="战术")
     titles = [r.memory.title for r in recall(memories, cues)]
     assert any("扑满" in t for t in titles) and any("绯英" in t for t in titles)
+
+
+def test_reward_alone_does_not_recall_specific_builds(tmp_path):
+    memories = MemoryStore(local_path=tmp_path / "memory.sqlite").public()
+    hits = recall(memories, Cues(nodes={"reward"}, layer="战术"))
+    assert any(r.memory.id == "m-20261114-reward-rules" for r in hits)
+    assert not any(r.memory.id in {"m-20261114-piggy-bank", "m-20261116-piggy-chase", "m-20261114-feiying-stack"}
+                   for r in hits)

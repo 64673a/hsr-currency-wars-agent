@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from cwagent.vision.ocr import Ocr
@@ -28,3 +29,14 @@ def test_consumable_catalog():
 
     c = catalog()
     assert len(c) == 18 and c[350105]["params"] == [3, 1] and "3费及以下" in c[350105]["desc"]
+
+
+@pytest.mark.parametrize("size", [(960, 540), (1920, 1080)])
+def test_single_coin_prices_and_projector_count(size):
+    """1-1 实机图:五张 1 金币卡、实习生投影仪 ×2、拆装扳手 ×1。"""
+    from cwagent.vision.items import read_items
+
+    image = Image.open(FIXTURE.with_name("prices-1-1.jpg")).resize(size)
+    ocr = Ocr()
+    assert read_prices(image, ocr) == {i: 1 for i in range(1, 6)}
+    assert [(it.name, it.count) for it in read_items(image, ocr)] == [("实习生投影仪", 2), ("拆装扳手", 1)]

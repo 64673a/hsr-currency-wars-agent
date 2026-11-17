@@ -86,13 +86,14 @@ def raise_cap(deployed: str, delta: int) -> str:
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
                  sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None,
-                 before_ready: Callable[[], str | None] | None = None):
+                 before_ready: Callable[[], str | None] | None = None, capture: Callable | None = None):
         self.device = device
         self.ocr = ocr
         self.equipment = equipment
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
         self.before_ready = before_ready   # 点出战前(商店已收起)先做的事;返回说明时不出战,让模型先看新局面
         self.sleep = sleep or (lambda s: time.sleep(s))
+        self.capture = capture or (lambda: self.device.grab())
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
         self.frame = None         # 最近一次截图
         self.counts: dict[str, int] | None = None   # 前台、后台的格子数(Runner 识别阵容时更新)
@@ -101,7 +102,7 @@ class PrepareExecutor:
         self.understaffed: set[str] = set()         # 已经因为「人数未达上限」拦过一次出战的节点
 
     def _look(self) -> list[TextBox]:
-        self.frame = self.device.grab()
+        self.frame = self.capture()
         return self.ocr(self.frame.image)
 
     def shop_now(self, boxes: list[TextBox]) -> bool:
@@ -117,7 +118,9 @@ class PrepareExecutor:
     def _level(self) -> int | None:
         """左下「购买经验」上的等级,商店展开时也读得到(读不出返回 None)。"""
         try:
-            return read_level(self.device.grab().image, self.ocr)
+            return read_level(self.capture().image, self.ocr)
+        except UserInterrupt:
+            raise
         except Exception:  # noqa: BLE001 - 读等级只是为了跟上上场上限,失败就当拿不准
             return None
 
@@ -477,7 +480,7 @@ class PrepareExecutor:
         if a.item == 0 or (a.type == "compose" and a.onto == 0):
             out.results.append(f"{action_text(a).split(' ')[0]}:这件装备已经在前面的操作里用掉了")
             return None
-        before = self.equipment.read(self.device.grab().image)
+        before = self.equipment.read(self.capture().image)
         item = next((i for i in before if i.index == a.item), None)
         if item is None:
             out.results.append(f"{text}:装备栏没有第 {a.item} 件(现在有 {len(before)} 件)")
@@ -492,7 +495,7 @@ class PrepareExecutor:
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
             self.sleep(1.2)
-            shot = self.device.grab().image
+            shot = self.capture().image
             ok = find_compose_confirm(shot)
             if ok is None:
                 # 留一张现场图:是拖拽没触发、还是确认框换了样式,只能靠它判断(2026-11-16 两次合成都没确认框)
@@ -509,10 +512,10 @@ class PrepareExecutor:
             # 确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,最后取消,不能把它留在屏幕上
             for _ in range(3):
                 self.sleep(0.4)
-                ok = find_compose_confirm(self.device.grab().image) or ok
+                ok = find_compose_confirm(self.capture().image) or ok
                 self._click(out, *ok)
                 self.sleep(1.0)
-                if find_compose_confirm(self.device.grab().image) is None:
+                if find_compose_confirm(self.capture().image) is None:
                     break
             else:
                 self._click(out, *cancel_point(ok))
@@ -520,7 +523,7 @@ class PrepareExecutor:
                 out.results.append(f"{text}:合成确认点不下去,已取消")
                 out.observe = True
                 return None
-            after = self.equipment.read(self.device.grab().image)
+            after = self.equipment.read(self.capture().image)
             if len(after) != len(before) - 1:
                 out.results.append(f"{text}:点了确认,但装备数没有变化,可能没合成成功")
                 out.observe = True
@@ -543,7 +546,7 @@ class PrepareExecutor:
         self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
         out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": dst.x, "y2": dst.y})
         self.sleep(1.0)
-        after = self.equipment.read(self.device.grab().image)
+        after = self.equipment.read(self.capture().image)
         if len(after) != len(before) - 1:
             out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
             out.observe = True

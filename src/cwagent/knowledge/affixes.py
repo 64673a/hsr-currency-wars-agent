@@ -22,6 +22,8 @@ _HEADER = "# 本机读到的敌人词条(收集位面节点时点开词条自动
 
 # 位面详情下方首领节点的说明;原来点开词条后把新出现的文字都当说明,这句常混进来(2026-11-17 本机档案里 3 条)
 _NODE_NOTE = re.compile(r"进入本节点时[,，]可为你的角色选择主角光环[,，]为其提供独特强化[,，]使其成为主角[!！]?")
+_TRUNCATED_NOTE = re.compile(r"进入本节点时[,，]\s*可为你的(?:角色选择主角光环|角色选择|角色|角)?[.……]*"
+                             r"(?=我方|敌人|敌方|首领|普通|精英|商店|刷新|战斗|每|当|第|在|所有|全体|【|$)")
 
 
 def valid_name(name: str) -> bool:
@@ -31,7 +33,7 @@ def valid_name(name: str) -> bool:
 
 def clean_desc(desc: str) -> str:
     """去掉混进来的节点说明,和句首图标被认成的字(「图」「回」「0一」「_」……):说明从第一个正文字开始。"""
-    text = _NODE_NOTE.sub("", desc or "").strip()
+    text = _TRUNCATED_NOTE.sub("", _NODE_NOTE.sub("", desc or "")).strip()
     m = re.search(r"(我方|敌方|敌人|首领|普通|精英|商店|刷新|战斗|进入|每|当|第|在|所有|全体|【)", text)
     if m and m.start() <= 3:
         text = text[m.start():]
