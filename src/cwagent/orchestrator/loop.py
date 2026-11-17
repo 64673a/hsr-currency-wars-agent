@@ -259,6 +259,7 @@ class Runner:
         self._quits = 0
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self.entry = EntryNavigator()
+        self._settlement_tries = 0
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
         self._stop: threading.Event | None = None              # 网页上的停止(战斗监视里也要随时能停)
@@ -930,6 +931,8 @@ class Runner:
 
     def reflex(self, screen: str, image, boxes: list[TextBox], record: dict, sig: set[str]) -> list[Action] | None:
         """不需要模型的界面:返回要做的操作;需要模型判断时返回 None。"""
+        if screen != "settlement":
+            self._settlement_tries = 0
         if screen != "quit_dialog":
             self._quits = 0
         match screen:
@@ -981,7 +984,11 @@ class Runner:
                     return [Action(type="click_text", text="继续进度", reason="接回已保存的标准博弈")]
                 return [Action(type="pause", reason="已有对局的模式未确认为标准博弈,保留进度")]
             case "settlement":
-                record["note"] = "对局结束"
+                record["note"] = "对局结束" if self.in_run else "处理启动前的旧局结算"
+                if not self.in_run:
+                    self._settlement_tries += 1
+                    if self._settlement_tries > 4:
+                        return [Action(type="pause", reason="旧局结算多次尝试仍未推进,保留当前页面")]
                 if find(boxes, "^前往结算$"):
                     return [Action(type="click_text", text="前往结算", reason="整局失败")]
                 if not self.in_run and find(boxes, "对局评价|对局总结") and find(boxes, "^下一步$") is None:
