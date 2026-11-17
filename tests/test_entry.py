@@ -33,6 +33,8 @@ def test_world_phone_guide_route_and_confirmed_destination(monkeypatch):
     assert nav.plan("other", image, text, in_run=False)[0].x == .22
     text = words(("货币战争", .22, .45), ("货币战争·入画奇航", .55, .35), ("前往参与", .75, .78))
     assert nav.plan("other", image, text, in_run=False)[0].x == .75 and nav.joining
+    text = words(("货币战争", .22, .32), ("入画奇航", .82, .38), ("前往参与", .78, .81))
+    assert nav.plan("other", image, text, in_run=False)[0].x == .78
     visible.clear()
     visible["world"] = (.03, .04)
     assert nav.plan("other", image, [], in_run=False)[0].type == "wait"
@@ -97,3 +99,14 @@ def test_entry_icons_match_on_the_full_game_canvas():
     canvas[80:80+h, 800:800+w] = template
     image = Image.fromarray(canvas[:, :, ::-1])
     assert entry.targets(image)["guide5_tab"] == ((800 + w / 2) / 1920, (80 + h / 2) / 1080)
+
+
+def test_real_guide_page_enters_the_selected_currency_wars():
+    from pathlib import Path
+
+    from cwagent.vision.ocr import Ocr
+
+    image = Image.open(Path(__file__).parent / "fixtures" / "entry" / "currency-guide.jpg")
+    nav = entry.EntryNavigator()
+    action = nav.plan("other", image, Ocr()(image), in_run=False)[0]
+    assert action.type == "click" and action.x > .7 and action.y > .7 and nav.joining

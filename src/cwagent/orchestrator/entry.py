@@ -72,7 +72,7 @@ class EntryNavigator:
                 if "guide5_tab" in points:
                     return self._click("guide_tab", points["guide5_tab"], "指南切到旷宇纷争")
                 return self._action("guide_tab", Action(type="wait", seconds=2, reason="等待指南页签显示"))
-            detail = find(boxes, "货币战争", region=(0.36, 0.25, 0.52, 0.62))
+            detail = find(boxes, "货币战争|入画奇航", region=(0.36, 0.25, 0.52, 0.62))
             if detail is not None:
                 enter = find(boxes, "前往参与", region=(0.35, 0.25, 0.53, 0.65))
                 if enter is not None:
