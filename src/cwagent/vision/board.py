@@ -80,6 +80,7 @@ class Slot:
     cost: int | None = None     # 卡面底部色条读出的费用档(1~5)
     halo: bool = False          # 星星是蓝色的:选了主角光环(维护者告知)
     mark: str = ""              # 备战席的特殊格:乱流格 / 锁定(M7A 的模板)
+    stars_unsure: bool = False  # 前后两帧读出的星级不一样(升星动画、特效闪过),这次不报星级
 
     @property
     def empty(self) -> bool:
@@ -424,6 +425,40 @@ def detail_name(boxes: list[TextBox]) -> str | None:
     return max(above, key=lambda b: b.y).text if above else None
 
 
+def confirm_stars(board: list[Slot], earlier: Image.Image, *, shop_open: bool = False) -> list[Slot]:
+    """用早一点截的一帧再读一遍每个角色的星级,两帧不一样就不报星级、标成待定。
+
+    升星动画、特效闪过时会把星级读错(以前全靠等整屏静下来,乱流格这类一直在闪的光效会让它一直等,2026-11-17 实机);
+    只核对有角色的格子,和格子在哪、别处在不在动都没关系。"""
+    img = _bgr(earlier.resize((1920, 1080)) if earlier.size != (1920, 1080) else earlier)
+    for s in board:
+        if s.empty or (s.name or "").startswith("道具") or "固定" in s.mark:
+            continue
+        w, h = _size(s.zone, shop_open)
+        gold, blue = star_colors(_crop(img, s.x, s.y, w, h))
+        if ((blue, True) if blue and not gold else (gold, False)) != (s.stars, s.halo):
+            s.stars, s.stars_unsure = 0, True
+    return board
+
+
+def recheck_diff(before: list[Slot] | None, after: list[Slot]) -> str:
+    """模型要求复查后,这一轮识别和上一轮相比哪些格子变了(名字、星级)。"""
+    if not before:
+        return "上一轮没有阵容识别结果,以这次为准"
+
+    def who(s: Slot | None) -> str:
+        if s is None or s.empty:
+            return "空"
+        star = "星级待定" if s.stars_unsure else f"{s.stars}星" if s.stars else ""
+        return " ".join(x for x in (s.name or "认不出", star) if x)
+
+    labels = {"front": "前台", "back": "后台", "bench": "备战席"}
+    old = {(s.zone, s.index): s for s in before}
+    changes = [f"{labels[s.zone]}{s.index + 1}号 {who(old.get((s.zone, s.index)))} → {who(s)}"
+               for s in after if who(old.get((s.zone, s.index))) != who(s)]
+    return ";".join(changes) if changes else "和上一轮一致"
+
+
 def format_board(board: list[Slot]) -> str:
     """给模型看的阵容(含每格坐标)。"""
     lines = []
@@ -435,7 +470,7 @@ def format_board(board: list[Slot]) -> str:
                 cells.append(f"{s.index + 1}号(空{mark}) ({s.x:.3f},{s.y:.3f})")
             else:
                 who = s.name or "认不出"
-                star = f" {s.stars}星" if s.stars else ""
+                star = " 星级待定(画面在变,以截图为准)" if s.stars_unsure else f" {s.stars}星" if s.stars else ""
                 extra = "、".join(x for x in (f"{s.cost}费" if s.cost else "", "主角光环" if s.halo else "",
                                               s.mark) if x)
                 cells.append(f"{s.index + 1}号 {who}{star}" + (f"({extra})" if extra else "") + f" ({s.x:.3f},{s.y:.3f})")

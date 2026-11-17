@@ -30,7 +30,7 @@ from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_
 from .. import paths
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value
-from ..vision.board import Portraits, Slot, back_hint, detail_name, format_board
+from ..vision.board import Portraits, Slot, back_hint, confirm_stars, detail_name, format_board, recheck_diff
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_gold, read_hud
 from ..vision.ocr import Aliased, Ocr, TextBox, find, has
@@ -78,10 +78,10 @@ from .screens import (
 )
 
 ACTION_GAP = 0.7      # 每个操作之后等画面响应
-STABLE_GAP = 0.6      # 判断画面是否稳定:隔这么久再截一张比较
-STABLE_TRIES = 30
-STABLE_CONFIRMATIONS = 3
-STABLE_DIFF = 3.0     # 缩略灰度图逐像素平均差(0~255)低于这个值算稳定
+STABLE_GAP = 0.3      # 判断画面是否稳定:隔这么久再截一张比较
+STABLE_TRIES = 6      # 最多比几次(约 2 秒),还在动就用最后一帧
+STABLE_DIFF = 3.0     # 缩略灰度图整屏逐像素平均差(0~255)低于这个值算稳定
+RECHECK_WAIT = 1.0    # 模型要求复查时先等这么久(动画放完)再重新截图识别
 OTHER_TURNS = 4       # 备战以外的回合最多问几轮,超过就重新开一个回合(清掉对话)
 STUCK_WARN = 3        # 同一节点第几次开备战回合时提醒模型前面没推进
 STUCK_PAUSE = 5       # 同一节点开到第几次备战回合就暂停,请人处理
@@ -123,7 +123,7 @@ ITEM_BAR = (0.87, 0.08, 0.22)   # 右上角道具栏:x 下限、y 范围(实机 
 GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、冶金炉:用了会取下或重掷角色身上的装备
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
-FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect)不占决策次数
+FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect、recheck)不占决策次数
 GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
 
 
@@ -162,13 +162,6 @@ def _is_item(s: Slot, boxes: list[TextBox]) -> bool:
 def frame_diff(a: Image.Image, b: Image.Image) -> float:
     small = [np.asarray(im.convert("L").resize((96, 54)), dtype=np.int16) for im in (a, b)]
     return float(np.abs(small[0] - small[1]).mean())
-
-
-def frame_motion(a: Image.Image, b: Image.Image) -> float:
-    """取九宫格中变化最大的一块,局部动画不会被整屏平均值稀释。"""
-    small = [np.asarray(im.convert("L").resize((96, 54)), dtype=np.int16) for im in (a, b)]
-    delta = np.abs(small[0] - small[1])
-    return float(delta.reshape(3, 18, 3, 32).mean(axis=(1, 3)).max())
 
 
 class Trace:
@@ -240,6 +233,8 @@ class Runner:
         self._results: list[str] = []     # 上一组操作的执行结果,下一轮交给模型
         self._vision_marks = {}
         self._zoom_region = None
+        self._recheck = False                 # 模型要求复查:下一次识别阵容时和上一轮比
+        self._settled = None                  # settle 最后比较的两帧(前一帧用来核对星级)
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
@@ -299,22 +294,32 @@ class Runner:
     # ---------------------------------------------------------------- 截图
 
     def settle(self):
-        """等画面稳定再返回(过场动画、界面切换中途不识别)。一直在动的画面(战斗)最多等 STABLE_TRIES 次。"""
+        """等画面稳定再返回(过场动画、界面切换中途不识别),最多比 STABLE_TRIES 次,一直在动(战斗)就用最后一帧。
+
+        比的是整屏平均差。曾按九宫格里变化最大的一块判断、连续 3 次稳定、最多等 18 秒(为了等升星动画),
+        结果乱流格这类一直在闪的局部光效(位置每个节点随机)让每次截图都等满 18 秒,备战的固定流程也因此被跳过
+        (2026-11-17 实机)。现在照 trail-cli 的思路:截图为准,局部动画造成的误读由读星级时的两帧核对
+        (board.confirm_stars,用这里留下的前一帧)和模型的 recheck 兜底。"""
         frame = self.device.grab()
+        self._settled = None
         if not self.settle_frames:
             return frame
-        stable = 0
         for _ in range(STABLE_TRIES):
             if self._stop is not None and self._stop.is_set():
                 raise UserInterrupt("已停止")
             time.sleep(STABLE_GAP)
             nxt = self.device.grab()
-            stable = stable + 1 if frame_motion(frame.image, nxt.image) < STABLE_DIFF else 0
-            if stable >= STABLE_CONFIRMATIONS:
+            if frame_diff(frame.image, nxt.image) < STABLE_DIFF:
+                self._settled = (frame, nxt)
                 return nxt
             frame = nxt
-        self.log("等待画面稳定达到上限,使用最后一帧")
         return frame
+
+    def _earlier(self, image) -> Image.Image | None:
+        """settle 返回 image 时,比它早 STABLE_GAP 截的那一帧(核对星级用)。"""
+        if self._settled is not None and self._settled[1].image is image:
+            return self._settled[0].image
+        return None
 
     # ---------------------------------------------------------------- 执行
 
@@ -335,6 +340,10 @@ class Runner:
         if a.type == "zoom":
             self._zoom_region = a.region
             return action_text(a)
+        if a.type == "recheck":
+            self._recheck = True
+            time.sleep(RECHECK_WAIT)
+            return "复查:已等动画放完,重新截图识别,结果见新的局面"
         if a.type == "click_text":
             matches = [b for b in boxes if b.text == a.text] or [b for b in boxes if a.text and a.text in b.text]
             if len(matches) <= a.nth:
@@ -489,7 +498,7 @@ class Runner:
             self._note_roster({name: i in trial for i, name, _ in cards if name})
             lines.append("商店(从左到右;「2星」是价格为费用 3 倍的二星卡;[试用] 是账号里没有、给的试用版):"
                          + format_shop(cards, self._role_costs(), trial))
-        self._board = None
+        before, self._board = self._board, None
         if self.portraits is not None:
             if shop:
                 learned = self.portraits.learn_from_shop(image, boxes)
@@ -500,17 +509,23 @@ class Runner:
             for s in board:
                 if _is_item(s, boxes):
                     s.name, s.stars, s.score, s.halo, s.cost = "道具(可开启)", 0, max(s.score, 0.01), False, None
+            earlier = self._earlier(image)
+            if earlier is not None:
+                confirm_stars(board, earlier, shop_open=shop)
             self._board = board
             state["board"] = [{"zone": b.zone, "index": b.index, "x": round(b.x, 3), "y": round(b.y, 3),
                                "name": b.name, "stars": b.stars, "score": round(b.score, 2), "cost": b.cost,
-                               "halo": b.halo, "mark": b.mark}
+                               "halo": b.halo, "mark": b.mark, **({"stars_unsure": True} if b.stars_unsure else {})}
                               for b in board if not b.empty or b.mark]
             lines.append("阵容(格子编号从左到右、从 1 开始;「认不出」表示有角色但没认出是谁):\n" + format_board(board))
+            if self._recheck:
+                lines.append("复查结果(和上一轮识别比):" + recheck_diff(before, board))
             names = sorted({b.name for b in board if b.name and not b.name.startswith("道具")})
             if ("杨叔" in names and "佩佩" not in names
                     and re.search(r"(后台|固定|占位).{0,20}佩佩|佩佩.{0,20}(后台|固定|占位)", self.ledger.direction)):
                 lines.append("当前后台固定单位按头像识别为「杨叔」;笔记中把它称作佩佩的判断与当前识别不一致,请核对并修正笔记。")
             self._roles = names
+        self._recheck = False
         try:
             self._items = read_items(image, self.ocr)
         except Exception as e:  # noqa: BLE001 - 道具栏认不出就不给
@@ -1347,7 +1362,7 @@ class Runner:
         for note in decision.notes:   # 本局学到的,之后的回合也要知道
             self.ledger.add(f"[{self._node or '开局'} {note.kind}] {note.title}:{note.content}")
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
-        if (decision.actions and all(a.type in ("zoom", "inspect") for a in decision.actions)
+        if (decision.actions and all(a.type in ("zoom", "inspect", "recheck") for a in decision.actions)
                 and ep.free_looks < FREE_LOOKS):
             # 只看不操作的一轮不占备战决策次数(Codex 2026-11-16:1-1 放大一次、查看两次后就被强制出战)
             ep.free_looks += 1

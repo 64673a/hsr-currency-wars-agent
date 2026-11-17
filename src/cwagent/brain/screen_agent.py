@@ -27,7 +27,8 @@ PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose",
 
 class Action(BaseModel):
     type: str = Field(
-        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open|take|zoom|inspect)$")
+        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open|take"
+                "|zoom|inspect|recheck)$")
     mark: int | None = Field(default=None, ge=1, le=100)
     region: tuple[float, float, float, float] | None = None
     mode: str = Field(default="hover", pattern="^(hover|click)$")
@@ -85,8 +86,8 @@ class ActInput(BaseModel):
 
     @model_validator(mode="after")
     def _observation_actions(self):
-        if len(self.actions) > 1 and any(a.type in ("zoom", "inspect") for a in self.actions):
-            raise ValueError("zoom 和 inspect 要单独提交,取得新观察后再决定操作")
+        if len(self.actions) > 1 and any(a.type in ("zoom", "inspect", "recheck") for a in self.actions):
+            raise ValueError("zoom、inspect、recheck 要单独提交,取得新观察后再决定操作")
         if any(a.mark is not None for a in self.actions[1:]):
             raise ValueError("标号只对应当前截图,只能用于一组操作的第一项")
         return self
@@ -107,7 +108,8 @@ ACT_TOOL = ToolSpec(
                     "properties": {
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "buy_exp", "ready",
                                                             "compose", "equip", "open", "take", "click_text", "click", "drag",
-                                                            "scroll", "key", "wait", "pause", "zoom", "inspect"]},
+                                                            "scroll", "key", "wait", "pause", "zoom", "inspect",
+                                                            "recheck"]},
                         "mark": {"type": "integer", "minimum": 1, "maximum": 100},
                         "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
                         "mode": {"type": "string", "enum": ["hover", "click"]},
@@ -391,6 +393,8 @@ def action_text(a: Action) -> str:
             return f"放大区域 {a.region}"
         case "inspect":
             return f"查看标号 {a.mark}({a.mode})"
+        case "recheck":
+            return "复查(重新截图识别)"
         case "drag":
             return f"拖拽 ({_f(a.x)},{_f(a.y)})→({_f(a.x2)},{_f(a.y2)})"
         case "scroll":

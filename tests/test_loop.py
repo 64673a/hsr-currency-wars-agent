@@ -10,36 +10,34 @@ from cwagent.vision.board import SHOP_X
 from cwagent.vision.ocr import TextBox
 
 
-def test_settle_waits_through_a_delayed_animation(tmp_path, monkeypatch):
+def test_settle_ignores_a_looping_local_glow_and_keeps_the_earlier_frame(tmp_path, monkeypatch):
+    """乱流格一直在闪(位置每个节点随机):整屏平均差很小,不会让截图一直等(2026-11-17 实机两帧)。"""
     from cwagent.orchestrator import loop
 
-    black = Image.new("RGB", (192, 108), "black")
-    flash = Image.new("RGB", (192, 108), "white")
+    board = Path(__file__).parent / "fixtures" / "board"
+    a, b = (Image.open(board / f"turbulence-{k}.jpg").convert("RGB") for k in "ab")
+    assert loop.frame_diff(a, b) < loop.STABLE_DIFF
 
     class Frames:
-        def __init__(self):
-            self.frames = iter([black, black, flash, black, black, black, black])
-            self.count = 0
+        def __init__(self, images):
+            self.images, self.count = iter(images), 0
 
         def grab(self):
             self.count += 1
-            return Frame(image=next(self.frames), timestamp=0.0)
+            return Frame(image=next(self.images), timestamp=0.0)
 
-    device = Frames()
     monkeypatch.setattr(loop.time, "sleep", lambda _: None)
+    device = Frames([a, b])
     r = Runner(device, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda _: None)
-    r._last_screen = "battle"
-    assert r.settle().image is black
-    assert device.count == 7
+    assert r.settle().image is b and device.count == 2
+    assert r._earlier(b) is a and r._earlier(a) is None
 
-
-def test_local_animation_is_not_diluted_by_the_full_screen():
-    from cwagent.orchestrator.loop import STABLE_DIFF, frame_diff, frame_motion
-
-    black = Image.new("RGB", (192, 108), "black")
-    flash = black.copy()
-    flash.paste((128, 128, 128), (0, 0, 20, 20))
-    assert frame_diff(black, flash) < STABLE_DIFF < frame_motion(black, flash)
+    # 整屏都在变(战斗、过场):最多比 STABLE_TRIES 次,用最后一帧,没有可核对的前一帧
+    frames = [Image.new("RGB", (192, 108), "black" if i % 2 else "white") for i in range(loop.STABLE_TRIES + 1)]
+    device = Frames(frames)
+    r = Runner(device, FakeBrain({}), Trace(tmp_path / "run2"), ocr=object(), log=lambda _: None)
+    assert r.settle().image is frames[-1] and device.count == loop.STABLE_TRIES + 1
+    assert r._earlier(frames[-1]) is None
 
 
 def test_settle_honors_stop_before_deciding(tmp_path):
