@@ -160,36 +160,8 @@ def traits(board: list, facts: RoleFacts) -> list[str]:
     return lines
 
 
-def direction(guide, board: list, shop: list[tuple[int, str | None, int | None]]) -> list[str]:
-    """商店卡、备战席角色相对当前方向(参考攻略)的位置:主 C / 最终阵容 / 前中期过渡 / 不在方向里。"""
-    if guide is None:
-        return []
-    final = guide.final_names
-    carries = set(guide.carries)
-    early = guide.early | guide.middle
-
-    def kind(name: str) -> str:
-        if name in carries:
-            return "方向的主 C"
-        if name in final:
-            return "方向的最终阵容"
-        if name in early:
-            return "方向的前中期过渡"
-        return "不在方向里"
-
-    lines = []
-    cards = [f"{slot} 号 {name}({kind(name)})" for slot, name, _ in shop if name]
-    if cards:
-        lines.append("商店:" + ";".join(cards))
-    bench = [f"{s.index + 1} 号 {s.name}({kind(s.name)})" for s in board
-             if s.zone == "bench" and s.name and not s.name.startswith("道具")]
-    if bench:
-        lines.append("备战席:" + ";".join(bench))
-    return lines
-
-
 def render(*, board: list | None, hud, shop: list | None, two_star: set[int], facts: RoleFacts | None,
-           guide=None, front_slots: int = 4, trial: dict[str, bool] | None = None) -> str:
+           front_slots: int = 4, trial: dict[str, bool] | None = None) -> str:
     """「局面要点」整块。各项读不出时省略。"""
     parts = []
     eco = economy(hud.gold, hud.exp)
@@ -210,9 +182,6 @@ def render(*, board: list | None, hud, shop: list | None, two_star: set[int], fa
         tried = sorted({s.name for s in board if s.name and (trial or {}).get(s.name)})
         if tried:
             parts.append("- 试用角色(这局在商店或补给卡面上标着「试用」,账号里没有、用的试用版):" + "、".join(tried))
-        dl = direction(guide, board, shop or [])
-        if dl:
-            parts.append("- 相对当前方向:" + ";".join(dl))
     return ("## 局面要点(程序算的)\n" + "\n".join(parts)) if parts else ""
 
 

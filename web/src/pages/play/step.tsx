@@ -273,7 +273,7 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
       )}
       {notes && (
         <details className={styles.fold} open>
-          <summary>对局方向与计划</summary>
+          <summary>模型的笔记</summary>
           <p className={styles.foldText}>{notes}</p>
         </details>
       )}

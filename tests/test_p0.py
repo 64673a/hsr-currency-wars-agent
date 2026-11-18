@@ -323,17 +323,6 @@ def test_situation_facts():
     assert situation.at_ready(gpt_1_7_board(), hud) == "出战时前台 1/4,场上 5 人其中 2 星及以上 0 个,剩 56 金币(其中 6 不产生利息)"
 
 
-def test_situation_direction():
-    from cwagent.knowledge.guides import Guide
-    g = Guide(id="x", title="t", carries=["银狼LV.999"], final={"front": [{"name": "银狼LV.999"}, {"name": "花火"}],
-                                                                  "back": []},
-              early={"火花"}, middle=set(), traits=[], environments=[], tempo=[], equip_order={}, idea="",
-              augments=[], use_count=0, hard=False)
-    lines = situation.direction(g, gpt_1_7_board(), [(1, "花火", 2), (2, "火花", 1), (3, "万敌", 2)])
-    assert lines[0] == "商店:1 号 花火(方向的最终阵容);2 号 火花(方向的前中期过渡);3 号 万敌(不在方向里)"
-    assert lines[1].startswith("备战席:1 号 那刻夏(不在方向里)")
-
-
 def test_aha_banner_is_waited_out(tmp_path):
     """「阿哈帮大忙了」一两秒后自己消失(维护者 2026-11-16),程序直接等,不叫模型。"""
     pages = {"aha": [("阿哈帮大忙了", 0.5, 0.4), ("「贪饕」侵蚀 污染等级3", 0.5, 0.5)]}

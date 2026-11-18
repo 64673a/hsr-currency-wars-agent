@@ -150,7 +150,7 @@ ACT_TOOL = ToolSpec(
                     "required": ["type", "reason"],
                 },
             },
-            "run_notes": {"type": "string", "description": "整体改写对局方向与计划(可选)"},
+            "run_notes": {"type": "string", "description": "整体改写你的笔记(可选)"},
             "perception_issues": {"type": "array", "items": {"type": "string"},
                                   "description": "程序识别与截图不一致或不确定的地方,只记录问题,不直接改写事实"},
             "summary": {"type": "string", "description": "回合小结:在结束这个回合的那次 act 里填(备战阶段带 ready 的那次、"

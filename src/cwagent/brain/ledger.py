@@ -6,7 +6,7 @@
 - 整局已知事实:程序从界面读到的,出现新事实时追加,放在经历后面(追加时不打断经历这段前缀)。
 - 条目说明、想起的经验:档案里留全(整局见过、想起过的都在),每个回合开场只发当前相关、当前适用的那部分
   (2026-11-18:原来只加不删,没选的投资环境、商店里没买的角色、不再适用的经验一直带到局末)。
-- 当前状态:当前参考的攻略、角色身上的装备、没开的道具、对局方向与计划,随时会变,放在最后。
+- 当前状态:当前参考的攻略、角色身上的装备、没开的道具、模型的笔记,随时会变,放在最后。
 
 设计见 docs/TECH_DESIGN.md 第 8.5、20.4 节。
 """
@@ -175,7 +175,7 @@ class RunLedger:
         if self.items:
             out.append(("备战席里还没开的道具(程序看过的选项)", "\n".join(
                 f"- 备战席{i}号 {name}:{'、'.join(opts)}" for i, (name, opts) in sorted(self.items.items()))))
-        out.append(("我的笔记(只有你能改:在 run_notes 里整体改写,写方向、主 C、经济计划、待办)", self.direction or "(还没写)"))
+        out.append(("我的笔记(只有你能改:在 run_notes 里整体改写)", self.direction or "(还没写)"))
         return out
 
     def render_state(self) -> str:

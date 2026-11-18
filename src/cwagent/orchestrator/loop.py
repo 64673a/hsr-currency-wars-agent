@@ -576,7 +576,7 @@ class Runner:
             costs = self._role_costs()
             two = {slot for slot, name, price in cards if name and two_star(name, price, costs)}
             facts = situation.render(board=self._board, hud=hud, shop=cards, two_star=two, facts=self._role_facts(),
-                                     guide=self._guide, front_slots=(self.prepare.counts or {}).get("front", 4),
+                                     front_slots=(self.prepare.counts or {}).get("front", 4),
                                      trial=self._trial)
             if facts:
                 lines.append(facts)
