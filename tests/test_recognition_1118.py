@@ -73,3 +73,53 @@ def test_drag_can_hold_on_the_target(tmp_path):
     r._raw(Action(type="drag", x=0.29, y=0.85, x2=0.46, y2=0.62, seconds=6), [])
     r._raw(Action(type="drag", x=0.29, y=0.85, x2=0.46, y2=0.62), [])
     assert dev.actions == [("drag", 0.29, 0.85, 0.46, 0.62, 6.0), ("drag", 0.29, 0.85, 0.46, 0.62)]
+
+
+def test_transition_after_ready_does_not_call_the_model(tmp_path):
+    """出战后的黑屏、羁绊特效:看不出界面、又没有按钮就等着(2026-11-18 那局 5 次调用模型只得到「等待」)。"""
+    import time
+
+    from cwagent.orchestrator.loop import Runner, Trace
+    from cwagent.vision.ocr import TextBox
+    from tests.test_loop import FakeBrain
+
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    image = Image.new("RGB", (64, 36))
+    star = [TextBox("仙舟舰队", 0.5, 0.5, 0.1, 0.03, 0.9), TextBox("星槎出击", 0.5, 0.6, 0.1, 0.03, 0.9)]
+    dialog = star + [TextBox("确认", 0.6, 0.7, 0.05, 0.03, 0.9)]
+
+    def transition(boxes):
+        acts = r.reflex("other", image, boxes, {}, {b.text for b in boxes})
+        return bool(acts) and acts[0].reason == "出战后的过场"
+
+    assert not transition(star)                 # 平时照常交给模型
+    r._ready_at = time.monotonic()
+    assert transition(star) and not transition(dialog)   # 有按钮的弹窗不算过场
+
+
+def test_shop_is_opened_after_the_steps_that_need_it_closed(tmp_path):
+    """看道具、认卡都要商店收着(里面会收商店):放在开商店之前,模型第一轮拿到的就是开着商店的画面
+    (2026-11-18 那局 9 次第一轮只能先点「商店」)。"""
+    from cwagent.capture import Frame
+    from cwagent.orchestrator.loop import Runner, Trace
+    from tests.test_loop import FakeBrain
+
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    calls = []
+
+    class Opened(Exception):
+        pass
+
+    def set_shop(out, boxes, want):
+        calls.append("开商店")
+        raise Opened
+
+    r.macros = lambda *a: None
+    r._peek_items = lambda n, boxes: calls.append("看道具")
+    r._identify_unknown = lambda n, frame, boxes: calls.append("认卡")
+    r.prepare.set_shop = set_shop
+    r._remember_hud = lambda *a: None
+    frame = Frame(image=Image.new("RGB", (64, 36)), timestamp=0)
+    with pytest.raises(Opened):
+        r.decide(1, frame, [], "prepare", {"step": 1}, set())
+    assert calls == ["看道具", "认卡", "开商店"]

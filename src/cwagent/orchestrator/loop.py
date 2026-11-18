@@ -98,6 +98,10 @@ DETAIL_PER_NODE = 3        # 每个节点最多点开几张认不出的卡看详
 RAIL_STEPS = 6             # 开拓商店界面停留这么多步还没关,程序直接关掉
 # 一两秒后自己消失的过场(维护者 2026-11-16:「阿哈帮大忙了」相当于过场动画),认出就等,不叫模型
 TRANSIENT = "阿哈帮大忙了|啊哈帮大忙了"
+# 出战后到战斗画面之间的黑屏、羁绊特效(仙舟舰队的星槎)、「战斗开始」动画:这段时间里看不出界面、又没有能点的按钮,
+# 就等着,不问模型(2026-11-18 那局出战后 5 次调用模型只得到「等待」)
+POST_READY = 40.0
+CLICKABLE = r"确认|取消|继续|跳过|选择|返回|关闭|下一步|开始对局|前往|领取"
 SPOTLIGHT_BUTTON = "^选择主角$"   # 首领节点备战界面右下的按钮(实机:商店开着时点不到)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
@@ -272,6 +276,7 @@ class Runner:
         self._crystal_fails: dict[str, int] = {}               # 每个节点开晶矿连续没开成的次数(到 CRYSTAL_TRIES 就放过这个节点)
         self._crystal_full: tuple[str, int] | None = None      # (节点, 剩几个):备战席满了,晶矿里的角色放不下
         self._ready_checked: str | None = None                 # 出战前已经检查过晶矿的节点
+        self._ready_at = 0.0                                   # 上一次点出战的时间(之后的过场不问模型)
         self._opens: dict[str, int] = {}                       # 每个节点开过几次备战回合
         self._hud_seen: tuple[str | None, int | None] = (None, None)   # (节点, 生命值):商店收起时读到的
         self._details: dict[str, int] = {}                     # 每个节点点开看过几张认不出的卡
@@ -611,11 +616,15 @@ class Runner:
             self.prepare.deployed = hud.deployed
             self._hud_seen = (self._node, hud.hp if hud.hp is not None else self._hud_seen[1])
 
-    def _identify_unknown(self, n: int) -> tuple | None:
+    def _identify_unknown(self, n: int, frame, boxes: list[TextBox]) -> tuple | None:
         """头像认不出的角色卡:点开看详情面板里的名字(M7A 的做法),把卡面存成这个角色的头像模板,之后直接认。
-        只在商店收起、界面静止时做,每个节点最多 DETAIL_PER_NODE 张。返回最新的(画面, 文字);没做事返回 None。"""
+        只在商店收起、界面静止时做,每个节点最多 DETAIL_PER_NODE 张。返回最新的(画面, 文字);没做事返回 None。
+        先按眼前这一帧看有没有认不出的卡,没有就不去收商店。"""
         node = self._node
         if self.portraits is None or not node or self._details.get(node, 0) >= DETAIL_PER_NODE:
+            return None
+        now = self.portraits.read(frame.image, shop_open=self.prepare.shop_now(boxes))
+        if not any(not s.empty and s.name is None and not s.mark and not _is_item(s, boxes) for s in now):
             return None
         ready = self.ready_prepare()
         if ready is None:
@@ -750,20 +759,22 @@ class Runner:
         self._guide_pinned = True
         self._shown = ()
 
-    def _peek_items(self, n: int, boxes: list[TextBox]) -> None:
-        """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。"""
+    def _peek_items(self, n: int, boxes: list[TextBox]) -> tuple | None:
+        """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。
+        动过画面(收商店、点开道具)就返回最新的(画面, 文字),没动返回 None。"""
         here = item_slots(boxes)
+        touched = False
         if any(i not in self.ledger.items for i in here):
             ready = self.ready_prepare()
             if ready is None:
-                return
-            boxes = ready[1]
+                return None
+            boxes, touched = ready[1], True
             here = item_slots(boxes)
         for index in list(self.ledger.items):
             if index not in here:
                 self.ledger.items.pop(index)           # 已经开掉或挪走了
         if self.prepare.shop_now(boxes):
-            return
+            return None
         from ..vision.board import slots
 
         layout = {s.index: s for s in slots(False) if s.zone == "bench"}
@@ -772,9 +783,14 @@ class Runner:
             if index in self.ledger.items or index - 1 not in layout:
                 continue
             seen = self.prepare.peek(result, layout[index - 1].x, layout[index - 1].y, index)
+            touched = True
             if seen:
                 self.log(f"[{n}] 备战席{index}号 {seen[0]}:{'、'.join(seen[1])}")
         self.ledger.items.update(result.seen)
+        if not touched:
+            return None
+        frame = self.device.grab()
+        return frame, self.ocr(frame.image)
 
     def _lineup(self) -> str:
         if not self._board:
@@ -1122,6 +1138,8 @@ class Runner:
             case "other":
                 if find(boxes, TRANSIENT):
                     return [Action(type="wait", seconds=1.5, reason="自动消失的过场")]
+                if time.monotonic() - self._ready_at < POST_READY and not find(boxes, CLICKABLE):
+                    return [Action(type="wait", seconds=1.5, reason="出战后的过场")]
                 entry_actions = self.entry.plan(screen, image, boxes, in_run=self.in_run)
                 if entry_actions is not None:
                     record["entry"] = {"page": self.entry.page}
@@ -1340,6 +1358,14 @@ class Runner:
                 self._last_sig = sig
                 self.trace.write(record)
                 return screen
+            # 要商店收着才能做的事先做完:看新道具、点开认不出的卡。原来在开商店之后做,里面的 ready_prepare
+            # 又把商店收了,模型拿到的是收着商店的画面,第一轮只能先点「商店」(2026-11-18 那局 9 次)
+            fresh = self._peek_items(n, boxes)
+            if fresh is not None:
+                frame, boxes = fresh
+            fresh = self._identify_unknown(n, frame, boxes)
+            if fresh is not None:
+                frame, boxes = fresh
             # 固定流程做完了(或这轮没有固定流程),再把角色商店打开给模型看。
             # 原来是在每轮开头就打开、紧接着固定流程又要求收起来,一开一收来回点,画面一直在闪
             # (维护者 2026-11-16 看到的「一直点商店」);现在只有真的要做固定流程时才收一次。
@@ -1359,10 +1385,6 @@ class Runner:
                     self._last_sig = sig
                     self.trace.write(record)
                     return now
-            self._peek_items(n, boxes)
-            fresh = self._identify_unknown(n)
-            if fresh is not None:
-                frame, boxes = fresh
         opening = ep is None
         opens = 0
         if opening and screen == "prepare" and self._node:
@@ -1473,6 +1495,7 @@ class Runner:
         for index in result.taken:
             self.ledger.items.pop(index, None)
         if result.ready:
+            self._ready_at = time.monotonic()
             if self.episode is not None and self.episode.node and result.lineup():
                 self.ledger.node(self.episode.node).lineup = result.lineup()
             hud = self._last_hud
@@ -1589,6 +1612,7 @@ class Runner:
             self.in_run = True
         self._last_screen = screen
         if screen == "battle":
+            self._ready_at = 0.0          # 进了战斗,出战后的过场就过去了
             return self.watch_battle(n, record, sig)
 
         actions = self._mentor_transition(screen)
