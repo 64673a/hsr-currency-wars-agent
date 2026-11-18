@@ -168,9 +168,18 @@ SCREEN_NAMES = {
 }
 
 
+# 维护者电脑上的性能监控叠加层:最上面一行「FPS 118 Low 1% 93 CPU 61C 5294 MHz 79 W GPU … 显存 4.9G/8.0G」,
+# OCR 常拆成好几段(「82 W」「##℃ ##%/##%」单独一段),所以认出关键字后整行都去掉。
+# 两局实测都在 y 0.008~0.010,游戏自己的文字从 0.012(延迟)开始。2026-11-18 那局被当成开局界面的文字记进了整局已知事实
+OVERLAY = re.compile(r"FPS|显存|CPU|GPU|MHz")
+OVERLAY_Y = 0.012
+
+
 def meaningful(boxes: list[TextBox]) -> list[TextBox]:
-    """去掉 UID、延迟数字、单个字符这些不说明界面内容的文字。"""
-    return [b for b in boxes if len(b.text) > 1 and not re.match(r"^(UID|\d+ms$)", b.text)]
+    """去掉 UID、延迟数字、单个字符、性能监控叠加层这些不说明界面内容的文字。"""
+    top = any(b.y < OVERLAY_Y and OVERLAY.search(b.text) for b in boxes)
+    return [b for b in boxes if len(b.text) > 1 and not re.match(r"^(UID|\d+ms$)", b.text)
+            and not (top and b.y < OVERLAY_Y)]
 
 
 def intro_text(boxes: list[TextBox]) -> str:

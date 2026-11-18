@@ -166,7 +166,7 @@ class Episode:
     turns: int = 0
     pending: list[str] = field(default_factory=list)   # 等待执行结果的工具调用 id
     done: list[str] = field(default_factory=list)      # 本回合执行过的操作(给回合摘要)
-    seen: set[str] = field(default_factory=set)        # 已经给过描述的游戏条目(有本局档案时就是档案里那一份,整局共用)
+    seen: set[str] = field(default_factory=set)        # 这段对话里已经给过描述的条目(外部 agent 整局共用一份)
     book: Any = None                                   # 本局档案(RunLedger):新出现的条目也追加进去
     waiting: bool = False                              # 上一轮模型只让等待
     cache_at: int = 0                                  # 第一条消息里本局经历的长度(在这里断开打缓存标记)
@@ -218,13 +218,43 @@ class ScreenAgent:
     # ---------------------------------------------------------------- 发给模型的内容
 
     def _entities(self, boxes: list[TextBox], names: list[str] | None, episode: Episode) -> tuple[str, set[str]]:
-        """界面上第一次出现的条目(整局只给一次说明);有本局档案时同时追加进档案的「条目说明」。"""
+        """界面上这段对话里还没给过说明的条目;有本局档案时同时存进档案。"""
         found = [e for e in self.index.link([b.text for b in boxes] + (names or [])) if e.name not in episode.seen]
         if episode.book is not None:
             for e in found:
                 episode.book.add_entry(e.name, format_entities([e]))
         episode.seen.update(e.name for e in found)
         return (format_entities(found) if found else ""), {e.name for e in found}
+
+    def _relevant(self, book, boxes: list[TextBox], names: list[str] | None) -> list[str]:
+        """当前相关的条目(设计文档第 20.4 节,2026-11-18):界面上的(场上、备战席、商店、选项)、场上和备战席角色的羁绊、
+        选的投资和光环、身上的装备和道具、笔记里提到的。不在里面的说明留在档案里,不再自动发。"""
+        get = getattr(self.index, "get", lambda name: [])
+        out: list[str] = []
+
+        def take(e) -> None:
+            book.add_entry(e.name, format_entities([e]))
+            if e.name not in out:
+                out.append(e.name)
+
+        board = {e.name for e in self.index.link(names or [])}
+        for e in self.index.link([b.text for b in boxes] + (names or [])):
+            # 羁绊跟着角色走:界面上的羁绊名多是商店卡面上的标签,只带场上和备战席角色的(下面展开)和笔记里提到的
+            if e.kind == "traits":
+                continue
+            take(e)
+            if e.name in board:                   # 商店里的角色不展开羁绊,买了再说
+                for trait in getattr(e, "links", ()):
+                    for t in get(trait):
+                        take(t)
+        for name in book.kept():
+            if name in book.entries and name not in out:
+                out.append(name)
+            for e in get(name):
+                take(e)
+        for e in getattr(self.index, "mentions", lambda text: [])(book.direction):
+            take(e)
+        return out
 
     def opening(self, episode: Episode, boxes: list[TextBox], *, ledger, hints: str = "",
                 names: list[str] | None = None, nodes: set[str] | None = None) -> tuple[str, list[str]]:
@@ -234,27 +264,37 @@ class ScreenAgent:
         档案渲染出来就带着它们,之后的回合不再当作新信息重发。ledger 是字符串时照旧把条目和经验放在当前界面后面。"""
         texts = [b.text for b in boxes]
         book = ledger if hasattr(ledger, "render") else None
+        external = self.endpoint(episode.role).format == "external"
+        present = {e.name for e in self.index.link(texts + (names or []))}
         if book is not None:
             episode.book = book
-            episode.seen = book.described
-        present = {e.name for e in self.index.link(texts + (names or []))}
-        described, _ = self._entities(boxes, names, episode)
+            book.relevant = self._relevant(book, boxes, names)
+            # 这段对话里给过说明的:API 每个回合是新对话,就是这次开场带上的当前相关条目;
+            # 外部 agent 保留整局对话,收到过的都算(和档案共用一份,回合中途新给的也记进去)
+            episode.seen = book.delivered_entries if external else set(book.relevant)
+            described = ""
+        else:
+            described, _ = self._entities(boxes, names, episode)
         cues = Cues(entities=present, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
                     layer="战术" if episode.screen == "prepare" else "选择")
         if book is not None:
-            cues.entities.update(name for name in (book.environment, book.companion) if name)
+            cues.entities.update(n for n in (book.environment, book.companion, *book.strategies, *book.spotlights) if n)
         checkpoint = book is None or "战略检查点(" in hints or episode.screen == "environment_choice"
-        hits = recall(self.memories, cues) if checkpoint else []
         if book is not None:
+            # 经验每个回合开场都重新判断适用性(选完环境、进新节点、阵容或修正变了):检查点从全部记忆里找,
+            # 其他时候只在这局想起过的里筛;不再适用的(例如没选的「经济严重过热」带出来的抓猪经验)退出当前输入
+            pool = self.memories if checkpoint else [m for m in self.memories if m.id in book.lessons]
+            hits = recall(pool, cues)
             for r in hits:
                 m = r.memory
                 book.add_lesson(m.id, f"- [{m.label()}] {m.title}\n  {m.content.strip()}")
+            book.active = [r.memory.id for r in hits]
             episode.cache_at = book.stable_len()
             full = book.render()
-            external = self.endpoint(episode.role).format == "external"
             head = [book.render_delta() if external else full]
             episode.snapshot = full
         else:
+            hits = recall(self.memories, cues) if checkpoint else []
             head = [ledger]
         parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
@@ -283,8 +323,6 @@ class ScreenAgent:
         parts.append(self._ask(episode))
         text = "\n\n".join(parts)
         if episode.book is not None:
-            if self.endpoint(episode.role).format == "external":
-                episode.book.mark_delivered("entries")   # 这里已经发过,下个回合开场别再当新条目发一遍
             episode.snapshot = episode.book.render() + "\n\n" + text
         return text
 

@@ -17,6 +17,7 @@ class Entity:
     kind: str
     name: str
     text: str  # 给模型看的一段说明
+    links: tuple[str, ...] = ()   # 相关条目:角色的羁绊(当前相关的条目说明要带上场上角色的羁绊)
 
 
 def _describe(kind: str, d: dict, carry: tuple[int, int] | None = None) -> str:
@@ -66,6 +67,7 @@ def _carry_stats(con) -> dict[str, tuple[int, int]]:
 class NameIndex:
     def __init__(self, db_path: Path):
         self.by_name: dict[str, list[Entity]] = {}
+        self._names: list[str] = []
         if not db_path.exists():
             return
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -74,7 +76,8 @@ class NameIndex:
             for kind in LINK_KINDS:
                 for name, data in con.execute(f"SELECT name, data FROM {kind}"):
                     d = json.loads(data)
-                    ent = Entity(kind=kind, name=name, text=_describe(kind, d, carries.get(name) if kind == "roles" else None))
+                    ent = Entity(kind=kind, name=name, text=_describe(kind, d, carries.get(name) if kind == "roles" else None),
+                                 links=tuple(t["name"] for t in d.get("traits") or []) if kind == "roles" else ())
                     if not any(e.kind == kind for e in self.by_name.get(name, [])):
                         self.by_name.setdefault(name, []).append(ent)
         finally:
@@ -94,6 +97,19 @@ class NameIndex:
                         break
             for e in hits or []:
                 found.setdefault((e.kind, e.name), e)
+        return list(found.values())
+
+    def get(self, name: str) -> list[Entity]:
+        return self.by_name.get(name, [])
+
+    def mentions(self, text: str) -> list[Entity]:
+        """一段自由文字(模型的笔记)里提到的所有条目;link 每段文字只认一个,这里全找出来。"""
+        found: dict[tuple[str, str], Entity] = {}
+        for name in self._names:
+            if len(name) >= 2 and name in text:
+                for e in self.by_name[name]:
+                    found.setdefault((e.kind, e.name), e)
+                text = text.replace(name, " ")    # 长名字先占掉,「特战资金」不再算出「资金」
         return list(found.values())
 
 

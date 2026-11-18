@@ -37,6 +37,8 @@ REFRESH_PRICE_REGION = (0.80, 0.455, 0.10, 0.075)  # 「刷新」下面那个价
 NO_MONEY = r"金币不足|不足|余额不足"
 SHOP_CARD_Y = 0.15
 GAP = 0.5
+# 出战和别的操作一起发时的提醒:只在当轮执行结果里给,不记进本局经历(下一轮单独出战后经历里有「出战」)
+READY_DEFERRED = "出战:这一轮没有出战。"
 ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
 REFUSED = "不可调整|无法上阵|无法移动"   # 拖动被游戏拒绝时界面中间的提示(2026-11-15 实机:「当前情况下不可调整」)
 BEHIND_SHOP = {"选择主角", "出战"}   # 右下的按钮,商店展开时被挡住(2026-11-16 外部 agent 实测:点了没反应)
@@ -385,7 +387,7 @@ class PrepareExecutor:
                     _shift(pending, done)
                 elif a.type == "ready":
                     if others and (not final or failed):
-                        out.results.append("出战:这一轮没有出战。出战要单独一轮:先看上面这些操作之后的实际局面(上场人数、"
+                        out.results.append(READY_DEFERRED + "出战要单独一轮:先看上面这些操作之后的实际局面(上场人数、"
                                            "站位、装备),确认无误再只发 ready")
                         out.observe = True
                         break

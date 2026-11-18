@@ -1,11 +1,14 @@
-"""本局档案:跨回合需要记住的信息,每个回合开头交给模型。分两部分:
+"""本局档案:跨回合需要记住的信息,每个回合开头交给模型。
 
 - 本局经历:只往后追加、写下就不再改。每个回合结束时程序记一行(做了什么 + 模型自己写的回合小结),
   战斗结果、开局信息、本局学到的教训也记在这里。保留整局所有回合(维护者要求),一局大约 60~90 个回合、
-  两三万字。它放在回合第一条消息的最前面,只增不改,下一个回合开头能命中到这里为止的前缀缓存。
-- 当前状态:当前参考的攻略、角色身上的装备、没开的道具、本位面的节点、对局方向与计划,随时会变,放在后面。
+  两三万字。它放在回合第一条消息的最前面,只增不改,有利于前缀稳定(能不能命中缓存还看厂商)。
+- 整局已知事实:程序从界面读到的,出现新事实时追加,放在经历后面(追加时不打断经历这段前缀)。
+- 条目说明、想起的经验:档案里留全(整局见过、想起过的都在),每个回合开场只发当前相关、当前适用的那部分
+  (2026-11-18:原来只加不删,没选的投资环境、商店里没买的角色、不再适用的经验一直带到局末)。
+- 当前状态:当前参考的攻略、角色身上的装备、没开的道具、对局方向与计划,随时会变,放在最后。
 
-设计见 docs/TECH_DESIGN.md 第 8.5 节。
+设计见 docs/TECH_DESIGN.md 第 8.5、20.4 节。
 """
 
 from __future__ import annotations
@@ -70,13 +73,19 @@ class RunLedger:
     guide: str = ""                                          # 当前参考的攻略(卡片文字)
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)         # 本局经历,只追加
-    # 以下三块都只追加、不重复(设计文档第 20.4 节):出现新内容时加一条,之后每个回合都在,不再当作新信息反复塞
     facts: list[str] = field(default_factory=list)           # 整局已知事实:程序从界面读到的(开局、位面节点与词条、拿到的投资)
-    entries: list[str] = field(default_factory=list)         # 条目说明:角色、羁绊、装备等第一次出现时的官方描述
-    described: set[str] = field(default_factory=set)         # 已经给过说明的条目名
-    lessons: list[str] = field(default_factory=list)         # 想起的经验(记忆):第一次相关时附上
-    recalled: set[str] = field(default_factory=set)          # 已经附上的记忆 id
-    delivered: dict[str, int] = field(default_factory=dict)  # 外部 agent 已接收的档案条目数
+    # 条目说明和经验:档案里留全,开场只发当前那部分(设计文档第 20.4 节)
+    entries: dict[str, str] = field(default_factory=dict)    # 条目名 → 官方描述(整局见过的都留着)
+    relevant: list[str] = field(default_factory=list)        # 当前相关的条目名(回合开场时重算)
+    lessons: dict[str, str] = field(default_factory=dict)    # 记忆 id → 经验原文(整局想起过的都留着)
+    active: list[str] = field(default_factory=list)          # 当前适用的经验 id(回合开场时重新判断)
+    strategies: list[str] = field(default_factory=list)      # 拿到的投资策略
+    spotlights: list[str] = field(default_factory=list)      # 选过的主角光环
+    held: list[str] = field(default_factory=list)            # 道具栏里的道具(最近一次读到的)
+    delivered: dict[str, int] = field(default_factory=dict)  # 外部 agent 已接收的经历、事实条数
+    delivered_entries: set[str] = field(default_factory=set)        # 外部 agent 收到过说明的条目
+    delivered_lessons: tuple[str, ...] = ()                  # 外部 agent 上次收到的当前适用经验
+    lessons_sent: set[str] = field(default_factory=set)      # 外部 agent 收到过原文的经验
     delivered_state: dict[str, str] = field(default_factory=dict)   # 外部 agent 上次收到的当前状态各小节
 
     def node(self, name: str) -> NodeRecord:
@@ -99,18 +108,25 @@ class RunLedger:
         return True
 
     def add_entry(self, name: str, text: str) -> bool:
-        if not name or name in self.described:
+        """条目说明存进档案(已有就不动)。返回是不是第一次见。"""
+        if not name or name in self.entries:
             return False
-        self.described.add(name)
-        self.entries.append(text.strip())
+        self.entries[name] = text.strip()
         return True
 
     def add_lesson(self, memory_id: str, text: str) -> bool:
-        if memory_id in self.recalled:
+        if memory_id in self.lessons:
             return False
-        self.recalled.add(memory_id)
-        self.lessons.append(text.strip())
+        self.lessons[memory_id] = text.strip()
         return True
+
+    def kept(self) -> list[str]:
+        """不在界面上也一直相关的条目:选的投资环境、拿到的投资策略、主角光环、身上的装备、道具。
+        道具的说明在档案里的名字是「道具:名字」(程序从道具图鉴写进去的)。"""
+        names = ([self.environment] if self.environment else []) + self.strategies + self.spotlights
+        names += [item for items in self.equipped.values() for item in items]
+        names += [name for name, _ in self.items.values()] + [f"道具:{n}" for n in self.held]
+        return list(dict.fromkeys(n for n in names if n))
 
     def kinds_near(self, node: str | None) -> set[str]:
         """当前节点和下一个节点的类型(记忆按「当前或下一个节点」触发,设计文档 5.4)。"""
@@ -143,8 +159,8 @@ class RunLedger:
         return head + ("".join(f"\n- {h}" for h in self.history) if self.history else "\n(还没有)")
 
     def stable_len(self) -> int:
-        """事实和经历之后的缓存边界;新增事实时,后续经历的共同前缀可能改变。"""
-        return len(self.render_facts()) + 2 + len(self.render_history())
+        """本局经历之后的缓存边界:经历只往后加,下个回合开头到这里为止的旧内容不变。"""
+        return len(self.render_history())
 
     history_len = stable_len   # 旧名字
 
@@ -165,29 +181,47 @@ class RunLedger:
     def render_state(self) -> str:
         return "## 当前状态\n" + "\n\n".join(f"### {t}\n{c}" for t, c in self.state_sections())
 
+    def render_entries(self) -> str:
+        current = [self.entries[n] for n in self.relevant if n in self.entries]
+        return "## 条目说明(和当前局面相关的官方描述)\n" + "\n".join(current) if current else ""
+
+    def render_lessons(self) -> str:
+        current = [self.lessons[i] for i in self.active if i in self.lessons]
+        return ("## 想起的经验(过去积累的,可能不完整或有错,结合局面判断;按当前局面筛选)\n" + "\n".join(current)
+                if current else "")
+
     def render(self) -> str:
-        """从稳定到易变:整局已知事实、本局经历(只追加,命中缓存),条目说明、想起的经验(只追加),当前状态。"""
-        parts = [self.render_facts(), self.render_history()]
-        if self.entries:
-            parts.append("## 条目说明(每个条目第一次出现时附上官方描述)\n" + "\n".join(self.entries))
-        if self.lessons:
-            parts.append("## 想起的经验(过去积累的,可能不完整或有错,结合局面判断;第一次相关时附上)\n"
-                         + "\n".join(self.lessons))
-        parts.append(self.render_state())
-        return "\n\n".join(parts)
+        """从稳定到易变:本局经历(只追加)、整局已知事实(偶尔追加)、当前相关的条目说明和经验、当前状态。"""
+        parts = [self.render_history(), self.render_facts(), self.render_entries(), self.render_lessons(),
+                 self.render_state()]
+        return "\n\n".join(p for p in parts if p)
 
     def render_delta(self) -> str:
-        """外部 agent 保留历史对话,这里只交付上次之后新增的内容;当前状态只发变了的小节(攻略卡片很长,不变就不再发)。"""
+        """外部 agent 保留历史对话,这里只交付上次之后的变化:新增的经历和事实、还没收到过的当前相关条目、
+        变了的适用经验(明确说哪些不再适用:它已经收到的旧经验不会因为这边换了列表就消失);当前状态只发变了的小节。"""
         parts = []
         if not self.delivered:
             parts.append("## 本局\n难度 " + (self.difficulty or "?"))
-        for key, title in (("facts", "新增已知事实"), ("history", "新增经历"),
-                           ("entries", "新条目说明"), ("lessons", "新相关经验")):
+        for key, title in (("history", "新增经历"), ("facts", "新增已知事实")):
             items = getattr(self, key)
             start = self.delivered.get(key, 0)
             if len(items) > start:
                 parts.append(f"## {title}\n" + "\n".join(items[start:]))
             self.delivered[key] = len(items)
+        new = [n for n in self.relevant if n in self.entries and n not in self.delivered_entries]
+        if new:
+            parts.append("## 新条目说明\n" + "\n".join(self.entries[n] for n in new))
+            self.delivered_entries.update(new)
+        active = tuple(i for i in self.active if i in self.lessons)
+        if active != self.delivered_lessons:
+            if active:
+                lines = [self.lessons[i] if i not in self.lessons_sent
+                         else self.lessons[i].splitlines()[0] + "(原文之前给过)" for i in active]
+                parts.append("## 当前适用的经验(已更新;之前给过、这里没列出的不再适用)\n" + "\n".join(lines))
+            else:
+                parts.append("## 当前适用的经验\n(之前给过的经验都不再适用)")
+            self.lessons_sent.update(active)
+            self.delivered_lessons = active
         sections = self.state_sections()
         changed = [(t, c) for t, c in sections if self.delivered_state.get(t) != c]
         gone = [t for t in self.delivered_state if t not in {t for t, _ in sections}]
@@ -198,10 +232,6 @@ class RunLedger:
         else:
             parts.append("## 当前状态\n(和之前相同)")
         return "\n\n".join(parts)
-
-    def mark_delivered(self, key: str) -> None:
-        """回合中途已经随观察发出去的内容(新出现的条目),下个回合开场不再作为新增发一遍。"""
-        self.delivered[key] = len(getattr(self, key))
 
 
 def compact_node(line: str) -> str:

@@ -13,12 +13,34 @@ def test_render_delta_sends_state_only_when_changed():
     assert "主 C 景元" in third and "攻略卡片" not in third
 
 
-def test_entries_shown_mid_turn_not_resent():
+def test_entries_delta_sends_current_ones_not_received_yet():
     book = RunLedger()
     book.render_delta()
     book.add_entry("景元", "- [角色] 景元:……")
-    book.mark_delivered("entries")          # 回合中途已经随观察发过
-    assert "景元" not in book.render_delta()
+    book.relevant = ["景元"]
+    assert "景元" in book.render_delta()
+    assert "景元" not in book.render_delta()        # 收到过就不再发
+    book.add_entry("白露", "- [角色] 白露:……")
+    book.delivered_entries.add("白露")              # 回合中途已经随观察发过(episode.seen 和它是同一份)
+    book.relevant = ["白露"]
+    assert "白露" not in book.render_delta()
+
+
+def test_lessons_delta_says_which_no_longer_apply():
+    """外部 agent 收到的旧经验不会因为服务端换了列表就消失:适用经验变了要明确交付(2026-11-18)。"""
+    book = RunLedger()
+    book.render_delta()
+    book.add_lesson("piggy", "- [打法] 抓猪\n  经济严重过热时上有输出的阵容")
+    book.active = ["piggy"]
+    first = book.render_delta()
+    assert "抓猪" in first and "经济严重过热时" in first
+    assert "适用的经验" not in book.render_delta()       # 没变就不发
+    book.add_lesson("reward", "- [机制] 奖励节点不会失败\n  阵亡无限复活")
+    book.active = ["reward", "piggy"]
+    second = book.render_delta()
+    assert "阵亡无限复活" in second and "抓猪(原文之前给过)" in second and "不再适用" in second
+    book.active = []
+    assert "都不再适用" in book.render_delta()
 
 
 def test_equip_cap_and_unequip():

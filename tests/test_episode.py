@@ -146,10 +146,10 @@ def test_ledger_history_append_only():
     assert history.startswith(before) and "[1-0 战斗]" in history and "[1-99 战斗]" in history
     assert len(led.history[-1]) == 600
     text = led.render()
-    stable = led.render_facts() + "\n\n" + history          # 整局已知事实 + 本局经历在最前面(设计文档第 20.4 节)
-    assert text.startswith(stable) and text.index("刃攻略") > len(stable) and led.stable_len() == len(stable)
+    # 本局经历在最前面(设计文档第 20.4 节,2026-11-18 起放在事实前面):新增事实不打断经历这段前缀
+    assert text.startswith(history) and text.index("刃攻略") > len(history) and led.stable_len() == len(history)
     led.add_fact("位面 1 敌人词条:第一位面强化")
-    assert led.render().startswith(led.render_facts()) and not led.add_fact("位面 1 敌人词条:第一位面强化")
+    assert led.render().startswith(history) and not led.add_fact("位面 1 敌人词条:第一位面强化")
     led.set_direction("x" * 2000)
     assert len(led.direction) == 800
 
@@ -229,3 +229,31 @@ def test_shop_state_free_refresh():
     assert shop_state(boxes(("收起", 0.845, 0.908), ("刷新", 0.842, 0.451))) is True
     assert shop_state(boxes(("免费刷新", 0.842, 0.450))) is True     # 只认到一半也算开着
     assert shop_state(boxes(("商店", 0.845, 0.909))) is False
+
+
+def test_history_drops_ready_notice_but_keeps_failures(tmp_path):
+    """「这一轮没有出战,出战要单独一轮」是当轮反馈,不进本局经历;没成功的操作照记(2026-11-18)。"""
+    from cwagent.brain.screen_agent import Episode
+    from cwagent.orchestrator.loop import Runner, Trace
+    from cwagent.orchestrator.prepare import READY_DEFERRED
+
+    from .test_loop import FakeBrain
+
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    r.episode = Episode(id=1, key=("prepare", "1-2"), screen="prepare", node="1-2", role="tactical", max_turns=4)
+    r.episode.done = ["买商店第 1 格(桂乃芬)", READY_DEFERRED + "出战要单独一轮:先看……再只发 ready",
+                      "备战席2号 → 后台3号:上场已满(3/3)", "出战"]
+    r.close_episode()
+    line = r.ledger.history[-1]
+    assert "这一轮没有出战" not in line and "上场已满(3/3)" in line and line.count("出战") == 1
+
+
+def test_intro_text_skips_performance_overlay():
+    from cwagent.orchestrator.screens import intro_text
+    from cwagent.vision.ocr import TextBox
+
+    # 2026-11-18 那局 OCR 把叠加层拆成了几段,「82 W」单独一段也要去掉
+    words = [TextBox("FPS 118 Low 1% 80", 0.048, 0.009, 0.08, 0.02, 0.9),
+             TextBox(") CPU 63℃ 5217 MHz", 0.141, 0.009, 0.1, 0.02, 0.9), TextBox("82 W", 0.210, 0.009, 0.03, 0.02, 0.9),
+             TextBox("本场对局首领", 0.3, 0.2, 0.1, 0.03, 0.9), TextBox("下一步", 0.5, 0.9, 0.1, 0.03, 0.9)]
+    assert intro_text(words) == "本场对局首领"

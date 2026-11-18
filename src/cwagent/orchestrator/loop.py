@@ -51,7 +51,7 @@ from .macros import companion_of_bubble, find_orbs, open_crystals, read_companio
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
 from . import situation
-from .prepare import PrepareExecutor, PrepareResult
+from .prepare import READY_DEFERRED, PrepareExecutor, PrepareResult
 from .screens import (
     CLOSE_CORNER,
     DIFFICULTY_HINT,
@@ -538,6 +538,7 @@ class Runner:
         except Exception as e:  # noqa: BLE001 - 道具栏认不出就不给
             self._items = []
             self.log(f"读道具栏出错:{type(e).__name__}: {e}")
+        self.ledger.held = [it.name for it in self._items]
         if self._items:
             state["items"] = [{"slot": it.slot, "id": it.id, "name": it.name, "count": it.count, "score": it.score}
                               for it in self._items]
@@ -1135,7 +1136,8 @@ class Runner:
         self._results = []
         if ep is None:
             return
-        done = ";".join(ep.done)
+        # 「这一轮没有出战,出战要单独一轮」是当轮的执行反馈,不是失败,不进经历;其他没成功的操作照记
+        done = ";".join(d for d in ep.done if not d.startswith(READY_DEFERRED))
         if ep.screen == "environment_choice":
             picked = ep.chosen.get("portals") or self._picked(ep.done, "portals")
             if picked:
@@ -1151,6 +1153,7 @@ class Runner:
         if ep.screen == "strategy_choice":
             picked = ep.chosen.get("augments") or self._picked(ep.done, "augments")
             if picked:
+                self.ledger.strategies.append(picked[0])
                 self.ledger.add_fact(f"投资策略 {picked[0]}({ep.node or '开局'} 拿到):{picked[1]}")
         if ep.screen == "spotlight_choice":
             picked = ep.chosen.get("spotlights") or self._picked(ep.done, "spotlights")
@@ -1158,6 +1161,7 @@ class Runner:
                 if picked[0] == "从师":
                     self._mentor_until = time.monotonic() + 18
                 role = f" → {ep.spotlight_role}" if ep.spotlight_role else "(角色未识别)"
+                self.ledger.spotlights.append(picked[0])
                 self.ledger.add_fact(f"主角光环 {picked[0]}{role}({ep.node or '节点未知'} 选择):{picked[1]}")
         if ep.screen == "mentor":
             self._mentor_until = 0.0
@@ -1364,8 +1368,8 @@ class Runner:
                          max_turns=self.prepare_turns + 1 if screen == "prepare" else OTHER_TURNS)   # 多一轮留给单独的出战
             self.episode = ep
             self._set_vision(ep, n, screen, frame.image, boxes, record)
-            ep.cache_at = self.ledger.stable_len()    # 整局已知事实 + 本局经历在第一条消息的最前面,只增不改
-            # 传档案本身:新出现的条目说明、第一次相关的经验追加进档案,不再每回合重发(设计文档第 20.4 节)
+            ep.cache_at = self.ledger.stable_len()    # 本局经历在第一条消息的最前面,只往后加
+            # 传档案本身:当前相关的条目说明和适用的经验由 brain 按这一刻的局面挑(设计文档第 20.4 节)
             text, recalled = self.brain.opening(ep, boxes, ledger=self.ledger, hints=hints, names=names,
                                                 nodes=self.ledger.kinds_near(self._node))
         else:
