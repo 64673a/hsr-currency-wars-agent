@@ -475,6 +475,12 @@ class PrepareExecutor:
                             self.deployed = shift(self.deployed, -1)
                         out.results.append(text)
                 elif a.type == "refresh":
+                    # 先确认商店开着:2026-11-18 那局梦境交织的弹窗把商店收了,程序还当开着,点的不是刷新
+                    boxes = self.set_shop(out, boxes, True)
+                    if not self.shop:
+                        out.results.append(f"{text}:商店没有打开")
+                        out.observe = True
+                        break
                     out.results.append(self._refresh(out, boxes, text))
                     out.observe = True
                     break
