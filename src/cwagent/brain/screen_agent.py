@@ -29,7 +29,7 @@ ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
 ROLL_MAX = 30
 LOOKS = ("zoom", "inspect", "recheck")   # 只看不操作:单独提交,不占决策次数(有上限)
 LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备"}
-LOOKUPS = 3      # 一轮决策里最多查几次资料(lookup 工具),查完接着判断,不碰游戏
+LOOKUPS = 8      # 一轮决策里最多查几次资料(lookup 工具),查完接着判断,不碰游戏(维护者 2026-11-18:3 次可能不够)
 
 
 class RollTarget(BaseModel):
@@ -261,7 +261,7 @@ def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str,
     guide_list = "\n".join(f"- {g.code} {g.title[:30]} 主 C {'、'.join(g.carries) or '?'}" for g in guides.guides) \
         if guides is not None and guides.guides else "(攻略没有开启)"
     text = ((PROMPTS / "system.md").read_text(encoding="utf-8").replace("{memories}", catalog)
-            .replace("{guides}", guide_list).replace("{rules}", rules))
+            .replace("{guides}", guide_list).replace("{lookups}", str(LOOKUPS)).replace("{rules}", rules))
     return text, codes
 
 

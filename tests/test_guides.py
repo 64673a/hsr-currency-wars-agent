@@ -102,7 +102,7 @@ def test_lookup_is_its_own_tool(monkeypatch):
     monkeypatch.setattr(screen_agent, "complete", lambda *x, **k: looping.pop(0))
     ep2 = Episode(id=2, key=("prepare", "1-1"), screen="prepare", node="1-1", role="tactical", max_turns=3)
     d2 = a.decide(ep2, "开场")
-    assert d2.error and not d2.actions and "已经 3 次" in ep2.messages[-1].content
+    assert d2.error and not d2.actions and f"已经 {LOOKUPS} 次" in ep2.messages[-1].content
 
 
 def test_environment_recorded_from_choice(tmp_path, advisor):
