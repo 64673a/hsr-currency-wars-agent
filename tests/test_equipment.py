@@ -73,6 +73,7 @@ def test_book_combos_and_advice(db):
     assert book.combos(items) == [(1, 2, "反重力皮靴"), (1, 3, "奇兽花园星徽")]
     text, names = book.describe(items, ["阿格莱雅", "银狼"])
     assert "1号+2号 → 反重力皮靴(进阶装备)" in text and "阿格莱雅" not in text   # 常配装备改成 lookup 查
+    assert "3号 红钻 (0.000,0.000)" in text      # 每件带坐标:道具(冶金炉等)拖到装备上时的终点
     assert book.advice(["阿格莱雅", "银狼"]) == ["- 阿格莱雅:反重力皮靴、反螺旋舞步(出现在 2 篇攻略的最终阵容里)"]
     assert names == ["轮滑鞋", "轮滑鞋", "红钻", "反重力皮靴", "奇兽花园星徽"]
 

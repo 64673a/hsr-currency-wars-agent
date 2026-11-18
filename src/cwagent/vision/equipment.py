@@ -196,7 +196,10 @@ def cancel_point(confirm: tuple[float, float]) -> tuple[float, float]:
     return confirm[0] - CANCEL_OFFSET, confirm[1]
 
 
-def format_items(items: list[Item]) -> str:
-    return ";".join(f"{i.index}号 {i.name}" + ("·特权(效果翻倍)" if i.privileged else "")
-                    + (f"({i.category})" if i.category else "") if i.name
-                    else f"{i.index}号 认不出" for i in items) or "(空)"
+def format_items(items: list[Item], coords: bool = False) -> str:
+    """装备栏一行。coords 时每件后面带坐标:把道具(冶金炉、特权赋予卡等)拖到某件装备上时用作 drag 的终点。"""
+    def one(i: Item) -> str:
+        text = (f"{i.index}号 {i.name}" + ("·特权(效果翻倍)" if i.privileged else "")
+                + (f"({i.category})" if i.category else "") if i.name else f"{i.index}号 认不出")
+        return text + (f" ({i.x:.3f},{i.y:.3f})" if coords else "")
+    return ";".join(one(i) for i in items) or "(空)"

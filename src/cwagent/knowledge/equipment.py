@@ -101,7 +101,7 @@ class EquipmentBook:
         """给模型的装备信息,以及要附上效果描述的装备名。"""
         from ..vision.equipment import format_items
 
-        lines = ["装备栏(右上角,编号从 1 开始):" + format_items(items)]
+        lines = ["装备栏(右上角,编号从 1 开始,括号里是坐标):" + format_items(items, coords=True)]
         combos = self.combos(items)
         if combos:
             lines.append("现在能合成:" + ";".join(
