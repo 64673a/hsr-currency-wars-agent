@@ -125,9 +125,15 @@ class RunLedger:
             return set()
         return self.node_kinds.get(node, set()) | self.node_kinds.get(next_node(node) or "", set())
 
-    def equip(self, role: str, item: str) -> None:
-        """程序执行 equip 成功后记一笔。一个角色最多穿 3 件(规则卡),多出来的说明前面的记录已经过期,只留最近 3 件。"""
+    def equip(self, role: str, item: str, combine=None) -> None:
+        """程序执行 equip 成功后记一笔。一个角色最多穿 3 件(规则卡),多出来的说明前面的记录已经过期,只留最近 3 件。
+        combine(a, b) 给出两件简易装备合成的进阶装备:角色身上已有一件简易装备时,再装一件会直接合成(维护者 2026-11-18)。"""
         items = self.equipped.setdefault(role, [])
+        for i, have in enumerate(items):
+            product = combine(have, item) if combine else None
+            if product:
+                items[i] = product
+                return
         items.append(item)
         del items[:-3]
 

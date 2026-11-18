@@ -1432,7 +1432,7 @@ class Runner:
         for role in result.sold:
             self.ledger.unequip(role)
         for role, item in result.equipped:
-            self.ledger.equip(role, item)
+            self.ledger.equip(role, item, self.equipment.merge if self.equipment else None)
         self.ledger.items.update(result.seen)
         for index in result.taken:
             self.ledger.items.pop(index, None)

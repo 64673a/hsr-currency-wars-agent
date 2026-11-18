@@ -294,3 +294,18 @@ def test_compose_confirm_multiscale():
         at = find_compose_confirm(screen)
         assert at is not None and at[0] > 0.9 and at[1] > 0.6
     assert find_compose_confirm(Image.new("RGB", (1920, 1080), (40, 40, 60))) is None
+
+
+def test_two_simple_items_on_a_role_merge(db):
+    """角色身上已有一件简易装备,再装一件就会合成进阶装备(维护者 2026-11-18),记录里也记成合成后的那件。"""
+    from cwagent.brain.ledger import RunLedger
+
+    book = EquipmentBook(db)
+    assert book.merge("轮滑鞋", "轮滑鞋") == "反重力皮靴"
+    assert book.merge("轮滑鞋", "红钻") is None and book.merge("反重力皮靴", "轮滑鞋") is None
+    ledger = RunLedger()
+    ledger.equip("景元", "反重力皮靴", book.merge)
+    ledger.equip("景元", "轮滑鞋", book.merge)
+    assert ledger.equipped["景元"] == ["反重力皮靴", "轮滑鞋"]          # 进阶 + 简易不合成
+    ledger.equip("景元", "轮滑鞋", book.merge)
+    assert ledger.equipped["景元"] == ["反重力皮靴", "反重力皮靴"]      # 第二件简易装备和身上那件合成
