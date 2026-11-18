@@ -200,6 +200,14 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
         except KeyError:
             raise HTTPException(404, f"对局 {run_id} 不存在") from None
 
+    @app.get("/api/runs/{run_id}/pending")
+    def run_pending(run_id: str) -> dict[str, Any]:
+        """模型决策中的那一步;没有在决策时返回空对象。"""
+        try:
+            return runs.pending(run_id) or {}
+        except KeyError:
+            raise HTTPException(404, f"对局 {run_id} 不存在") from None
+
     @app.get("/api/runs/{run_id}/shots/{name}")
     def run_shot(run_id: str, name: str) -> FileResponse:
         try:

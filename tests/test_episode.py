@@ -48,7 +48,7 @@ def test_episode_multiturn_and_retry(monkeypatch):
                reply({"analysis": "选一", "actions": [{"type": "click_text", "text": "其一"}]}),
                reply({"analysis": "确认", "actions": [{"type": "click_text", "text": "确认"}]}, call_id="c2")]
 
-    def fake_complete(ep, system, messages, tools):
+    def fake_complete(ep, system, messages, tools, **kw):
         sent.append([m.role for m in messages])
         return answers.pop(0)
 
@@ -72,7 +72,7 @@ def test_summary_and_cache_cut(monkeypatch):
     answers = [reply({"analysis": "选左边", "actions": [{"type": "click_text", "text": "其一"}]}),
                reply({"analysis": "确认", "summary": "选了简单的遭遇,保血", "actions": [{"type": "click_text", "text": "确认"}]},
                      call_id="c2")]
-    monkeypatch.setattr(screen_agent, "complete", lambda *a: answers.pop(0))
+    monkeypatch.setattr(screen_agent, "complete", lambda *a, **k: answers.pop(0))
     a = agent()
     ep = Episode(id=1, key=("encounter_choice", "1-7"), screen="encounter_choice", node="1-7", role="chooser",
                  max_turns=4, cache_at=5)
@@ -85,12 +85,12 @@ def test_summary_and_cache_cut(monkeypatch):
 def test_prepare_actions_rejected_elsewhere_and_error_restores(monkeypatch):
     answers = [reply({"analysis": "买", "actions": [{"type": "buy", "slot": 1}]}),
                reply({"analysis": "买", "actions": [{"type": "buy", "slot": 1}]}, call_id="c2")]
-    monkeypatch.setattr(screen_agent, "complete", lambda *a: answers.pop(0))
+    monkeypatch.setattr(screen_agent, "complete", lambda *a, **k: answers.pop(0))
     ep = Episode(id=1, key=("other",), screen="other", node=None, role="navigator", max_turns=4)
     d = agent().decide(ep, "开场")
     assert "只能在备战界面使用" in d.error and ep.pending == []
 
-    def fail(*a):
+    def fail(*a, **k):
         raise LLMError("超时")
 
     monkeypatch.setattr(screen_agent, "complete", fail)

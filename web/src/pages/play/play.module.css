@@ -73,6 +73,17 @@
 .stepScreen { color: var(--text-muted); }
 .stepScreen[data-decision="true"] { color: var(--accent); }
 .stepText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepRow[data-pending="true"] .stepText { color: var(--foreground); }
+
+/* 模型决策中的那一步:闪动的小点、写到一半的光标、流式的思考(新内容自动滚到底) */
+.pendingDot { display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--accent); vertical-align: middle; animation: pendingBlink 1.2s var(--ease-standard) infinite; }
+.pendingStatus { margin: 0; display: flex; align-items: center; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.thinking { margin: 0; max-height: 280px; overflow-y: auto; padding: 10px 12px; border-radius: var(--radius-control); background: var(--surface-muted); font-size: var(--text-sm); line-height: 1.7; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; background: var(--accent); vertical-align: text-bottom; animation: pendingBlink 1s steps(2) infinite; }
+@keyframes pendingBlink { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .pendingDot, .caret { animation: none; }
+}
 
 /* 右侧:这一步的判断 */
 .panel { min-height: 0; overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }

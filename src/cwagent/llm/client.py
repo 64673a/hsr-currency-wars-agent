@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import random
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -18,6 +19,10 @@ from .external import BRIDGE
 
 _ADAPTERS = {"openai": openai_format, "anthropic": anthropic_format}
 MAX_ERROR_BODY = 2000
+# 流式请求被拒(网关不认 stream / stream_options)的接口,本进程里之后都用非流式
+_NO_STREAM: set[tuple[str, str]] = set()
+
+Delta = Callable[[str, str], None]   # (种类, 文字):reasoning / text / tool(工具参数片段);reset 表示重新开始
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
@@ -48,11 +53,55 @@ def _json_mode_messages(messages: list[Message], tools: list[ToolSpec]) -> list[
     return out
 
 
+def _sse(lines: Iterator[str]) -> Iterator[dict[str, Any]]:
+    """Server-Sent Events 的 data 行 → JSON。一行一个 JSON 是常态;跨行的按空行分隔拼起来。"""
+    buf: list[str] = []
+    for line in lines:
+        if line.startswith("data:"):
+            data = line[5:].strip()
+            if data == "[DONE]":
+                continue
+            if not buf:
+                try:
+                    yield json.loads(data)
+                    continue
+                except ValueError:
+                    pass
+            buf.append(data)
+        elif not line.strip() and buf:
+            yield json.loads("\n".join(buf))
+            buf = []
+    if buf:
+        yield json.loads("\n".join(buf))
+
+
+def _stream(client: httpx.Client, url: str, headers: dict[str, str], body: dict[str, Any], adapter,
+            on_delta: Delta) -> tuple[httpx.Response, dict[str, Any] | None]:
+    """发流式请求,边收边把增量交给 on_delta;返回拼好的完整响应(状态码不是 200 时为 None)。"""
+    with client.stream("POST", url, headers=headers, json=body) as resp:
+        if resp.status_code != 200:
+            resp.read()
+            return resp, None
+        on_delta("reset", "")
+        acc = adapter.Accumulator()
+        try:
+            for event in _sse(resp.iter_lines()):
+                for kind, text in acc.feed(event):
+                    on_delta(kind, text)
+        except anthropic_format.StreamError as e:
+            raise LLMError(f"流式响应出错:{e}", status=200, retryable=True) from None
+        except ValueError as e:
+            raise LLMError(f"无法解析流式响应:{e}", status=200) from None
+        return resp, acc.result()
+
+
 def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
              tools: list[ToolSpec] | None = None, *, http: httpx.Client | None = None, max_retries: int = 4,
-             sleep: Callable[[float], None] = time.sleep) -> LLMResponse:
+             sleep: Callable[[float], None] = time.sleep, on_delta: Delta | None = None) -> LLMResponse:
     """调用一次模型。messages 是一段 user 文字或多轮消息列表。
 
+    给了 on_delta 就用流式请求,边收边回调思考、正文和工具参数的片段(网页上实时显示);
+    拼出来的响应和非流式完全一样,解析、多轮传回都不变。网关不认流式参数时自动改用非流式。
     429、5xx 和网络错误按指数退避重试;其他 4xx 直接抛出 LLMError。
     """
     tools = tools or []
@@ -65,6 +114,9 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
     if tools and not native:
         messages = _json_mode_messages(messages, tools)
     url, headers, body = adapter.build_request(profile, system, messages, tools if native else None)
+    key = (url, profile.model)
+    stream = on_delta is not None and key not in _NO_STREAM
+    fell_back = False
 
     own = http is None
     client = http or httpx.Client(timeout=httpx.Timeout(profile.timeout_seconds, connect=15.0),
@@ -75,18 +127,32 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
         while True:
             attempt += 1
             delay: float | None = None
+            streamed: dict[str, Any] | None = None
             try:
-                resp = client.post(url, headers=headers, json=body)
+                if stream:
+                    resp, streamed = _stream(client, url, headers, adapter.stream_body(body), adapter, on_delta)
+                else:
+                    resp = client.post(url, headers=headers, json=body)
             except httpx.HTTPError as e:
                 error = LLMError(f"请求失败:{type(e).__name__}: {e}", retryable=True)
+            except LLMError as e:
+                if not e.retryable:
+                    raise
+                error = e
             else:
+                if stream and resp.status_code in (400, 422):
+                    # 可能是网关不认 stream / stream_options:马上用非流式重发,不算一次重试;
+                    # 非流式成功了才记下这个接口以后不用流式(400 也可能是别的原因)
+                    stream, fell_back, attempt = False, True, attempt - 1
+                    continue
                 if resp.status_code == 200:
                     try:
-                        data: dict[str, Any] = resp.json()
+                        data: dict[str, Any] = streamed if stream else resp.json()
                         result = adapter.parse_response(data)
                     except ValueError as e:
                         raise LLMError(f"无法解析响应:{e}", status=200,
-                                       body=resp.text[:MAX_ERROR_BODY]) from None
+                                       body=json.dumps(data, ensure_ascii=False)[:MAX_ERROR_BODY] if stream
+                                       else resp.text[:MAX_ERROR_BODY]) from None
                     break
                 retryable = resp.status_code == 429 or resp.status_code >= 500
                 error = LLMError(_error_message(resp), status=resp.status_code,
@@ -101,6 +167,8 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
         if own:
             client.close()
 
+    if fell_back:
+        _NO_STREAM.add(key)
     if tools and not native:
         result.tool_calls = json_mode.parse(result.text, tools)
     if result.stop_reason == "refusal":

@@ -1,6 +1,8 @@
+import { useEffect, useRef, useState } from 'react';
+
 import { Alert } from '@/components/arc/alert/alert';
 import { Badge } from '@/components/arc/badge/badge';
-import { type BattleRecord, enc, type RunSummary, type StepRecord, type StepState } from '@/lib/api';
+import { type BattleRecord, enc, type PendingStep, type RunSummary, type StepRecord, type StepState } from '@/lib/api';
 
 import { BattleChart } from './BattleChart';
 import styles from './play.module.css';
@@ -273,6 +275,106 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
           <p className={styles.foldMono}>{step.texts.join('\n')}</p>
         </details>
       )}
+    </div>
+  );
+}
+
+/** 决策中的那一步:at 是浏览器收到它的时间;done 表示模型答完了、程序正在执行操作 */
+export interface Deciding {
+  data: PendingStep;
+  at: number;
+  done: boolean;
+}
+
+/** 已经想了多久:按服务端的时间算(两台机器的钟可能差几秒),收到以后在浏览器里接着走 */
+function useElapsed({ data, at, done }: Deciding) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (done) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [done]);
+  return Math.max(0, Math.floor(data.now - data.started + (Math.max(now, at) - at) / 1000));
+}
+
+/** 流式的思考:新内容来了自动滚到底;往上翻看时不打扰 */
+function Thinking({ text, cut }: { text: string; cut: boolean }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [text]);
+  return (
+    <p ref={ref} className={styles.thinking}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}>
+      {cut ? '…' : ''}
+      {text}
+    </p>
+  );
+}
+
+/** 右栏:模型还在决策的这一步,思考和判断边收边显示 */
+export function PendingDetail({ pending }: { pending: Deciding }) {
+  const p = pending.data;
+  const elapsed = useElapsed(pending);
+  const writing = !pending.done && !p.acting;
+  const status = pending.done
+    ? '正在执行操作'
+    : p.external
+      ? '等外部 agent 回答'
+      : p.acting
+        ? '正在给出操作'
+        : p.analysis !== null
+          ? '正在写判断'
+          : p.reasoning
+            ? '正在思考'
+            : '等模型回复';
+  return (
+    <div className={styles.detail}>
+      <div className={styles.detailHead}>
+        {p.screen && (
+          <Badge size="sm" color="violet">
+            {screenName(p.screen)}
+          </Badge>
+        )}
+        {p.node && <span className={styles.detailNode}>{p.node}</span>}
+        <span className={styles.detailMeta}>{[`第 ${p.step} 步`, p.ts].filter(Boolean).join(' · ')}</span>
+      </div>
+
+      <p className={styles.pendingStatus} aria-live="polite">
+        <span className={styles.pendingDot} aria-hidden="true" />
+        {[status, `${elapsed} 秒`, p.retries ? `重问第 ${p.retries} 次` : ''].filter(Boolean).join(' · ')}
+      </p>
+
+      {p.reasoning && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>思考</h2>
+          <Thinking text={p.reasoning} cut={p.reasoning_cut} />
+        </section>
+      )}
+      {p.analysis !== null && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>判断</h2>
+          <p className={styles.analysis}>
+            {p.analysis}
+            {writing && <span className={styles.caret} aria-hidden="true" />}
+          </p>
+        </section>
+      )}
+      {p.text && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>回复</h2>
+          <p className={styles.analysis}>{p.text}</p>
+        </section>
+      )}
+
+      <p className={styles.usage}>
+        {[p.episode ? `回合 ${p.episode} 第 ${p.turn} 轮` : '', ROLES[p.role ?? ''] ?? p.role, p.model].filter(Boolean).join(' · ')}
+      </p>
     </div>
   );
 }

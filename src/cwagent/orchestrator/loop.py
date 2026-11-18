@@ -51,6 +51,7 @@ from .macros import companion_of_bubble, find_orbs, open_crystals, read_companio
 from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, find_compose_confirm
 from . import situation
+from .pending import PendingDecision
 from .prepare import READY_DEFERRED, PrepareExecutor, PrepareResult
 from .screens import (
     CLOSE_CORNER,
@@ -197,6 +198,10 @@ class Trace:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"system": system, "messages": serialized}, ensure_ascii=False, default=_plain), encoding="utf-8")
         return path.relative_to(self.root).as_posix()
+
+    def pending(self, step: int, **info) -> PendingDecision:
+        """模型决策中的这一步(pending.json,网页实时显示),决策结束后 close。"""
+        return PendingDecision(self.root / "pending.json", {"step": step, **info})
 
     def meta(self, **fields) -> None:
         """合并写入 meta.json(模型、难度、开始与结束时间、结果)。"""
@@ -1376,7 +1381,16 @@ class Runner:
             self._set_vision(ep, n, screen, frame.image, boxes, record)
             text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
                                                     names=names), []
-        decision = self.brain.decide(ep, text, recalled)
+        endpoint = getattr(self.brain, "endpoint", None)
+        profile = endpoint(ep.role) if endpoint else None
+        pending = self.trace.pending(n, ts=record.get("ts"), screen=screen, node=self._node, role=ep.role,
+                                     episode=ep.id, turn=ep.turns + 1, shot=record.get("shot"),
+                                     vision=record.get("vision"), model=profile.name if profile else "",
+                                     external=bool(profile and profile.format == "external"))
+        try:
+            decision = self.brain.decide(ep, text, recalled, on_delta=pending.feed)
+        finally:
+            pending.close()
         record["decision"] = to_jsonable(decision)
         if ep.request_messages:
             record["request"] = self.trace.request(n, self.brain.system, ep.request_messages)

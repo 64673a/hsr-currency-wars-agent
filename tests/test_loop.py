@@ -112,7 +112,7 @@ class FakeBrain:
         self.results = results
         return "obs"
 
-    def decide(self, ep, text, recalled=None):
+    def decide(self, ep, text, recalled=None, on_delta=None):
         ep.turns += 1
         ep.pending = ["call"]
         actions = self.plans[ep.screen].pop(0)

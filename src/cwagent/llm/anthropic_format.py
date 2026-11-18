@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..config import ModelEndpoint
@@ -121,3 +122,66 @@ def parse_response(data: dict[str, Any]) -> LLMResponse:
         model=data.get("model", ""),
         message_raw=data.get("content") or [],
     )
+
+
+# ---------------------------------------------------------------- 流式
+
+def stream_body(body: dict[str, Any]) -> dict[str, Any]:
+    return {**body, "stream": True}
+
+
+class StreamError(ValueError):
+    """流里的 error 事件(过载等),按可重试处理。"""
+
+
+class Accumulator:
+    """把 Messages 的流式事件拼回和非流式一样的响应(thinking 块连同签名一起,下一轮原样传回)。"""
+
+    def __init__(self) -> None:
+        self.message: dict[str, Any] = {}
+        self.blocks: dict[int, dict[str, Any]] = {}
+        self.json: dict[int, str] = {}
+
+    def feed(self, event: dict[str, Any]) -> list[tuple[str, str]]:
+        kind = event.get("type")
+        out: list[tuple[str, str]] = []
+        if kind == "message_start":
+            self.message = dict(event.get("message") or {})
+        elif kind == "content_block_start":
+            i = event.get("index", 0)
+            self.blocks[i] = dict(event.get("content_block") or {})
+            if self.blocks[i].get("type") == "tool_use":
+                self.json[i] = ""
+        elif kind == "content_block_delta":
+            i = event.get("index", 0)
+            block = self.blocks.setdefault(i, {})
+            delta = event.get("delta") or {}
+            match delta.get("type"):
+                case "text_delta":
+                    block["text"] = block.get("text", "") + delta.get("text", "")
+                    out.append(("text", delta.get("text", "")))
+                case "thinking_delta":
+                    block["thinking"] = block.get("thinking", "") + delta.get("thinking", "")
+                    out.append(("reasoning", delta.get("thinking", "")))
+                case "signature_delta":
+                    block["signature"] = block.get("signature", "") + delta.get("signature", "")
+                case "input_json_delta":
+                    self.json[i] = self.json.get(i, "") + delta.get("partial_json", "")
+                    out.append(("tool", delta.get("partial_json", "")))
+        elif kind == "content_block_stop":
+            i = event.get("index", 0)
+            if i in self.json:
+                raw = self.json.pop(i)
+                try:
+                    self.blocks[i]["input"] = json.loads(raw or "{}")
+                except ValueError:
+                    self.blocks[i]["input"] = raw    # 不是合法 JSON:parse_response 记成参数错误
+        elif kind == "message_delta":
+            self.message.update({k: v for k, v in (event.get("delta") or {}).items() if v is not None})
+            self.message["usage"] = {**(self.message.get("usage") or {}), **(event.get("usage") or {})}
+        elif kind == "error":
+            raise StreamError(str((event.get("error") or {}).get("message") or event.get("error")))
+        return out
+
+    def result(self) -> dict[str, Any]:
+        return {**self.message, "content": [self.blocks[i] for i in sorted(self.blocks)]}

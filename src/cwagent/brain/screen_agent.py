@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -335,9 +336,11 @@ class ScreenAgent:
 
     # ---------------------------------------------------------------- 调用模型
 
-    def decide(self, episode: Episode, text: str, recalled: list[str] | None = None) -> Decision:
+    def decide(self, episode: Episode, text: str, recalled: list[str] | None = None,
+               on_delta: Callable[[str, str], None] | None = None) -> Decision:
         """把 text 交给模型(回合内有待回复的工具调用时作为它的结果),返回模型的决定。
 
+        on_delta 收模型边想边写的片段(流式,网页上实时显示);输出不合法重问时会再从 reset 开始。
         接口调用失败时这一轮作废,回合的对话恢复原样,下次重新问。
         """
         snapshot = (list(episode.messages), list(episode.pending), episode.turns)
@@ -358,7 +361,7 @@ class ScreenAgent:
         for _ in range(2):  # 输出不合法时带着错误重问一次
             try:
                 episode.request_messages = list(episode.messages)
-                resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL])
+                resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL], on_delta=on_delta)
             except LLMError as e:
                 episode.messages, episode.pending, episode.turns = snapshot
                 return Decision("", [], None, [], response=None, error=str(e), **base)

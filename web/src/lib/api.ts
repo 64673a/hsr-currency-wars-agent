@@ -213,6 +213,30 @@ export interface StepDecision {
   prompt?: string;
 }
 
+/** 模型决策中的那一步(后端 orchestrator/pending.py):开始问模型时就有,流式收到的思考和判断边收边更新 */
+export interface PendingStep {
+  step: number;
+  ts?: string;
+  screen?: string;
+  node?: string | null;
+  role?: string;
+  episode?: number;
+  turn?: number;
+  shot?: string;
+  vision?: string[];
+  model?: string;
+  external?: boolean;
+  started: number;
+  updated: number;
+  now: number;
+  retries: number;
+  reasoning: string;
+  reasoning_cut: boolean;
+  analysis: string | null;
+  acting: boolean;
+  text: string;
+}
+
 export interface StepState {
   hud?: { node?: string; hp?: number; gold?: number; level?: number; exp?: string; deployed?: string };
   board?: { zone: 'front' | 'back' | 'bench'; index: number; name: string | null; stars: number; score: number }[];

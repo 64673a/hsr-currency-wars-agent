@@ -812,6 +812,15 @@ def complete(profile, system: str, user: str, tools: list[ToolSpec]) -> LLMRespo
 
 `ToolSpec` = `name` + `description` + `parameters`(JSON Schema)。两个适配器各自只做请求体构造和响应解析,放在 `llm/openai_format.py` 和 `llm/anthropic_format.py`。
 
+**流式**(2026-11-18,维护者要求网页上实时看到模型在想什么):`complete(..., on_delta=回调)` 时发流式请求。
+OpenAI 格式加 `stream: true` 和 `stream_options: {include_usage: true}`(最后一块带用量,choices 为空);
+Anthropic 格式加 `stream: true`,`thinking_delta` / `signature_delta` / `input_json_delta` 按块拼回。两边的 `Accumulator`
+把流里的事件拼回成和非流式**完全一样**的响应再交给原来的 `parse_response`,所以思考的回传(DeepSeek 的
+`reasoning_content`、Claude thinking 块和签名)、工具参数解析、用量都不变;边收边回调 `reasoning` / `text` / `tool`
+(工具参数片段)三种增量,重试或重问前回调 `reset`。流里的 error 事件(过载)按可重试处理。网关不认流式参数
+(400 / 422)时马上改用非流式重发,非流式成功才记下这个接口本进程里以后不再试流式(400 也可能是别的原因)。
+外部 agent 不流式。
+
 **图片输入**(2026-11-16,第 20.3 节):`Message` 可以带图片(JPEG 字节)。OpenAI 格式放在 user 消息的 `image_url`(data URL)里;
 **tool 消息只能放文字**(OpenAI 文档:「For tool messages, only type `text` is supported」,2026-11-16 查),所以工具调用之后的截图
 放在紧跟的一条 user 消息里。Anthropic 格式放 `image` 块(user 消息,以及 `tool_result` 的内容里,实现时以官方文档为准)。
@@ -932,6 +941,10 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 
 - `shots/`:每步截图(JPEG);`debug/`:异常时的原图。
 - `vision/`(2026-11-16,第 20.3 节):每次发给模型的那张带标号的图,离线回放时原样发给别的模型。
+- `pending.json`(2026-11-18):模型决策中的那一步。开始问模型时就写(步号、界面、节点、模型看的标号图),流式收到的
+  思考(只留最后 12000 字)和从工具参数里取出的写到一半的判断最多每 0.25 秒更新一次;没有片段时每 20 秒心跳刷新,
+  对局列表据此判断对局还在进行(原来只看 `steps.jsonl` 90 秒内有没有写入,模型想得久就被当成结束了)。决策结束后删掉;
+  这一步的完整记录(含完整思考)照旧在程序执行完操作后写进 `steps.jsonl`。用文件而不是进程内状态,命令行启动的对局也能看。
 - `report.md`(2026-11-16,第 20.9 节):整局结束时生成的逐节点报表,`cwagent runs report <对局>` 也能对旧对局重算。
 
 反射层的步骤也记录(`decision` 为空),这样回放是完整的。
@@ -957,6 +970,7 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `POST /api/run/approve` | `--approve` 模式下确认或拒绝当前动作列表 |
 | `GET /api/events` | SSE 事件流 |
 | `GET /api/runs` `GET /api/runs/{id}` `GET /api/runs/{id}/steps` | 对局列表、元信息、步骤(分页) |
+| `GET /api/runs/{id}/pending` | 模型决策中的那一步(12.1 的 `pending.json`,附服务端时间);没有在决策时是空对象。网页对进行中的一局每 0.5 秒拉一次:这一步马上出现在步骤列表末尾,右栏实时显示思考和判断,模型答完、程序执行操作期间显示「正在执行操作」,记录出来后换成完整的一步 |
 | `GET /api/runs/{id}/shots/{name}` | 截图 |
 | `POST /api/runs/{id}/replay` `GET /api/runs/{id}/replays` | 发起和读取离线回放 |
 | `GET /api/eval/summary` | 实机评测汇总 |
