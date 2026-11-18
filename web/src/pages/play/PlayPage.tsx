@@ -21,6 +21,27 @@ const POLL_MS = 2000;
 /** 开局时不改思考强度,用模型档案里的设置 */
 const PROFILE_EFFORT = 'profile';
 
+/** 开局表单上次改过的值,存在这个浏览器里(和主题一样),刷新或打完一局后照旧;只记用户改过的项,没改的跟着配置走 */
+const START_KEY = 'cw-start';
+type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number };
+
+function loadPrefs(): StartPrefs {
+  try {
+    const v = JSON.parse(localStorage.getItem(START_KEY) ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(patch: StartPrefs) {
+  try {
+    localStorage.setItem(START_KEY, JSON.stringify({ ...loadPrefs(), ...patch }));
+  } catch {
+    // 隐私模式下存不了,只影响下次打开
+  }
+}
+
 /** 开局表单(右栏) */
 function StartForm({ onChange }: { onChange: () => void }) {
   const [models, setModels] = useState<ModelProfile[]>([]);
@@ -35,11 +56,34 @@ function StartForm({ onChange }: { onChange: () => void }) {
     Promise.all([api<ModelProfile[]>('/api/models'), api<{ roles: Record<string, string | null>; agent: { difficulty: string } }>('/api/config')])
       .then(([ms, cfg]) => {
         setModels(ms);
-        setModel(cfg.roles.tactical ?? cfg.roles.default ?? ms[0]?.name ?? EXTERNAL_AGENT);
-        setDifficulty(cfg.agent.difficulty);
+        // 存下的值不再有效(档案删了、档位改了)就用配置里的默认
+        const saved = loadPrefs();
+        const names = [...ms.map((m) => m.name), EXTERNAL_AGENT];
+        const efforts: string[] = [PROFILE_EFFORT, ...EFFORTS.map((e) => e.value)];
+        setModel(saved.model && names.includes(saved.model) ? saved.model : (cfg.roles.tactical ?? cfg.roles.default ?? ms[0]?.name ?? EXTERNAL_AGENT));
+        setEffort(saved.effort && efforts.includes(saved.effort) ? saved.effort : PROFILE_EFFORT);
+        setDifficulty(typeof saved.difficulty === 'string' ? saved.difficulty : cfg.agent.difficulty);
+        setRounds(Number.isInteger(saved.rounds) && saved.rounds! >= 1 && saved.rounds! <= 50 ? saved.rounds! : 1);
       })
       .catch((e) => setError(errorText(e)));
   }, []);
+
+  const pickModel = (v: string) => {
+    setModel(v);
+    savePrefs({ model: v });
+  };
+  const pickEffort = (v: string) => {
+    setEffort(v);
+    savePrefs({ effort: v });
+  };
+  const pickDifficulty = (v: string) => {
+    setDifficulty(v);
+    savePrefs({ difficulty: v });
+  };
+  const pickRounds = (v: number) => {
+    setRounds(v);
+    savePrefs({ rounds: v });
+  };
 
   const profileEffort = effortName(models.find((m) => m.name === model)?.reasoning_effort);
   const mcp = `${window.location.origin}/mcp`;
@@ -62,7 +106,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
     <div className={`${page.fields} ${styles.form}`}>
       <Select label="模型"
         options={[...models.map((m) => ({ value: m.name, label: m.name })), { value: EXTERNAL_AGENT, label: '外部 agent(MCP)' }]}
-        value={model} onValueChange={setModel} />
+        value={model} onValueChange={pickModel} />
       {model === EXTERNAL_AGENT ? (
         <div className={styles.mcp}>
           <span className={styles.mcpLabel}>MCP 地址</span>
@@ -72,11 +116,11 @@ function StartForm({ onChange }: { onChange: () => void }) {
       ) : (
         <Select label="思考强度"
           options={[{ value: PROFILE_EFFORT, label: profileEffort ? `档案设置(${profileEffort})` : '档案设置' }, ...EFFORTS]}
-          value={effort} onValueChange={setEffort} />
+          value={effort} onValueChange={pickEffort} />
       )}
       <div className={page.fields2}>
-        <Input label="难度" placeholder="A8-1" value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />
-        <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={setRounds} />
+        <Input label="难度" placeholder="A8-1" value={difficulty} onChange={(e) => pickDifficulty(e.target.value)} />
+        <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={pickRounds} />
       </div>
       {error && <Alert tone="danger" title="没有开始">{error}</Alert>}
       <Button className={styles.startButton} onClick={start} loading={busy} disabled={!model}>开始对局</Button>
