@@ -14,7 +14,6 @@ import time
 from pathlib import Path
 
 WRITE_GAP = 0.25        # 流式片段最多隔这么久写一次文件
-HEARTBEAT = 20.0        # 没有片段(不流式、等外部 agent、思考很久)时也隔这么久刷新一次,网页据此判断对局还在进行
 MAX_REASONING = 12000   # 文件里只留思考的最后这么多字(完整的在决策结束后的记录里)
 
 _ESCAPES = {"n": "\n", "t": "\t", "r": "", "b": "", "f": "", '"': '"', "\\": "\\", "/": "/"}
@@ -65,7 +64,6 @@ class PendingDecision:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._write(force=True)
-        threading.Thread(target=self._heartbeat, daemon=True).start()
 
     def feed(self, kind: str, text: str) -> None:
         with self._lock:
@@ -105,10 +103,6 @@ class PendingDecision:
                 os.replace(tmp, self.path)
             except OSError:
                 pass   # Windows 上网页正好在读时替换会失败,下一次再写
-
-    def _heartbeat(self) -> None:
-        while not self._stop.wait(HEARTBEAT):
-            self._write(force=True)
 
     def close(self) -> None:
         with self._lock:

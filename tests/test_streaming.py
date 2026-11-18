@@ -138,20 +138,49 @@ def test_pending_file_follows_the_stream_and_goes_away(tmp_path, monkeypatch):
     assert not path.exists()
 
 
+def this_process() -> dict:
+    """meta.json 里记下的跑对局的进程:就是测试进程自己(一直在)。"""
+    import os
+
+    from cwagent import proc
+
+    return {"pid": os.getpid(), "pid_started": proc.started(os.getpid())}
+
+
+def dead_pid() -> int:
+    """一个已经退出的进程号(像是崩掉的对局进程)。"""
+    import subprocess
+    import sys
+
+    return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                              capture_output=True, text=True, check=True).stdout)
+
+
 def test_run_store_serves_pending_only_while_running(tmp_path):
     from cwagent.server.runs import RunStore
 
     run = tmp_path / "20261118-094054_m"
     run.mkdir()
     (run / "steps.jsonl").write_text(json.dumps({"step": 6, "screen": "prepare"}) + "\n", encoding="utf-8")
+    (run / "meta.json").write_text(json.dumps(this_process()), encoding="utf-8")
     store = RunStore(tmp_path)
-    assert store.pending(run.name) is None
+    assert store.pending(run.name) is None and store.summary(run)["live"]
     p = PendingDecision(run / "pending.json", {"step": 7})
     assert store.pending(run.name)["step"] == 7
-    old = time.time() - 600                      # 心跳停了很久:像是进程崩溃留下的旧文件,不算决策中,对局也不算进行中
+    # 很久没写记录(一场战斗最长约 20 分钟)也还在进行
     import os
+    old = time.time() - 1800
     os.utime(run / "pending.json", (old, old))
     os.utime(run / "steps.jsonl", (old, old))
+    assert store.pending(run.name)["step"] == 7 and store.summary(run)["live"]
+    # 进程崩掉留下的:不算决策中,对局也不算进行中
+    (run / "meta.json").write_text(json.dumps({"pid": dead_pid()}), encoding="utf-8")
+    assert store.pending(run.name) is None and not store.summary(run)["live"]
+    # 进程号被别的进程重用了(启动时间对不上)也不算;正常结束写了结束时间的不算
+    (run / "meta.json").write_text(json.dumps({**this_process(), "pid_started": 1.0}), encoding="utf-8")
+    import sys
+    assert store.summary(run)["live"] is (sys.platform != "win32")   # 非 Windows 只能看进程在不在
+    (run / "meta.json").write_text(json.dumps({**this_process(), "ended_at": "x"}), encoding="utf-8")
     assert store.pending(run.name) is None and not store.summary(run)["live"]
     p.close()
 

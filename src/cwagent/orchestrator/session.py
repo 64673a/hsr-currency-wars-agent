@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
 
-from .. import paths
+from .. import paths, proc
 from ..brain.screen_agent import ScreenAgent, load_rules
 from ..config import AppConfig, Effort, ModelEndpoint
 from ..knowledge.companions import CompanionBook
@@ -85,7 +86,9 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
                     guides=load_guides(), trailblazer=cfg.agent.trailblazer_name)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
-               started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+               started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+               # 跑这局的进程:网页据此判断对局还在不在跑(崩溃、被结束时写不进结束时间)
+               pid=os.getpid(), pid_started=proc.started(os.getpid()))
     return runner, run_dir
 
 

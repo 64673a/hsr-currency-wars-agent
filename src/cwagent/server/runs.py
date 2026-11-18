@@ -12,12 +12,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .. import proc
 from ..config import ConfigStore
 from ..llm.external import BRIDGE, EXTERNAL
 from ..orchestrator import pending as pending_file
 
 RUN_ID = re.compile(r"^[\w.-]+$")
-LIVE_SECONDS = 90  # steps.jsonl 或 pending.json(模型决策中,有心跳)在这段时间内有写入、且没有结束时间,就算进行中
 NODE = re.compile(r"[1-3]-\d{1,2}(?![\d%])")  # 战斗时节点号和进度会连在一起(如「1-30%」),这种不算
 
 
@@ -88,8 +88,7 @@ class RunStore:
                         outcome = "通关"
             info = {"steps": steps, "node": node, "outcome": outcome, "decisions": decisions}
             self._cache[d.name] = (key, info)
-        live = (not meta.get("ended_at") and not info["outcome"]
-                and time.time() - max(stat.st_mtime, self._pending_mtime(d)) < LIVE_SECONDS)
+        live = self._live(meta) and not info["outcome"]
         profile = meta.get("profile") or (d.name.split("_", 1)[1] if "_" in d.name else "")
         return {"id": d.name, "profile": profile, "model": meta.get("model", ""), "effort": meta.get("effort"),
                 "difficulty": meta.get("difficulty", ""), "started_at": meta.get("started_at") or _started(d.name),
@@ -102,21 +101,18 @@ class RunStore:
         return [self.summary(d) for d in sorted(dirs, key=lambda d: d.name, reverse=True)]
 
     @staticmethod
-    def _pending_mtime(d: Path) -> float:
-        try:
-            return (d / "pending.json").stat().st_mtime
-        except OSError:
-            return 0.0
+    def _live(meta: dict[str, Any]) -> bool:
+        """进行中:还没写结束时间(打完、停止、出错都会写),而且开局时记下的进程还在。
+        不看多久没写记录:一场战斗最长约 20 分钟不写记录,模型也可能想很久。没记进程的旧记录都不算进行中。"""
+        return not meta.get("ended_at") and proc.running(meta.get("pid"), meta.get("pid_started"))
 
     def pending(self, run_id: str) -> dict[str, Any] | None:
         """模型决策中的那一步(流式收到的思考和判断);没有在决策、对局已结束或文件是崩溃留下的旧文件都返回 None。"""
         d = self.dir(run_id)
         data = pending_file.read(d / "pending.json")
-        if data is None or time.time() - self._pending_mtime(d) >= LIVE_SECONDS:
-            return None
         meta_path = d / "meta.json"
-        if meta_path.exists() and json.loads(meta_path.read_text(encoding="utf-8")).get("ended_at"):
-            return None
+        if data is None or not meta_path.exists() or not self._live(json.loads(meta_path.read_text(encoding="utf-8"))):
+            return None   # 进程崩溃留下的旧文件不算
         return {**data, "now": time.time()}   # 网页按服务端时间算已经想了多久(两台机器的钟可能差几秒)
 
     def steps(self, run_id: str, after: int = 0, limit: int = 500) -> list[dict[str, Any]]:

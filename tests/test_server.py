@@ -191,13 +191,14 @@ def test_runs_and_play(tmp_path):
     assert play["available"] is False and play["running"] is False
     assert client.post("/api/play/start", json={}).status_code == 409
 
-    # 删除:进行中的(刚写入、没有结束时间)不删,路径不对的不碰;中途崩掉、很久没写入的可以删
-    import os
+    # 删除:进行中的(没有结束时间、跑它的进程还在)不删,路径不对的不碰;进程崩掉的可以删
+    from tests.test_streaming import dead_pid, this_process
 
-    os.utime(d0 / "steps.jsonl", (1, 1))
+    (d0 / "meta.json").write_text(json.dumps({"pid": dead_pid()}), encoding="utf-8")
     live = runs / "20261114-110000_live"
     live.mkdir()
     (live / "steps.jsonl").write_text(json.dumps({"step": 1, "screen": "prepare"}) + "\n", encoding="utf-8")
+    (live / "meta.json").write_text(json.dumps(this_process()), encoding="utf-8")
     result = client.post("/api/runs/delete", json={"ids": [d0.name, live.name, "..", "nope", d0.name]}).json()
     assert result["deleted"] == [d0.name]
     assert {s["id"]: s["reason"] for s in result["skipped"]} == {live.name: "正在进行", "..": "不存在", "nope": "不存在"}
