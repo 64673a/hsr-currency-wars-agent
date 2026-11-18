@@ -600,6 +600,22 @@ class PrepareExecutor:
 
     # ---------------------------------------------------------------- 装备
 
+    def _confirm_compose(self, out: PrepareResult, ok, text: str) -> bool:
+        """点合成确认框的 ✓。确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,
+        最后取消,不能把它留在屏幕上。点不下去返回 False(结果里记下原因)。"""
+        for _ in range(3):
+            self.sleep(0.4)
+            ok = find_compose_confirm(self.capture().image) or ok
+            self._click(out, *ok)
+            self.sleep(1.0)
+            if find_compose_confirm(self.capture().image) is None:
+                return True
+        self._click(out, *cancel_point(ok))
+        self.sleep(0.8)
+        out.results.append(f"{text}:合成确认点不下去,已取消")
+        out.observe = True
+        return False
+
     def _equipment(self, a: Action, text: str, out: PrepareResult, occupied, boxes) -> int | None:
         """合成或装备。成功返回装备栏里被用掉的编号(后面的装备会往前顺移);失败时记下原因、返回 None 停下来。"""
         if self.equipment is None:
@@ -637,19 +653,7 @@ class PrepareExecutor:
                                    "这两件可能不能合成(截图已存 data/debug,可用 cwagent 排查)")
                 out.observe = True
                 return None
-            # 确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,最后取消,不能把它留在屏幕上
-            for _ in range(3):
-                self.sleep(0.4)
-                ok = find_compose_confirm(self.capture().image) or ok
-                self._click(out, *ok)
-                self.sleep(1.0)
-                if find_compose_confirm(self.capture().image) is None:
-                    break
-            else:
-                self._click(out, *cancel_point(ok))
-                self.sleep(0.8)
-                out.results.append(f"{text}:合成确认点不下去,已取消")
-                out.observe = True
+            if not self._confirm_compose(out, ok, text):
                 return None
             after = self.equipment.read(self.capture().image)
             if len(after) != len(before) - 1:
@@ -674,6 +678,10 @@ class PrepareExecutor:
         self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
         out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": dst.x, "y2": dst.y})
         self.sleep(1.0)
+        # 角色身上已有一件简易装备时,再装一件简易装备会合成,也弹「A + B = 成品」要点 ✓(维护者 2026-11-18)
+        merged = find_compose_confirm(self.capture().image)
+        if merged is not None and not self._confirm_compose(out, merged, text):
+            return None
         after = self.equipment.read(self.capture().image)
         if len(after) != len(before) - 1:
             out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
@@ -686,7 +694,8 @@ class PrepareExecutor:
             out.observe = True
             return None
         who = occupied.get(src, "") if occupied is not None else ""
-        out.results.append(f"{text}:{item.name} 给了 {who or slot_text(a.zone, a.index)}")
+        out.results.append(f"{text}:{item.name} 给了 {who or slot_text(a.zone, a.index)}"
+                           + (",和身上的简易装备合成了(点了确认)" if merged is not None else ""))
         if who and item.name:
             out.equipped.append((who, item.name))
         return a.item

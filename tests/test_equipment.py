@@ -131,6 +131,32 @@ def test_executor_compose_then_equip(monkeypatch):
     assert out.equipped == [("阿格莱雅", "反重力皮靴")]
 
 
+def test_equip_onto_simple_item_confirms_the_merge(monkeypatch):
+    """角色身上已有简易装备,再装一件简易装备会弹合成确认框(维护者 2026-11-18):程序点 ✓,装备栏少一件。"""
+    bag = Bag(["轮滑鞋", "红钻"])
+    dev = Dev(bag)
+    pending = {"merge": False}
+    real_drag = dev.drag
+
+    def drag(x1, y1, x2, y2, **kw):
+        real_drag(x1, y1, x2, y2, **kw)
+        pending["merge"] = True                       # 拖给角色后弹出「A + B = 成品」
+
+    def click(x, y, *, button="left"):
+        dev.actions.append(("click", x, y))
+        pending["merge"] = False
+
+    dev.drag, dev.click = drag, click
+    monkeypatch.setattr(prep, "find_compose_confirm", lambda image: (0.948, 0.301) if pending["merge"] else None)
+    ex = PrepareExecutor(dev, lambda image: [], raw=lambda a, b: "", sleep=lambda s: None, equipment=bag)
+    from cwagent.vision.board import Slot
+
+    board = [Slot("front", 0, 0.3885, 0.372, "阿格莱雅", 1)]
+    out = ex.run([Action(type="equip", item=1, zone="front", index=1)], [], board)
+    assert out.results == ["装备 1号 → 前台1号:轮滑鞋 给了 阿格莱雅,和身上的简易装备合成了(点了确认)"]
+    assert ("click", 0.948, 0.301) in dev.actions and not pending["merge"]
+
+
 def test_shift_indices():
     pending = [Action(type="equip", item=3, zone="front", index=1), Action(type="compose", item=1, onto=2)]
     _shift(pending, 2)
