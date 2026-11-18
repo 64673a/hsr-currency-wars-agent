@@ -272,7 +272,9 @@ PAIRED_INVEST_TITLE_Y = (537 / 1080, 597 / 1080)
 PAIRED_INVEST_REFRESH = ((441 / 1920, 841 / 1080), (1135 / 1920, 841 / 1080))
 
 
-INVEST_REFRESH_ENV = (0.25, 0.86, 0.45, 0.10)      # 投资环境底部那行「剩余次数:1」(实机 0.402, 0.910)
+# 投资环境开局固定 1 次刷新,刷过就是 0(维护者 2026-11-18):由程序记,不识别底部的「剩余次数」
+# (那个数字是单独一位,整屏 OCR 常漏检,2026-11-18 那局只读出「剩余次数:」被当成 0 告诉了模型)
+ENV_REFRESHES = 1
 INVEST_REFRESH_STRAT = (0.76, 0.82)                 # 投资策略每张卡下面的「刷新次数N」(实机 y 0.791)
 
 
@@ -281,20 +283,25 @@ def paired_investment(boxes: list[TextBox], screen: str) -> bool:
     return screen == "strategy_choice" and find(boxes, "^(选择一个|两个都带走)$", region=(0.15, 0.20, 0.70, 0.08)) is not None
 
 
-def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
-    """投资界面还剩几次刷新(读界面上的数字,不是猜)。
-
-    - 投资环境:底部只有一处「剩余次数:N」,**一次刷新把三张全部换掉**;投资环境整局只选这一次,
-      次数过了这个界面就作废(维护者 2026-11-16)。
-    - 投资策略:每张卡下面各写「刷新次数N」,**刷新只换这一张**,每次进入这个界面次数重新给,不用就作废
-      (维护者 2026-11-16;次数会被某些投资策略改动,所以每次都现读)。
-    """
-    out: dict = {"env": None, "cards": [None, None, None]}
-    if screen == "environment_choice":
-        b = find(boxes, "剩余次数|刷新次数", region=INVEST_REFRESH_ENV)
+def invest_titles(boxes: list[TextBox], screen: str) -> list[str]:
+    """三张投资卡的标题,从左到右(没读出的不算)。"""
+    y0, y1 = INVEST_TITLE_Y[screen]
+    out = []
+    for cx in INVEST_X:
+        b = next((b for b in boxes if y0 <= b.y <= y1 and abs(b.x - cx) < 0.10), None)
         if b is not None:
-            out["env"] = int(re.sub(r"\D", "", b.text) or 0)
-    elif paired_investment(boxes, screen):
+            out.append(b.text)
+    return out
+
+
+def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
+    """投资策略还剩几次刷新(读界面上的数字,不是猜)。
+
+    每张卡下面各写「刷新次数N」,**刷新只换这一张**,每次进入这个界面次数重新给,不用就作废
+    (维护者 2026-11-16;次数会被某些投资策略改动,所以每次都现读)。投资环境的次数不读,见 ENV_REFRESHES。
+    """
+    out: dict = {"cards": [None, None, None]}
+    if paired_investment(boxes, screen):
         out["groups"] = []
         for columns, (x, y) in zip(((1,), (2, 3)), PAIRED_INVEST_REFRESH, strict=True):
             b = find(boxes, "刷新", region=(x + 18 / 1920, y - 31 / 1080, 158 / 1920, 62 / 1080))
@@ -309,8 +316,16 @@ def invest_refresh(boxes: list[TextBox], screen: str) -> dict:
     return out
 
 
-def investment_hint(boxes: list[TextBox], screen: str) -> str:
-    """把刷新次数讲清楚交给模型:数字由程序读,规则由这里说明,免得模型以为不能刷新或者刷错对象。"""
+def investment_hint(boxes: list[TextBox], screen: str, env_left: int = ENV_REFRESHES) -> str:
+    """把刷新次数讲清楚交给模型:投资策略的次数由程序读,投资环境的由程序记(env_left),
+    规则由这里说明,免得模型以为不能刷新或者刷错对象。"""
+    if screen == "environment_choice":
+        if env_left <= 0:
+            return "刷新:这一屏的刷新已经用过了,只能在三张里选一张确认。"
+        # 原来写「整局的次数有限」,模型理解成要给以后留着,三张一般也不刷(2026-11-16 维护者指出):
+        # 投资环境整局只选这一次,剩余次数过了这个界面就作废
+        return (f"刷新:还能刷新 {env_left} 次。点一次会把三张**全部**换掉(不是只换一张)。"
+                "投资环境整局只在这里选一次,刷新次数过了这个界面就作废、不用留着:三张里有好的就直接选,三张都一般就刷新。")
     info = invest_refresh(boxes, screen)
     if "groups" in info:
         counts = [f"{'左侧' if i == 0 else '右侧'}刷新剩余 {g['remaining']} 次" if g["remaining"] is not None
@@ -318,13 +333,6 @@ def investment_hint(boxes: list[TextBox], screen: str) -> str:
         return ("泡泡狼的投资策略布局(M7A 资料,待实测):左边「选择一个」选 1 张;右边「两个都带走」两张一起拿。"
                 "右侧两张共用刷新,刷新右侧会一起更换这两张,左侧不变;左侧刷新只换左侧一张。"
                 + "、".join(counts) + "。")
-    if screen == "environment_choice" and info["env"] is not None:
-        if info["env"] <= 0:
-            return "刷新:这一屏的「剩余次数」已经是 0,只能在三张里选一张确认。"
-        # 原来写「整局的次数有限」,模型理解成要给以后留着,三张一般也不刷(2026-11-16 维护者指出):
-        # 投资环境整局只选这一次,剩余次数过了这个界面就作废
-        return (f"刷新:底部还剩 {info['env']} 次「剩余次数」。点一次会把三张**全部**换掉(不是只换一张)。"
-                "投资环境整局只在这里选一次,剩余次数过了这个界面就作废、不用留着:三张里有好的就直接选,三张都一般就刷新。")
     if screen == "strategy_choice":
         left = [f"第{i + 1}张还剩 {n} 次" for i, n in enumerate(info["cards"]) if n]
         if not left:

@@ -63,6 +63,8 @@ from .screens import (
     classify,
     companion_banner,
     companion_name,
+    ENV_REFRESHES,
+    invest_titles,
     investment_cards,
     investment_hint,
     result_page,
@@ -275,6 +277,8 @@ class Runner:
         self._companion_tries = 0                              # 读奇遇伙伴试了几次
         self._companion_done = False                           # 本局的奇遇伙伴已经读过(只读一次)
         self._env_waited = False                               # 投资环境选择的开场特效等过了
+        self._env_left = ENV_REFRESHES                         # 投资环境还能刷新几次(程序记,不识别)
+        self._env_titles: list[str] | None = None              # 投资环境第一次看到的三张卡(换了就是刷新过)
         self.affixes = AffixBook()                             # 敌人词条库(边点边存)
         self._affixes: list[tuple[str, str]] = []              # 本局读到的敌人词条
         self._difficulty_tries = 0                             # 程序自动选难度试了几次
@@ -685,6 +689,18 @@ class Runner:
         for i, m in enumerate(cands, start=1):
             lines.append(f"候选 {i}(匹配分 {m.score}):{m.why()}\n{card(m.guide, full=False)}")
         return "\n".join(lines)
+
+    def _track_env_refresh(self, boxes: list[TextBox], n: int) -> None:
+        """投资环境开局固定 1 次刷新(维护者 2026-11-18):三张卡里至少两张换了名字就当刷新过了。
+        按卡名判断,不管模型是怎么点的刷新;只差一张可能是 OCR 读错,不算。"""
+        titles = invest_titles(boxes, "environment_choice")
+        if self._env_titles is None:
+            if len(titles) >= 2:
+                self._env_titles = titles
+        elif self._env_left > 0 and sum(t not in self._env_titles for t in titles) >= 2:
+            self._env_left = 0
+            self.log(f"[{n}] 投资环境刷新过了:{'、'.join(self._env_titles)} → {'、'.join(titles)}")
+            self._env_titles = titles
 
     def environment_advice(self, boxes: list[TextBox]) -> str:
         """投资环境界面:每个看得到的环境列出适合它的热门攻略,让模型把环境和开局方向一起考虑(trail-cli 的做法)。"""
@@ -1240,7 +1256,7 @@ class Runner:
         elif opening and screen == "environment_choice":
             advice = self.environment_advice(boxes)
             hints = "## 攻略参考\n" + advice if advice else ""
-            left = investment_hint(boxes, "environment_choice")
+            left = investment_hint(boxes, "environment_choice", self._env_left)
             if left:
                 hints = (hints + "\n\n" + left).strip()
         elif screen == "tea_break":
@@ -1535,6 +1551,8 @@ class Runner:
                 time.sleep(0.5)
                 frame = self.device.grab()
                 boxes = self.ocr(frame.image)
+        if screen == "environment_choice":
+            self._track_env_refresh(boxes, n)
         node = node_of(boxes)
         if node:
             self._node = node

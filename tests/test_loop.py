@@ -393,3 +393,19 @@ def test_crystal_timing(tmp_path, monkeypatch):
     assert runner._crystals_before_ready().startswith("出战前划开晶矿(2 个)")
     assert runner._crystals_before_ready() is None                 # 同一节点只拦一次
     assert runner._crystal_full is None
+
+
+def test_environment_refresh_is_counted_by_card_names(tmp_path):
+    """投资环境开局固定 1 次刷新,由程序记(维护者 2026-11-18):三张里至少两张换了名字才算刷新过,读错一张不算。"""
+    sim = Sim({"prepare": []}, "prepare", lambda *_: None)
+    r = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda _: None)
+
+    def cards(*names):
+        return [TextBox(n, x, 0.363, 0.1, 0.03, 0.9) for n, x in zip(names, (0.228, 0.5, 0.771))]
+
+    r._track_env_refresh(cards("劳务派遣合同", "开拓银轨邀请", "人身意外险"), 1)
+    assert r._env_left == 1
+    r._track_env_refresh(cards("劳务派遣合同", "开拓银轨邀清", "人身意外险"), 2)   # OCR 读错一个字
+    assert r._env_left == 1
+    r._track_env_refresh(cards("刷刷刷", "召唤邀请", "人身意外险"), 3)
+    assert r._env_left == 0

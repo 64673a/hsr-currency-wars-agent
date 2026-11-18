@@ -230,15 +230,15 @@ def test_companion_name_from_bubble():
 
 
 def test_invest_refresh_reads_numbers_from_ui():
-    """刷新次数的规则要由程序读出来交给模型:投资环境一次全刷、投资策略各刷各的(维护者 2026-11-16)。"""
+    """刷新次数的规则要交给模型:投资环境一次全刷、投资策略各刷各的(维护者 2026-11-16)。
+    投资环境开局固定 1 次,由程序记,底部的数字读没读出来都不影响(维护者 2026-11-18)。"""
     from cwagent.orchestrator.screens import invest_refresh, investment_hint
 
     env = [_b("刷刷刷", 0.229, 0.363), _b("召唤邀请", 0.5, 0.363), _b("黄金时代", 0.771, 0.363),
-           _b("剩余次数:1", 0.402, 0.910)]
-    info = invest_refresh(env, "environment_choice")
-    assert info["env"] == 1
+           _b("剩余次数：", 0.396, 0.911)]
     hint = investment_hint(env, "environment_choice")
     assert "全部" in hint and "1 次" in hint
+    assert "用过" in investment_hint(env, "environment_choice", 0)
 
     strat = [_b("好运令牌·金", 0.24, 0.454), _b("伙伴总动员", 0.5, 0.453), _b("奇美成长记", 0.76, 0.454),
              _b("刷新次数1", 0.248, 0.791), _b("刷新次数2", 0.508, 0.791), _b("刷新次数1", 0.768, 0.791)]

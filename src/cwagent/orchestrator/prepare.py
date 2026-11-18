@@ -324,8 +324,11 @@ class PrepareExecutor:
                             out.results.append(f"{text}:没成功({problem}),后面的操作先不做")
                             out.observe = failed = True
                             break
-                        if occupied is not None and self.deployed and (dst not in occupied) != (a.to_zone == "bench"):
-                            self.deployed = shift(self.deployed, 1 if up else -1 if a.to_zone == "bench" else 0)
+                        # 上场人数只在挪到空格时变:备战席 → 场上 +1,场上 → 备战席 -1;换位、场上挪场上、
+                        # 备战席挪备战席都不变(原来的条件把下场写反了:2026-11-18 那局火花下场后还算 3/3,挡住了补人)
+                        down = a.zone != "bench" and a.to_zone == "bench"
+                        if occupied is not None and self.deployed and dst not in occupied and (up or down):
+                            self.deployed = shift(self.deployed, 1 if up else -1)
                         if occupied is not None:
                             moving, there = occupied.pop(src), occupied.pop(dst, None)
                             occupied[dst] = moving
