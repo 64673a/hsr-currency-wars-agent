@@ -23,13 +23,22 @@ PROMPTS = Path(__file__).parent / "prompts"
 MAX_ACTIONS = 12
 ZONES = ("front", "back", "bench")
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
-PREPARE_ONLY = {"buy", "sell", "move", "refresh", "buy_exp", "ready", "compose", "equip", "open", "take"}
+PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "compose", "equip", "open", "take"}
+ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
+ROLL_MAX = 30
+
+
+class RollTarget(BaseModel):
+    """roll 要找的一张牌:stars 是要凑到几星(场上 + 备战席一星的量够 1/3/9 张),count 是这次买几张(给了就按它)。"""
+    name: str = Field(min_length=1)
+    stars: int = Field(default=1, ge=1, le=3)
+    count: int | None = Field(default=None, ge=1, le=9)
 
 
 class Action(BaseModel):
     type: str = Field(
-        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|buy_exp|ready|compose|equip|open|take"
-                "|zoom|inspect|recheck)$")
+        pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|roll|buy_exp|ready|compose|equip|open"
+                "|take|zoom|inspect|recheck)$")
     mark: int | None = Field(default=None, ge=1, le=100)
     region: tuple[float, float, float, float] | None = None
     mode: str = Field(default="hover", pattern="^(hover|click)$")
@@ -50,6 +59,10 @@ class Action(BaseModel):
     times: int | None = Field(default=None, ge=1, le=20)      # buy_exp:买几次
     item: int | None = Field(default=None, ge=1, le=24)       # compose / equip:装备栏第几件
     onto: int | None = Field(default=None, ge=1, le=24)       # compose:拖到第几件上
+    targets: list[RollTarget] | None = None                   # roll:要找的牌
+    until: str | None = Field(default=None, pattern="^(all|any)$")   # roll:all 全部达成才停(默认),any 任意一个
+    keep_gold: int | None = Field(default=None, ge=0, le=999)        # roll:保底金币,买卡和刷新都不低于它
+    max_refresh: int | None = Field(default=None, ge=1, le=ROLL_MAX)  # roll:最多刷新几次
     reason: str = ""
 
     @model_validator(mode="after")
@@ -58,8 +71,8 @@ class Action(BaseModel):
                 "zoom": ["region"], "inspect": ["mark"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
                 "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"],
-                "take": ["zone", "index", "text"]}
-        missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "")]
+                "take": ["zone", "index", "text"], "roll": ["targets"]}
+        missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "") or getattr(self, f) == []]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
         if self.region is not None:
@@ -107,7 +120,7 @@ ACT_TOOL = ToolSpec(
                 "items": {
                     "type": "object",
                     "properties": {
-                        "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "buy_exp", "ready",
+                        "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "roll", "buy_exp", "ready",
                                                             "compose", "equip", "open", "take", "click_text", "click", "drag",
                                                             "scroll", "key", "wait", "pause", "zoom", "inspect",
                                                             "recheck"]},
@@ -121,6 +134,12 @@ ACT_TOOL = ToolSpec(
                         "x": {"type": "number"}, "y": {"type": "number"},
                         "x2": {"type": "number"}, "y2": {"type": "number"},
                         "key": {"type": "string"}, "seconds": {"type": "number"}, "notches": {"type": "integer"},
+                        "targets": {"type": "array", "items": {"type": "object", "properties": {
+                            "name": {"type": "string"}, "stars": {"type": "integer", "minimum": 1, "maximum": 3},
+                            "count": {"type": "integer", "minimum": 1, "maximum": 9}}, "required": ["name"]}},
+                        "until": {"type": "string", "enum": ["all", "any"]},
+                        "keep_gold": {"type": "integer", "minimum": 0},
+                        "max_refresh": {"type": "integer", "minimum": 1, "maximum": ROLL_MAX},
                         "reason": {"type": "string"},
                     },
                     "required": ["type"],
@@ -414,6 +433,11 @@ def action_text(a: Action) -> str:
             return f"{slot_text(a.zone, a.index)} → {slot_text(a.to_zone, a.to_index)}"
         case "refresh":
             return "刷新商店"
+        case "roll":
+            want = "、".join(f"{t.name}" + (f"×{t.count}" if t.count else f" {t.stars}星" if t.stars > 1 else "")
+                            for t in a.targets or [])
+            return (f"D 牌找 {want}(" + ("任意一个就停" if a.until == "any" else "全部找到才停")
+                    + f",保底 {a.keep_gold or 0} 金,最多刷新 {min(a.max_refresh or ROLL_REFRESHES, ROLL_MAX)} 次)")
         case "buy_exp":
             return f"买经验 ×{a.times or 1}"
         case "ready":

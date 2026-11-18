@@ -251,6 +251,7 @@ class Runner:
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
                                        before_ready=self._crystals_before_ready, capture=self.settle)
+        self.prepare.roster = self._role_costs
         self.guides = guides
         self._guide: Guide | None = None                       # 当前参考的攻略
         self._guide_pinned = False                             # 模型自己选的攻略不再自动换

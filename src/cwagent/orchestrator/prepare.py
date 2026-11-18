@@ -12,7 +12,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..brain.screen_agent import Action, action_text, slot_text
+from ..brain.screen_agent import ROLL_MAX, ROLL_REFRESHES, Action, action_text, slot_text
 from .. import paths
 from ..device import UserInterrupt
 from ..vision.board import SHOP_X, Slot, occupied_slots, slots
@@ -25,9 +25,9 @@ from ..vision.equipment import (
     find_compose_confirm,
     format_items,
 )
-from ..vision.hud import read_level
+from ..vision.hud import read_gold, read_level
 from ..vision.ocr import Ocr, TextBox, find
-from ..vision.shop import format_shop, read_shop, shop_state
+from ..vision.shop import format_shop, read_prices, read_shop, reread_names, shop_state, two_star
 
 SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位置,1920x1080 实测)
 BOARD_BLANK = (0.500, 0.550)      # 棋盘中间空白:点这里也能关掉商店(trail-cli 的 SHOP_CLOSE_POINT),按钮点不动时用它
@@ -102,6 +102,7 @@ class PrepareExecutor:
         self.deployed: str | None = None            # 「已上场/上限」,如 5/6(Runner 读 HUD 时更新)
         self.node: str | None = None                # 当前节点(Runner 每步更新)
         self.understaffed: set[str] = set()         # 已经因为「人数未达上限」拦过一次出战的节点
+        self.roster: Callable[[], dict[str, set[int]]] | None = None   # 角色名 → 费用(Runner 给;roll 认牌、算二星)
 
     def _look(self) -> list[TextBox]:
         self.frame = self.capture()
@@ -213,6 +214,117 @@ class PrepareExecutor:
                else f"刷新价 {price.text} 金币,可能不够" if price is not None else "可能金币不足")
         return (f"刷新没有生效:金币和商店都没变(还是 {format_shop(after)})——{why}。"
                 "不要反复点刷新,先看现有卡片怎么用")
+
+    # ---------------------------------------------------------------- D 牌
+
+    def _gold(self) -> int | None:
+        try:
+            return read_gold(self.frame.image, self.ocr) if self.frame is not None else None
+        except Exception:  # noqa: BLE001 - 读不出金币就按花掉的算
+            return None
+
+    def _shop_cards(self, boxes: list[TextBox]) -> list[tuple[int, str | None, int | None]]:
+        """商店五张卡(名字、价格):名字认不出时重读,价格漏检时按金币图标补读,和交给模型的商店一样。"""
+        cards = read_shop(boxes)
+        known = (set(self.roster()) | {"开拓者"}) if self.roster else set()
+        if self.frame is not None and known and any(n and n not in known for _, n, _ in cards):
+            cards = reread_names(self.frame.image, cards, self.ocr, known)
+        if self.frame is not None and any(n and p is None for _, n, p in cards):
+            prices = read_prices(self.frame.image, self.ocr)
+            cards = [(i, n, p if p is not None else (prices.get(i) if n else None)) for i, n, p in cards]
+        return cards
+
+    def _roll(self, out: PrepareResult, a: Action, boxes: list[TextBox],
+              board: list[Slot] | None) -> tuple[str, list[TextBox]]:
+        """D 牌(维护者 2026-11-18 要求:极端时要刷十几二十次,一次刷新一轮决策不合理):反复「买下商店里的目标 → 刷新」,
+        目标达成、到刷新上限、再花钱就低于保底金币、买不进、刷新没生效都会停。场上 + 备战席已有的按一星的量算
+        (二星 3 张、三星 9 张),商店里按价格判断出的二星卡算 3 张。"""
+        text = action_text(a)
+        boxes = self.set_shop(out, boxes, True)
+        if not self.shop:
+            return f"{text}:商店没有打开", boxes
+        boxes = self._look()                 # 商店本来就开着时没有重新截图,金币要按眼前这一帧读
+        costs = self.roster() if self.roster else {}
+        have: Counter = Counter()
+        for slot in board or []:
+            if slot.name:
+                have[slot.name] += 3 ** (max(slot.stars, 1) - 1)
+        targets = {t.name: t for t in a.targets or []}
+        bought: Counter = Counter()
+
+        def done(name: str) -> bool:
+            t = targets[name]
+            return bought[name] >= t.count if t.count else have[name] >= 3 ** (t.stars - 1)
+
+        def finished() -> bool:
+            states = [done(n) for n in targets]
+            return any(states) if a.until == "any" else all(states)
+
+        keep = a.keep_gold or 0
+        limit = min(a.max_refresh or ROLL_REFRESHES, ROLL_MAX)
+        gold = self._gold()
+        refreshes = spent = 0
+        reason = ""
+        while not reason:
+            for slot, name, price in self._shop_cards(boxes):
+                if finished():
+                    break
+                if name not in targets or done(name):
+                    continue
+                if gold is not None and price is not None and gold - price < keep:
+                    reason = f"买{name}要 {price} 金,买了就低于保底 {keep} 金"
+                    break
+                before = read_shop(boxes)[slot - 1][1]
+                self._click(out, SHOP_X[slot - 1], SHOP_CARD_Y)
+                self.sleep(GAP)
+                boxes = self._look()
+                if read_shop(boxes)[slot - 1][1] == before:
+                    reason = f"{name}买不进(备战席满了或金币不够)"
+                    break
+                bought[name] += 1
+                have[name] += 3 if two_star(name, price, costs) else 1
+                spent += price or 0
+                now = self._gold()
+                gold = now if now is not None else (gold - (price or 0) if gold is not None else None)
+            if reason:
+                break
+            if finished():
+                reason = "目标达成"
+                break
+            if refreshes >= limit:
+                reason = f"刷新到了 {limit} 次的上限"
+                break
+            free = find(boxes, "免费刷新", region=REFRESH_REGION) is not None
+            price_box = find(boxes, r"^\d{1,2}$", region=REFRESH_PRICE_REGION)
+            cost = 0 if free else int(price_box.text) if price_box is not None else 2
+            if gold is not None and gold - cost < keep:
+                reason = f"再刷新(要 {cost} 金)就低于保底 {keep} 金"
+                break
+            before = read_shop(boxes)
+            button = find(boxes, "刷新$", region=REFRESH_REGION)
+            if button is not None:
+                self._click(out, float(button.x), float(button.y))
+            else:
+                self.device.key("d")
+            self.sleep(1.0)
+            boxes = self._look()
+            if shop_state(boxes) is False:
+                reason = "商店被收起了(界面可能变了)"
+                break
+            now = self._gold()
+            paid = now is not None and gold is not None and now < gold   # 五张碰巧一样时看金币有没有扣
+            if read_shop(boxes) == before and not paid:
+                hint = find(boxes, NO_MONEY)
+                reason = "刷新没有生效" + (f"(界面提示「{hint.text}」)" if hint is not None else "(可能金币不够)")
+                break
+            refreshes += 1
+            spent += cost
+            gold = now if now is not None else (gold - cost if gold is not None else None)
+        got = "、".join(f"{n}×{c}" for n, c in bought.items()) or "没买到目标"
+        status = "、".join(f"{n} 买了 {bought[n]}/{t.count} 张" if t.count else f"{n} 现有一星的量 {have[n]} 张"
+                          for n, t in targets.items())
+        return (f"{text}:刷新 {refreshes} 次,花了 {spent} 金,买到 {got};停下:{reason};"
+                f"现在金币 {gold if gold is not None else '读不出'};{status}"), boxes
 
     def _drag_slot(self, out: PrepareResult, src: tuple[str, int], dst: tuple[str, int],
                    boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
@@ -365,6 +477,11 @@ class PrepareExecutor:
                 elif a.type == "refresh":
                     out.results.append(self._refresh(out, boxes, text))
                     out.observe = True
+                    break
+                elif a.type == "roll":
+                    result, boxes = self._roll(out, a, boxes, board)
+                    out.results.append(result)
+                    out.observe = True      # 买进来的牌和新商店交给模型看,这一轮后面的操作不做
                     break
                 elif a.type == "buy_exp":
                     before = self._level()
