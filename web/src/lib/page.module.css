@@ -3,6 +3,8 @@
 .page > * { min-width: 0; }
 .narrow { max-width: 800px; }
 .wide { max-width: 1920px; gap: 24px; padding-bottom: 48px; }
+/* 占满一屏(对局、对局记录):标题下面的内容区拿剩下的高度,里面各自滚动;窗口太矮时整页滚动 */
+.fill { max-width: none; height: 100dvh; min-height: 640px; grid-template-rows: auto minmax(0, 1fr); padding-bottom: 24px; }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; min-height: var(--control-height-md); }
 .title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--leading-display); }
 .subtitle { margin: 6px 0 0; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }

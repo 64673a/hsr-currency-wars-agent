@@ -13,7 +13,7 @@ import { ShotView, StepDetail, screenName } from './step';
 
 const POLL_MS = 2000;
 
-/** 一局的逐步回看:中间截图(进行中的一局可切到实时画面)和步骤列表,右边这一步的判断。 */
+/** 一局的逐步回看:左边截图(进行中的一局可切到实时画面)和步骤列表,右边这一步的判断。占满外层 .frame 的高度。 */
 export function RunViewer({ run, liveAvailable }: { run: RunSummary; liveAvailable: boolean }) {
   const [steps, setSteps] = useState<StepRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -133,25 +133,23 @@ export function RunViewer({ run, liveAvailable }: { run: RunSummary; liveAvailab
                   最新
                 </Button>
               )}
-            </div>
-
-            <div className={styles.timeline}>
               <SegmentedControl label="步骤筛选" value={filter} onValueChange={setFilter}
                 options={[{ value: 'all', label: '全部' }, { value: 'decision', label: '模型决策' }]} />
-              <div className={styles.stepList} ref={listRef}>
-                {visible.map(({ s, i }) => (
-                  <button key={s.step} type="button" className={styles.stepRow} aria-current={i === cursor ? 'true' : undefined}
-                    onClick={() => go(i)}>
-                    <span className={styles.stepNo}>{s.step}</span>
-                    <span className={styles.stepTs}>{s.ts}</span>
-                    <span className={styles.stepNode}>{s.node ?? ''}</span>
-                    <span className={styles.stepScreen} data-decision={s.decision ? 'true' : undefined}>{screenName(s.screen)}</span>
-                    <span className={styles.stepText}>
-                      {s.error ? `出错:${s.error}` : s.decision?.analysis || (s.actions ?? []).join(';') || s.note || ''}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            </div>
+
+            <div className={styles.stepList} ref={listRef}>
+              {visible.map(({ s, i }) => (
+                <button key={s.step} type="button" className={styles.stepRow} aria-current={i === cursor ? 'true' : undefined}
+                  onClick={() => go(i)}>
+                  <span className={styles.stepNo}>{s.step}</span>
+                  <span className={styles.stepTs}>{s.ts}</span>
+                  <span className={styles.stepNode}>{s.node ?? ''}</span>
+                  <span className={styles.stepScreen} data-decision={s.decision ? 'true' : undefined}>{screenName(s.screen)}</span>
+                  <span className={styles.stepText}>
+                    {s.error ? `出错:${s.error}` : s.decision?.analysis || (s.actions ?? []).join(';') || s.note || ''}
+                  </span>
+                </button>
+              ))}
             </div>
           </>
         ) : (

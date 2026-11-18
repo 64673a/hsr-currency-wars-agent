@@ -1,20 +1,35 @@
-/* 对局页只放当前这一局;对局记录页(pages/runs)左边是列表。回看区(viewer.tsx):左边截图与步骤,右边这一步的判断 */
-/* 开局控件带标签,标题和控件按底边对齐,标题行高等于控件高度,文字落在同一条中线上 */
-.header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
-.title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--control-height-md); }
+/* 对局页和对局记录页都占满一屏(page.fill),页面本身不滚动,步骤列表和右栏各自滚动。
+   对局页:没在打时左边实时画面、右边开局表单和上一局;打的时候是这一局的回看区(viewer.tsx)。 */
+/* 标题行:标题和这一局的概要在左,进行中的状态和停止按钮在右,按中线对齐 */
+.header { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: var(--control-height-md); }
+.headerMain { display: flex; align-items: center; gap: 20px; min-width: 0; flex: 1; }
+.title { margin: 0; flex: none; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 500; letter-spacing: var(--tracking-display); line-height: var(--control-height-md); }
 
-.controls { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
-.modelSelect { width: 220px; }
-.effortSelect { width: 160px; }
-.difficulty { width: 120px; }
-.rounds { width: 140px; }
-.round { line-height: var(--control-height-md); font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.controlsError { flex-basis: 100%; }
+.controls { display: flex; align-items: center; gap: 16px; flex: none; }
+.round { font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.skeleton { height: 480px; border-radius: var(--radius-surface); }
-.viewer { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 420px); gap: 20px; align-items: start; }
-.current { display: grid; gap: 16px; }
-.currentHead { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: var(--control-height-sm); }
+.skeleton { height: 100%; min-height: 320px; border-radius: var(--radius-surface); }
+
+/* 占满剩下高度的尺寸容器:里面用 100cqh 按高度算画面宽度,画面不会把下面的内容挤出屏幕 */
+.frame { container-type: size; min-height: 0; min-width: 0; }
+
+/* 没在打:画面按高度能放多宽就放多宽,右栏固定宽 */
+.idle { height: 100cqh; display: grid; grid-template-columns: minmax(0, calc(100cqh * 16 / 9)) clamp(300px, 22vw, 380px); gap: 20px; align-items: start; }
+.idleStage { min-width: 0; }
+.side { display: grid; gap: 20px; align-content: start; max-height: 100cqh; overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.side > * { min-width: 0; }
+.form { gap: 16px; }
+.startButton { width: 100%; }
+.mcp { display: flex; align-items: center; gap: 8px; min-height: var(--control-height-md); font-size: var(--text-sm); }
+.mcpLabel { flex: none; color: var(--text-secondary); }
+.mcpValue { flex: 1; min-width: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: var(--text-xs); color: var(--foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.last { display: grid; gap: 10px; }
+.form + .last { padding-top: 20px; border-top: 1px solid var(--border-subtle); }
+.lastBody { display: grid; gap: 3px; }
+.lastButton { justify-self: start; }
+
+/* 回看区:截图宽度按「总高 - 下面的进度条和步骤列表(留四分之一高度,120~240px)」算出上限,右栏拿剩下的宽度 */
+.viewer { --below: calc(64px + clamp(120px, 25cqh, 240px)); height: 100cqh; display: grid; grid-template-columns: minmax(0, calc((100cqh - var(--below)) * 16 / 9)) minmax(clamp(320px, 24vw, 440px), 1fr); gap: 20px; }
 
 /* 一局的概要 */
 .runLine { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -29,7 +44,8 @@
 .runMeta { font-size: var(--text-xs); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 截图 */
-.stage { display: grid; gap: 12px; min-width: 0; }
+.stage { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.stage > * { flex: none; }
 .shot { position: relative; margin: 0; aspect-ratio: 16 / 9; border: 1px solid var(--border); border-radius: var(--radius-panel); overflow: hidden; background: var(--surface-muted); }
 .shot img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .video { display: block; width: 100%; height: 100%; object-fit: contain; }
@@ -42,13 +58,12 @@
 .markFill { fill: var(--accent); }
 .markLabel { fill: var(--accent); font-size: 30px; font-weight: 500; paint-order: stroke; stroke: oklch(0% 0 0 / .55); stroke-width: 5px; }
 
-.stepbar { display: flex; align-items: center; gap: 8px; }
-.range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.stepbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.range { flex: 1; min-width: 120px; accent-color: var(--accent); }
 .stepCount { min-width: 72px; text-align: right; font-size: var(--text-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
-/* 步骤列表 */
-.timeline { display: grid; gap: 10px; justify-items: start; }
-.stepList { width: 100%; max-height: 340px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+/* 步骤列表:占满截图下面剩下的高度 */
+.stage > .stepList { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
 .stepRow { display: grid; grid-template-columns: 40px 64px 44px 72px minmax(0, 1fr); align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 6px 14px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
 .stepRow + .stepRow { border-top: 1px solid var(--border-subtle); }
 .stepRow:hover { background: var(--surface-muted); }
@@ -60,7 +75,7 @@
 .stepText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 右侧:这一步的判断 */
-.panel { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.panel { min-height: 0; overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
 .panelSkeleton { height: 320px; }
 .detail { display: grid; gap: 18px; }
 .detailHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -93,11 +108,6 @@
 .fold[open] summary::before { transform: rotate(45deg); }
 .foldText { margin: 10px 0 0; font-size: var(--text-sm); line-height: 1.7; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
 .foldMono { margin: 10px 0 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: var(--text-xs); line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
-
-@media (max-width: 1280px) {
-  .viewer { grid-template-columns: minmax(0, 1fr); }
-  .panel { position: static; max-height: none; }
-}
 
 /* 战斗读数图:细线、发丝网格、文字用文字色,阵亡用危险色的点 + 文字标注 */
 .chart { display: grid; gap: 6px; }

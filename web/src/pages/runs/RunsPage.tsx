@@ -67,7 +67,7 @@ export default function RunsPage() {
   const allPicked = deletable.length > 0 && count === deletable.length;
 
   return (
-    <div className={`${page.page} ${page.wide}`}>
+    <div className={`${page.page} ${page.wide} ${page.fill}`}>
       <header className={styles.header}>
         <div>
           <h1 className={page.title}>对局记录</h1>
@@ -150,7 +150,9 @@ export default function RunsPage() {
                   />
                 )}
               </div>
-              <RunViewer key={run.id} run={run} liveAvailable={liveAvailable} />
+              <div className={playStyles.frame}>
+                <RunViewer key={run.id} run={run} liveAvailable={liveAvailable} />
+              </div>
             </div>
           )}
         </div>

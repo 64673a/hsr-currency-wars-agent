@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
-import EmptyState from '@/components/arc/empty-state/empty-state';
+import { CopyButton } from '@/components/arc/copy-button/copy-button';
 import { Input } from '@/components/arc/input/input';
 import { NumberField } from '@/components/arc/number-field/number-field';
 import { Select } from '@/components/arc/select/select';
@@ -13,7 +13,7 @@ import { useToast } from '@/lib/toast';
 
 import styles from './play.module.css';
 import { LiveView } from './live';
-import { RunLine } from './runs';
+import { RunBadge, RunLine, runProgress, runSetup, shortTime } from './runs';
 import { RunViewer } from './viewer';
 
 const POLL_MS = 2000;
@@ -21,7 +21,8 @@ const POLL_MS = 2000;
 /** 开局时不改思考强度,用模型档案里的设置 */
 const PROFILE_EFFORT = 'profile';
 
-function StartControls({ status, onChange }: { status: PlayStatus; onChange: () => void }) {
+/** 开局表单(右栏) */
+function StartForm({ onChange }: { onChange: () => void }) {
   const [models, setModels] = useState<ModelProfile[]>([]);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState(PROFILE_EFFORT);
@@ -41,6 +42,7 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
   }, []);
 
   const profileEffort = effortName(models.find((m) => m.name === model)?.reasoning_effort);
+  const mcp = `${window.location.origin}/mcp`;
 
   const start = async () => {
     setBusy(true);
@@ -55,6 +57,36 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
       setBusy(false);
     }
   };
+
+  return (
+    <div className={`${page.fields} ${styles.form}`}>
+      <Select label="模型"
+        options={[...models.map((m) => ({ value: m.name, label: m.name })), { value: EXTERNAL_AGENT, label: '外部 agent(MCP)' }]}
+        value={model} onValueChange={setModel} />
+      {model === EXTERNAL_AGENT ? (
+        <div className={styles.mcp}>
+          <span className={styles.mcpLabel}>MCP 地址</span>
+          <span className={styles.mcpValue}>{mcp}</span>
+          <CopyButton value={mcp} label="复制" iconOnly variant="plain" />
+        </div>
+      ) : (
+        <Select label="思考强度"
+          options={[{ value: PROFILE_EFFORT, label: profileEffort ? `档案设置(${profileEffort})` : '档案设置' }, ...EFFORTS]}
+          value={effort} onValueChange={setEffort} />
+      )}
+      <div className={page.fields2}>
+        <Input label="难度" placeholder="A8-1" value={difficulty} onChange={(e) => setDifficulty(e.target.value)} />
+        <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={setRounds} />
+      </div>
+      {error && <Alert tone="danger" title="没有开始">{error}</Alert>}
+      <Button className={styles.startButton} onClick={start} loading={busy} disabled={!model}>开始对局</Button>
+    </div>
+  );
+}
+
+/** 进行中:标题行右边的状态和停止按钮 */
+function RunningControls({ status, onChange }: { status: PlayStatus; onChange: () => void }) {
+  const [busy, setBusy] = useState(false);
   const stop = async () => {
     setBusy(true);
     try {
@@ -64,39 +96,37 @@ function StartControls({ status, onChange }: { status: PlayStatus; onChange: () 
       setBusy(false);
     }
   };
-
   return (
     <div className={styles.controls}>
-      {status.running ? (
-        <>
-          {status.profile === EXTERNAL_AGENT && status.agent.waiting && <span className={styles.round}>等 agent 回答</span>}
-          {status.rounds > 1 && <span className={styles.round}>第 {status.round} / {status.rounds} 局</span>}
-          {status.hotkey && <span className={styles.round}>{status.hotkey.replace(/\b\w/g, (c) => c.toUpperCase())} 停止</span>}
-          <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
-            {status.stopping ? '正在停止' : '停止对局'}
-          </Button>
-        </>
-      ) : (
-        <>
-          {model === EXTERNAL_AGENT && <span className={styles.round}>MCP 地址 {window.location.origin}/mcp</span>}
-          <Select label="模型" className={styles.modelSelect}
-            options={[...models.map((m) => ({ value: m.name, label: m.name })), { value: EXTERNAL_AGENT, label: '外部 agent(MCP)' }]}
-            value={model} onValueChange={setModel} />
-          {model !== EXTERNAL_AGENT && (
-            <Select label="思考强度" className={styles.effortSelect}
-              options={[{ value: PROFILE_EFFORT, label: profileEffort ? `档案设置(${profileEffort})` : '档案设置' }, ...EFFORTS]}
-              value={effort} onValueChange={setEffort} />
-          )}
-          <Input label="难度" className={styles.difficulty} placeholder="A8-1" value={difficulty}
-            onChange={(e) => setDifficulty(e.target.value)} />
-          <div className={styles.rounds}>
-            <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={setRounds} />
-          </div>
-          <Button onClick={start} loading={busy} disabled={!model}>开始对局</Button>
-        </>
-      )}
-      {error && <Alert tone="danger" title="没有开始" className={styles.controlsError}>{error}</Alert>}
+      {status.profile === EXTERNAL_AGENT && status.agent.waiting && <span className={styles.round}>等 agent 回答</span>}
+      {status.rounds > 1 && <span className={styles.round}>第 {status.round} / {status.rounds} 局</span>}
+      {status.hotkey && <span className={styles.round}>{status.hotkey.replace(/\b\w/g, (c) => c.toUpperCase())} 停止</span>}
+      <Button variant="danger" onClick={stop} loading={busy || status.stopping}>
+        {status.stopping ? '正在停止' : '停止对局'}
+      </Button>
     </div>
+  );
+}
+
+/** 上一局的结果(右栏),回放在对局记录页 */
+function LastRun({ run, error }: { run: RunSummary; error: string | null }) {
+  return (
+    <section className={styles.last} aria-label="上一局">
+      <h2 className={styles.blockTitle}>上一局</h2>
+      <div className={styles.lastBody}>
+        <span className={styles.runTop}>
+          <span className={styles.runTime}>{shortTime(run.started_at)}</span>
+          <RunBadge run={run} />
+        </span>
+        <span className={styles.runMeta}>{runSetup(run)}</span>
+        <span className={styles.runMeta}>{runProgress(run)}</span>
+      </div>
+      {error && <Alert tone="danger" title="出错">{error}</Alert>}
+      <Button variant="secondary" size="sm" className={styles.lastButton}
+        onClick={() => (window.location.hash = `#/runs?run=${enc(run.id)}`)}>
+        查看回放
+      </Button>
+    </section>
   );
 }
 
@@ -104,7 +134,6 @@ export default function PlayPage() {
   const toast = useToast();
   const [status, setStatus] = useState<PlayStatus | null>(null);
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  const [currentId, setCurrentId] = useState<string | null>(null);
   const [liveAvailable, setLiveAvailable] = useState(false);
   const wasRunning = useRef(false);
 
@@ -130,38 +159,48 @@ export default function PlayPage() {
     wasRunning.current = status.running;
   }, [status, toast]);
 
-  // 只看当前这一局:进行中的一局出现就切过去;打完后留在页面上,直到开下一局(以前的对局在「对局记录」里)
-  const liveId = runs?.find((r) => r.live)?.id ?? null;
-  useEffect(() => {
-    if (liveId) setCurrentId(liveId);
-  }, [liveId]);
-  const current = runs?.find((r) => r.id === currentId) ?? null;
+  // 对局页只看进行中的一局;打完回到开局的样子,回放在对局记录页
+  const current = runs?.find((r) => r.live) ?? null;
+  const last = runs?.find((r) => !r.live) ?? null;
+  const running = status?.running ?? false;
+  const canStart = Boolean(status?.available) && !running;
 
   return (
-    <div className={`${page.page} ${page.wide}`}>
+    <div className={`${page.page} ${page.wide} ${page.fill}`}>
       <header className={styles.header}>
-        <h1 className={styles.title}>对局</h1>
-        {status?.available && (status.running || !liveId) && <StartControls status={status} onChange={refresh} />}
+        <div className={styles.headerMain}>
+          <h1 className={styles.title}>对局</h1>
+          {current && <RunLine run={current} />}
+        </div>
+        {status && running && <RunningControls status={status} onChange={refresh} />}
       </header>
 
       {runs === null ? (
         <Skeleton className={styles.skeleton} />
       ) : current ? (
-        <div className={styles.current}>
-          <div className={styles.currentHead}>
-            <RunLine run={current} />
-            {!current.live && (
-              <Button variant="ghost" size="sm" onClick={() => (window.location.hash = `#/runs?run=${enc(current.id)}`)}>
-                在对局记录中查看
-              </Button>
-            )}
-          </div>
+        <div className={styles.frame}>
           <RunViewer key={current.id} run={current} liveAvailable={liveAvailable} />
         </div>
-      ) : liveAvailable ? (
-        <LiveView />
       ) : (
-        <EmptyState title="没有进行中的对局" description="开始一局后,这里会显示实时画面和模型每一步的判断。" />
+        <div className={styles.frame}>
+          <div className={styles.idle}>
+            <section className={styles.idleStage} aria-label="游戏画面">
+              {liveAvailable ? (
+                <LiveView />
+              ) : (
+                <figure className={styles.shot}>
+                  <span className={styles.noShot}>没有实时画面</span>
+                </figure>
+              )}
+            </section>
+            {(canStart || last) && (
+              <aside className={styles.side}>
+                {canStart && <StartForm onChange={refresh} />}
+                {last && <LastRun run={last} error={status?.run_id === last.id ? status.error : null} />}
+              </aside>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
