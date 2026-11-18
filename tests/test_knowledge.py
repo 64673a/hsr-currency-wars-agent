@@ -37,7 +37,7 @@ def test_clean(raw, expected):
 
 
 def test_build():
-    k = build(config(), [lineup("L1", use=5), lineup("L2", use=50), lineup("old", season="1"),
+    k = build(config(), [lineup("L1", use=5, extra="丙"), lineup("L2", use=50), lineup("old", season="1"),
                          lineup("exp", expired=True)],
               companions=[{"name": "同行者", "type": "资源", "desc": "多给金币"}])
     assert k.meta == {"season_id": "2", "sub_season_id": "1", "game_version": "4.7"}
@@ -82,6 +82,28 @@ def test_build():
     assert k.icons["roles"]["1001"].endswith("r1001.png") and "1002" not in k.icons["roles_big"]
 
 
+def test_guides_are_filtered_deduplicated_and_keep_version_info():
+    """2026-11-18 维护者定的筛选:有使用次数的全留;没有的要收藏 ≥ 200 且写了说明、投资策略、投资环境;
+    最终阵容一样的只留一篇。另外记下星徽、版本和过期信息。"""
+    k = build(config(), [
+        lineup("used", use=3, extra="a"),
+        lineup("fav", use=0, favour=200, extra="b", emblem=True, sub_expired=True),
+        lineup("cold", use=0, favour=199, extra="c"),
+        lineup("thin", use=0, favour=5000, description="", extra="d"),
+        lineup("dup-low", use=1, favour=9000, extra="a"),        # 和 used 阵容一样,使用次数少
+        lineup("dup-old", use=99, extra="b", expired=True),      # 和 fav 阵容一样但过期了:不能把 fav 挤掉
+    ])
+    guides = {e.id: e for e in k.entries["guides"]}
+    assert set(guides) == {"used", "fav"}
+    g = guides["fav"].data
+    assert g["emblem"] and g["emblems"] == ["连击星徽"] and g["favour"] == 200
+    assert g["game_version"] == "4.7" and g["season_id"] == "2" and g["sub_season_id"] == "1"
+    assert g["sub_expired"] and g["expired_items"] == ["旧装备"] and not g["expired"]
+    assert g["published"] == "2026-11-11" and g["edited"] == "2026-10-29"
+    assert guides["fav"].summary["emblem"] and not guides["used"].data["emblem"]
+    assert [e.id for e in sorted(k.entries["guides"], key=lambda e: e.sort)] == ["used", "fav"]
+
+
 def test_db_roundtrip(tmp_path):
     path = tmp_path / "k.sqlite"
     k = build(config(), [lineup()])
@@ -108,7 +130,7 @@ def _api_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"retcode": 0, "data": config()})
     body = json.loads(request.content)
     page = int(body["page"])
-    items = [lineup(f"P{page}-{i}", use=100 - page * 10 - i) for i in range(10)]
+    items = [lineup(f"P{page}-{i}", use=100 - page * 10 - i, extra=f"P{page}-{i}") for i in range(10)]
     return httpx.Response(200, json={"retcode": 0, "data": {"list": items,
                                                             "next_page_token": "t" if page < 3 else ""}})
 

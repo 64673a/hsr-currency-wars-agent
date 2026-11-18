@@ -48,12 +48,20 @@ export function RowBadges({ kind, it }: { kind: string; it: Item }) {
           适合高难
         </Badge>
       )}
+      {kind === 'guides' && it.emblem && <Badge size="sm" color="violet">星徽</Badge>}
+      {kind === 'guides' && it.sub_expired && <Badge size="sm" tone="warning">本期已过期</Badge>}
       {it.unused && <Badge size="sm">本赛季未使用</Badge>}
       {kind === 'companions' && !it.verified && <Badge size="sm">未核实</Badge>}
       {kind === 'affixes' && it.origin && <Badge size="sm" color={it.origin === '公共' ? 'teal' : undefined}>{it.origin}</Badge>}
       {kind === 'affixes' && it.seen_count > 1 && <Badge size="sm">{it.seen_count} 次</Badge>}
     </>
   );
+}
+
+/** 有使用次数的给使用次数,没有的给收藏数 */
+function guidePopularity(it: Item): string {
+  const uses = Number(it.use_count ?? 0);
+  return uses > 0 ? `${uses.toLocaleString('zh-CN')} 人使用` : `${Number(it.favour ?? 0).toLocaleString('zh-CN')} 收藏`;
 }
 
 export function summaryLine(kind: string, it: Item): string {
@@ -65,7 +73,7 @@ export function summaryLine(kind: string, it: Item): string {
     case 'equipment':
       return it.category + (it.recipes?.length ? ` · ${it.recipes.join(' 或 ')}` : '');
     case 'guides':
-      return `${Number(it.use_count).toLocaleString('zh-CN')} 人使用 · ${it.key_traits.join(' ')}` + (it.carries.length ? ` · 主 C ${it.carries.join('、')}` : '');
+      return `${guidePopularity(it)} · ${it.key_traits.join(' ')}` + (it.carries.length ? ` · 主 C ${it.carries.join('、')}` : '');
     default:
       return it.desc ?? '';
   }
@@ -282,7 +290,9 @@ function Board({ units }: { units: any[] }) {
 function Guide({ d }: { d: Item }) {
   return (
     <>
-      <Head d={{ ...d, name: d.title }} sub={`${d.use_count.toLocaleString('zh-CN')} 人使用 · 作者 ${d.author}`} />
+      <Head d={{ ...d, name: d.title }}
+        sub={[guidePopularity(d), `作者 ${d.author}`, d.game_version && `${d.game_version} 版本`, d.edited && `${d.edited} 更新`]
+          .filter(Boolean).join(' · ')} />
       <dl className={styles.kv}>
         <dt>主 C</dt>
         <dd>{d.carries.join('、') || '—'}</dd>
@@ -290,6 +300,20 @@ function Guide({ d }: { d: Item }) {
         <dd>
           <Chips items={d.key_traits.map((t: any) => `${t.count} ${t.name}`)} color="violet" />
         </dd>
+        {d.emblems?.length > 0 && (
+          <>
+            <dt>星徽</dt>
+            <dd>
+              <Chips items={d.emblems} color="violet" />
+            </dd>
+          </>
+        )}
+        {d.sub_expired && (
+          <>
+            <dt>本期已过期</dt>
+            <dd>{d.expired_items?.length ? `失效:${d.expired_items.join('、')}` : '部分内容可能已失效'}</dd>
+          </>
+        )}
         <dt>节奏</dt>
         <dd>{d.tempo_labels.join('、') || '—'}</dd>
         <dt>适配环境</dt>

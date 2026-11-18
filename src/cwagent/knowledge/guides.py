@@ -35,6 +35,9 @@ class Guide:
     stage_traits: dict = field(default_factory=dict)    # {"early": [{"name", "count"}], "middle": ..., "final": ...}
     augment_groups: dict = field(default_factory=dict)  # {"first": [...], "second": [...]}
     author: str = ""
+    emblems: list[str] = field(default_factory=list)    # 最终阵容首选装备里的星徽(星徽攻略)
+    sub_expired: bool = False                           # 本期(子赛季)已过期:内容可能有失效的
+    expired_items: list[str] = field(default_factory=list)
 
     @property
     def final_names(self) -> set[str]:
@@ -95,7 +98,9 @@ class GuideAdvisor:
                 idea=(g.get("description") or g.get("core_idea") or "").strip(),
                 augments=list(g.get("recommended_augments") or []), use_count=int(g.get("use_count") or 0),
                 hard=bool(g.get("support_hard")), boards=boards, stage_traits=stage_traits,
-                augment_groups=dict(g.get("augments") or {}), author=g.get("author") or ""))
+                augment_groups=dict(g.get("augments") or {}), author=g.get("author") or "",
+                emblems=list(g.get("emblems") or []), sub_expired=bool(g.get("sub_expired")),
+                expired_items=list(g.get("expired_items") or [])))
         self.by_id = {g.id: g for g in self.guides}
 
     def score(self, g: Guide, owned: set[str], shop: set[str], environment: str | None) -> Match:
@@ -188,7 +193,9 @@ def card(g: Guide, *, full: bool = True) -> str:
 
     final_traits = _traits(g.stage_traits.get("final") or []) or "、".join(g.traits[:4])
     head = (f"「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
-            + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else ""))
+            + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else "")
+            + (f";星徽攻略(要 {'、'.join(g.emblems)})" if g.emblems else "")
+            + (";本期已过期" + (f"(失效:{'、'.join(g.expired_items)})" if g.expired_items else "") if g.sub_expired else ""))
     roster = roster_notes(g)
     if not full:
         return "\n".join([head, f"  最终阵容:{board(g.final, False)}", f"  核心羁绊:{final_traits}"]

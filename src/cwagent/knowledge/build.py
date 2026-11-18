@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .clean import clean
@@ -15,6 +16,10 @@ TRAIT_TYPES = {0: "阵营", 1: "流派", 2: "专属", 3: "特殊"}
 POSITIONS = {"Front": "前台", "Back": "后台", "Common": "前后台"}
 AUGMENT_QUALITIES = {1: "银色", 2: "金色", 3: "棱彩"}
 GUIDE_SUMMARY_CHARS = 200
+# 攻略筛选(2026-11-18 维护者定,每次同步都按这个):有使用次数的(官方推荐、玩家在游戏里套用过)全留;
+# 其余要收藏够多、而且写了说明、推荐投资策略和投资环境;最终阵容完全相同的只留数据最好的一篇
+GUIDE_MIN_FAVOUR = 200
+CN_TZ = timezone(timedelta(hours=8))
 
 # 效果标签:按描述关键词粗略分类,只作提示,不代替描述原文。见 docs/TECH_DESIGN.md 2.3、5.5。
 EFFECT_RULES: list[tuple[str, str]] = [
@@ -273,15 +278,16 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
 
     # ---------------------------------------------------------------- 指引卡
     guides = []
-    for lineup in lineups:
-        card = guide_card(lineup, c, role_names)
-        if card is None or card["season_id"] != season or card["expired"]:
-            continue
+    current = [g for g in (guide_card(lineup, c, role_names) for lineup in lineups)
+               if g is not None and g["season_id"] == season and not g["expired"]]   # 先去掉过期的再去重
+    for card in pick_guides(current):
         guides.append(Entry(card["id"], card["title"], card,
-                            summary={"use_count": card["use_count"], "support_hard": card["support_hard"],
+                            summary={"use_count": card["use_count"], "favour": card["favour"],
+                                     "support_hard": card["support_hard"], "emblem": card["emblem"],
+                                     "sub_expired": card["sub_expired"], "version": card["game_version"],
                                      "tempo": card["tempo_labels"], "carries": card["carries"],
                                      "key_traits": [f"{t['count']}{t['name']}" for t in card["key_traits"]]},
-                            sort=-card["use_count"],
+                            sort=-card["use_count"] - card["favour"] / 1e9,
                             search=" ".join([card["title"], *card["carries"],
                                              *[t["name"] for t in card["key_traits"]], card["core_idea"]])))
 
@@ -329,6 +335,26 @@ def affix_entries(affixes: list[dict[str, Any]] | None) -> list[Entry]:
     return out
 
 
+def pick_guides(cards) -> list[dict[str, Any]]:
+    """按 GUIDE_MIN_FAVOUR 那条规则筛攻略,再按最终阵容去重(每组留使用次数、收藏最多的)。"""
+    kept = [g for g in cards if (g["use_count"] > 0 or (
+        g["favour"] >= GUIDE_MIN_FAVOUR and g["description"] and g["recommended_augments"] and g["environments"]))]
+    kept.sort(key=lambda g: (g["use_count"], g["favour"], g["likes"]), reverse=True)
+    seen: set[tuple[str, ...]] = set()
+    out = []
+    for g in kept:
+        board = tuple(sorted(u["name"] for side in ("front", "back") for u in g["final_board"][side]))
+        if board not in seen:
+            seen.add(board)
+            out.append(g)
+    return out
+
+
+def _date(ts: Any) -> str:
+    n = _int(ts)
+    return datetime.fromtimestamp(n, CN_TZ).strftime("%Y-%m-%d") if n > 0 else ""
+
+
 def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[str, Any] | None:
     td = lineup.get("tourn_detail") or {}
     stages = {s.get("stage"): s for s in td.get("role_stages") or []}
@@ -369,6 +395,11 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
         return sorted(out, key=lambda t: -t["count"])
 
     description = (lineup.get("description") or "").strip()
+    # 星徽攻略:官方 has_change_equip 标的是最终阵容的首选装备里有星徽(给角色加羁绊的装备,2026-11-18 对 300 篇核对过);
+    # 只在次选装备里出现的不算
+    emblems = sorted({e.get("name", "") for side in ("front_roles", "back_roles") for r in final.get(side) or []
+                      for e in r.get("first_equipments") or []
+                      if e.get("category_name") == "星徽" or str(e.get("name", "")).endswith("星徽")})
     first = [a.get("name", "") for a in td.get("first_fight_augments") or []]
     second = [a.get("name", "") for a in td.get("second_fight_augments") or []]
     augments = first + second
@@ -377,6 +408,7 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
         "title": lineup.get("title", ""),
         "use_count": use_count,
         "likes": _int(((lineup.get("game_data") or {}).get("interact") or {}).get("like")),
+        "favour": _int(((lineup.get("game_data") or {}).get("interact") or {}).get("favour")),
         "support_hard": bool(td.get("support_hard")),
         "level": td.get("lineup_level", ""),
         "tempo_labels": [l.get("text", "") for l in td.get("labels") or []],
@@ -396,8 +428,17 @@ def guide_card(lineup: dict[str, Any], c, role_names: dict[str, str]) -> dict[st
                            "middle": board(stages.get("Middle"), detail=True)},
         "stage_traits": {"early": stage_traits(stages.get("Early")), "middle": stage_traits(stages.get("Middle"))},
         "share_code": td.get("share_code", ""),
+        "emblem": bool(td.get("has_change_equip")) or bool(emblems),
+        "emblems": emblems,
+        # 版本和过期:整个赛季过期的不入库;本期(子赛季)过期的照样留,标出来、列出失效的内容
         "season_id": str(td.get("season_id", "")),
+        "sub_season_id": str(td.get("sub_season_id", "")),
         "game_version": str(td.get("rpg_game_big_version", "")),
         "expired": bool(td.get("is_expired")),
+        "sub_expired": bool(td.get("is_sub_expired")),
+        "expired_items": [str(x.get("name") or x.get("id") or "") if isinstance(x, dict) else str(x)
+                          for x in td.get("sub_season_expired_item_list") or []],
+        "published": _date(lineup.get("show_time") or lineup.get("created_at")),
+        "edited": _date(lineup.get("last_edit")),
         "author": lineup.get("nickname", ""),
     }

@@ -52,26 +52,33 @@ def config():
     }
 
 
-def lineup(lid="L1", *, use=100, season="2", expired=False):
+def lineup(lid="L1", *, use=100, season="2", expired=False, favour=0, description="前期甲,后期乙。", extra=None,
+           emblem=False, sub_expired=False):
+    """一套官方阵容。extra:最终阵容后台再加一个这个名字的角色(让阵容各不相同,同样阵容的会去重)。"""
     trait = {"trait_id": "200402", "trait_name": "连击", "trait_type": 1, "current_role_count": 2,
              "layers": [{"layer": 2, "quality": 0, "is_activated": True,
                          "trait_desc": "15%<property type=ExtraLuckChance display=all>。"},
                         {"layer": 4, "quality": 1, "is_activated": False, "trait_desc": "30%。"}],
              "remarks": [{"remark": "【连击率】:额外回合。"}]}
+    equips = [{"name": "反重力皮靴"}] + ([{"name": "连击星徽", "category": "3", "category_name": "星徽"}] if emblem else [])
     role = {"id": "1001", "name": "甲", "rarity": "1", "star": 2, "is_carry": True,
-            "first_equipments": [{"name": "反重力皮靴"}], "first_spot_lights": [{"name": "蚁群效应"}]}
+            "first_equipments": equips, "first_spot_lights": [{"name": "蚁群效应"}]}
+    back = [{"id": "1002", "name": "乙", "rarity": "3"}] + ([{"id": "1099", "name": extra, "rarity": "1"}] if extra else [])
     return {
-        "id": lid, "title": f"阵容{lid}", "description": "前期甲,后期乙。", "nickname": "作者",
-        "game_data": {"interact": {"like": "10"}, "recent_interact": {"use": str(use)}},
+        "id": lid, "title": f"阵容{lid}", "description": description, "nickname": "作者",
+        "show_time": "1794343407", "last_edit": "1793255588",
+        "game_data": {"interact": {"like": "10", "favour": str(favour)}, "recent_interact": {"use": str(use)}},
         "tourn_detail": {
-            "season_id": season, "is_expired": expired, "rpg_game_big_version": "4.7", "share_code": "CODE",
+            "season_id": season, "sub_season_id": "1", "is_expired": expired, "is_sub_expired": sub_expired,
+            "sub_season_expired_item_list": [{"id": "1", "name": "旧装备"}] if sub_expired else [],
+            "has_change_equip": emblem, "rpg_game_big_version": "4.7", "share_code": "CODE",
             "support_hard": True, "lineup_level": "LineupLevelAdvanced",
             "labels": [{"text": "速升8级"}], "portals": [{"title": "火药味"}],
             "first_fight_augments": [{"name": "特战资金"}], "second_fight_augments": [],
             "order_basic": [{"name": "轮滑鞋"}], "order_compose": [{"name": "反重力皮靴"}],
             "role_stages": [
                 {"stage": "Early", "front_roles": [role], "back_roles": [], "carry_list": [], "traits": []},
-                {"stage": "Final", "front_roles": [role], "back_roles": [{"id": "1002", "name": "乙", "rarity": "3"}],
+                {"stage": "Final", "front_roles": [role], "back_roles": back,
                  "carry_list": ["1001"], "traits": [trait]},
             ],
         },
