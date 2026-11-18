@@ -26,7 +26,7 @@ from ..brain.ledger import MAX_LINE, RunLedger, compact_node, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import Guide, GuideAdvisor, brief, card
-from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
+from ..brain.screen_agent import LOOKUP_NAMES, Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
 from .. import paths
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value
@@ -132,7 +132,6 @@ GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、�
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
 FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect、recheck)不占决策次数
-LOOKUPS = 3      # 每个回合最多几轮查资料(lookup)不占决策次数
 GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
 
 
@@ -255,6 +254,9 @@ class Runner:
         self.prepare.roster = self._role_costs
         self.guides = guides
         self._guide: Guide | None = None                       # 模型挂上的攻略(guide 字段)
+        self._lookups: list[dict] = []                         # 模型查过、还没写进决策记录的资料
+        if hasattr(brain, "lookup_handler"):
+            brain.lookup_handler = self.lookup
         self._roles: list[str] = []                            # 最近一次认出的场上 + 备战席角色
         self._shop_names: list[str] = []                       # 最近一次读到的商店角色
         self._node: str | None = None
@@ -352,8 +354,6 @@ class Runner:
         if a.type == "zoom":
             self._zoom_region = a.region
             return action_text(a)
-        if a.type == "lookup":
-            return self.lookup(a)
         if a.type == "recheck":
             self._recheck = True
             time.sleep(RECHECK_WAIT)
@@ -677,25 +677,30 @@ class Runner:
             self.log(f"[{n}] 模型挂上攻略 {g.code}「{g.title}」")
             self._set_guide(g)
 
-    def lookup(self, a: Action) -> str:
-        """lookup:查攻略、攻略全文、经验、攻略常配装备。只查资料,不操作游戏;结果作为执行结果交给模型。"""
-        head = action_text(a)
-        query = (a.query or "").strip()
-        if a.what in ("guides", "guide", "equipment") and self.guides is None:
+    def lookup(self, what: str, query: str) -> str:
+        """lookup 工具:查攻略、攻略全文、经验、攻略常配装备。只查资料,不操作游戏。接口模型在一轮决策里调用
+        (ScreenAgent.lookup_handler),外部 agent 通过 MCP 调用;查过的都记下来,写进下一条决策记录。"""
+        out = self._lookup(what, (query or "").strip())
+        self._lookups.append({"what": what, "query": query, "result": out})
+        return out
+
+    def _lookup(self, what: str, query: str) -> str:
+        head = f"查{LOOKUP_NAMES.get(what, what)}:{query}"
+        if what in ("guides", "guide", "equipment") and self.guides is None:
             return f"{head}:攻略没有开启(设置里关掉了,或知识库还没同步)"
-        if a.what == "guides":
+        if what == "guides":
             found = self.guides.search(query, self._roles)
             if not found:
                 return f"{head}:没有找到相关的攻略"
             return f"{head}:找到 {len(found)} 篇\n" + "\n".join(f"- {brief(g, self._roles)}" for g in found)
-        if a.what == "guide":
+        if what == "guide":
             g = self.guides.find(query)
             return f"{head}\n{card(g)}" if g else f"{head}:没有这篇攻略(编号见查攻略的结果)"
-        if a.what == "equipment":
+        if what == "equipment":
             names = [w for w in re.split(r"[\s,,、;;]+", query) if w]
             lines = self.equipment.advice(names, top=5) if self.equipment else []
             return f"{head}\n" + "\n".join(lines) if lines else f"{head}:攻略的最终阵容里没有这些角色"
-        if a.what == "memory":
+        if what == "memory":
             find = getattr(self.brain, "lookup_memory", None)
             return f"{head}\n{find(query)}" if find else f"{head}:没有经验库"
         return f"{head}:不认识要查的内容"
@@ -1360,6 +1365,8 @@ class Runner:
         finally:
             pending.close()
         record["decision"] = to_jsonable(decision)
+        if self._lookups:   # 这一轮(接口模型)或上一轮以来(外部 agent 通过 MCP)查过的资料
+            record["decision"]["lookups"], self._lookups = self._lookups, []
         if ep.request_messages:
             record["request"] = self.trace.request(n, self.brain.system, ep.request_messages)
         if decision.perception_issues:
@@ -1378,10 +1385,7 @@ class Runner:
         for note in decision.notes:   # 本局学到的,之后的回合也要知道
             self.ledger.add(f"[{self._node or '开局'} {note.kind}] {note.title}:{note.content}")
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
-        if decision.actions and all(a.type == "lookup" for a in decision.actions) and ep.lookups < LOOKUPS:
-            ep.lookups += 1          # 查资料的一轮不占决策次数,和 zoom 等分开计数
-            ep.max_turns += 1
-        elif (decision.actions and all(a.type in ("zoom", "inspect", "recheck") for a in decision.actions)
+        if (decision.actions and all(a.type in ("zoom", "inspect", "recheck") for a in decision.actions)
                 and ep.free_looks < FREE_LOOKS):
             # 只看不操作的一轮不占备战决策次数(Codex 2026-11-16:1-1 放大一次、查看两次后就被强制出战)
             ep.free_looks += 1

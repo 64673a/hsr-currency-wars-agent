@@ -181,6 +181,7 @@ class PlayController:
         self._lock = threading.Lock()
         self._hotkey: str | None = None
         self._thread: threading.Thread | None = None
+        self._runner = None   # 正在跑的那一局(Runner)
         self._stop = threading.Event()
         self._state: dict[str, Any] = {"run_id": None, "profile": None, "difficulty": None, "round": 0,
                                        "rounds": 0, "result": None, "error": None, "log": []}
@@ -194,6 +195,11 @@ class PlayController:
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def lookup(self, what: str, query: str) -> str | None:
+        """外部 agent 查资料(MCP 的 lookup 工具):交给正在跑的这一局;没有对局时返回 None。"""
+        runner = self._runner
+        return runner.lookup(what, query) if runner is not None else None
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -253,8 +259,12 @@ class PlayController:
                     runner, run_dir = build_runner(cfg, device, model=model, effort=effort, log=self._log)
                     with self._lock:
                         self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
+                    self._runner = runner      # MCP 的 lookup 工具按这一局的阵容查资料
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
-                    result = run_session(runner, opts, log=self._log)
+                    try:
+                        result = run_session(runner, opts, log=self._log)
+                    finally:
+                        self._runner = None
                     runner = None
                     with self._lock:
                         self._state["result"] = result

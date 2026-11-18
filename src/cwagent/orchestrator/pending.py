@@ -79,13 +79,16 @@ def partial_strings(src: str, key: str) -> list[str] | None:
 
 
 class PendingDecision:
-    """一步决策的进度。feed 收流式片段(和 llm.complete 的 on_delta 一样:reasoning / text / tool / reset)。"""
+    """一步决策的进度。feed 收流式片段(和 llm.complete 的 on_delta 一样:reasoning / text / tool / reset),
+    以及 lookup(这一轮查了什么资料;查完模型接着回答,接下来的 reset 不算重问)。"""
 
     def __init__(self, path: Path, info: dict):
         self.path = path
         self.info = {**info, "started": time.time()}
         self.reasoning = self.text = self.args = ""
         self.retries = 0
+        self.lookups: list[str] = []
+        self._looked = False
         self._last = 0.0
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -94,9 +97,13 @@ class PendingDecision:
     def feed(self, kind: str, text: str) -> None:
         with self._lock:
             if kind == "reset":
-                if self.reasoning or self.text or self.args:   # 重试或输出不合法重问:从头再来
+                if (self.reasoning or self.text or self.args) and not self._looked:   # 重试或输出不合法重问:从头再来
                     self.retries += 1
+                self._looked = False
                 self.reasoning = self.text = self.args = ""
+            elif kind == "lookup":
+                self.lookups.append(text)
+                self._looked = True
             elif kind == "reasoning":
                 self.reasoning += text
             elif kind == "text":
@@ -109,7 +116,7 @@ class PendingDecision:
         src = self.args or self.text
         text = self.text.strip()
         reasoning = self.reasoning
-        return {**self.info, "updated": time.time(), "retries": self.retries,
+        return {**self.info, "updated": time.time(), "retries": self.retries, "lookups": list(self.lookups),
                 "reasoning": reasoning[-MAX_REASONING:], "reasoning_cut": len(reasoning) > MAX_REASONING,
                 "analysis": partial_string(src, "analysis"),
                 "alternatives": partial_strings(src, "alternatives"),

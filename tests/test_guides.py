@@ -49,34 +49,60 @@ def test_codes_and_search(advisor):
 
 
 def test_lookup_and_pin(tmp_path, advisor):
-    """模型用 lookup 查攻略和全文,在 guide 字段挂上;程序不再替模型挑方向(维护者 2026-11-18)。"""
-    from cwagent.brain.screen_agent import Action
-
+    """模型用 lookup 工具查攻略和全文,在 guide 字段挂上;程序不再替模型挑方向(维护者 2026-11-18)。查过的都记下来。"""
     r = make_runner(tmp_path, advisor)
     r._roles = ["白露"]
-    out = r.lookup(Action(type="lookup", what="guides", query="刃"))
+    out = r.lookup("guides", "刃")
     assert out.startswith("查攻略:刃:找到 1 篇") and "G3「刃攻略」" in out and "重合:白露" in out
-    assert "最终阵容" in r.lookup(Action(type="lookup", what="guide", query="G3"))
-    assert "没有这篇攻略" in r.lookup(Action(type="lookup", what="guide", query="G9"))
-    assert "没有经验库" in r.lookup(Action(type="lookup", what="memory", query="扑满"))   # 假的 brain 没有经验
+    assert "最终阵容" in r.lookup("guide", "G3")
+    assert "没有这篇攻略" in r.lookup("guide", "G9")
+    assert "没有经验库" in r.lookup("memory", "扑满")          # 假的 brain 没有经验
+    assert [x["query"] for x in r._lookups] == ["刃", "G3", "G9", "扑满"]
     assert r._guide is None and "挂上的攻略" not in r.ledger.render()
     r.choose_guide("G3", 1)
     assert r._guide.id == "c" and "G3「刃攻略」" in r.ledger.render()
     r.choose_guide("无", 2)
     assert r._guide is None and "挂上的攻略" not in r.ledger.render()
     off = make_runner(tmp_path, None)
-    assert "攻略没有开启" in off.lookup(Action(type="lookup", what="guides", query="刃"))
+    assert "攻略没有开启" in off.lookup("guides", "刃")
 
 
-def test_lookup_must_be_alone():
-    from pydantic import ValidationError
+def test_lookup_is_its_own_tool(monkeypatch):
+    """查资料是和 act 并列的工具(放在 act 里时模型一次都没用过):查完结果直接交回,模型接着回答,
+    这几轮不算无效输出;一轮最多查 LOOKUPS 次,查满了还在查就按一次无效输出算。"""
+    from cwagent.brain import screen_agent
+    from cwagent.brain.screen_agent import ACT_TOOL, LOOKUPS, ScreenAgent
+    from cwagent.llm import LLMResponse, ToolCall
 
-    from cwagent.brain.screen_agent import Action, ActInput
+    from .test_episode import FakeIndex, endpoint
 
-    with pytest.raises(ValidationError, match="单独提交"):
-        ActInput(analysis="x", actions=[Action(type="lookup", what="guides", query="刃"), Action(type="ready")])
-    with pytest.raises(ValidationError, match="what"):
-        Action(type="lookup", query="刃")
+    assert "lookup" not in ACT_TOOL.parameters["properties"]["actions"]["items"]["properties"]["type"]["enum"]
+    sent, deltas = [], []
+    answers = [LLMResponse(tool_calls=[ToolCall(id="l1", name="lookup", arguments={"what": "guides", "query": "刃"})]),
+               LLMResponse(tool_calls=[ToolCall(id="a1", name="act", arguments={
+                   "analysis": "看过攻略", "alternatives": [], "actions": [{"type": "click_text", "text": "确认", "reason": "x"}]})])]
+
+    def fake(ep, system, messages, tools, **kw):
+        sent.append(([t.name for t in tools], [m.role for m in messages]))
+        return answers.pop(0)
+
+    monkeypatch.setattr(screen_agent, "complete", fake)
+    a = ScreenAgent(endpoint(), FakeIndex(), [], "规则")
+    a.lookup_handler = lambda what, query: f"查攻略:{query}:找到 1 篇"
+    ep = Episode(id=1, key=("environment_choice", None), screen="environment_choice", node=None, role="strategic",
+                 max_turns=3)
+    d = a.decide(ep, "开场", on_delta=lambda k, t: deltas.append((k, t)))
+    assert d.error == "" and d.actions[0].text == "确认" and d.turn == 1
+    assert sent[0][0] == ["act", "lookup"] and sent[1][1] == ["user", "assistant", "tool"]
+    assert ep.messages[2].content == "查攻略:刃:找到 1 篇" and ("lookup", "查攻略:刃") in deltas
+
+    # 一直查:查满以后按无效输出算,不会无限查下去
+    looping = [LLMResponse(tool_calls=[ToolCall(id=f"l{i}", name="lookup", arguments={"what": "memory", "query": "x"})])
+               for i in range(LOOKUPS + 3)]
+    monkeypatch.setattr(screen_agent, "complete", lambda *x, **k: looping.pop(0))
+    ep2 = Episode(id=2, key=("prepare", "1-1"), screen="prepare", node="1-1", role="tactical", max_turns=3)
+    d2 = a.decide(ep2, "开场")
+    assert d2.error and not d2.actions and "已经 3 次" in ep2.messages[-1].content
 
 
 def test_environment_recorded_from_choice(tmp_path, advisor):
@@ -90,38 +116,13 @@ def test_environment_recorded_from_choice(tmp_path, advisor):
 
 
 
-def test_lookup_turn_does_not_use_a_decision(tmp_path, advisor, monkeypatch):
-    """查资料的一轮像 zoom 一样不占回合的决策次数(每回合最多 LOOKUPS 轮),结果交给下一轮。"""
-    from cwagent.brain.screen_agent import Action
-    from cwagent.orchestrator.loop import LOOKUPS, RunOptions
-
-    from .test_loop import FakeOcr, Sim
-    import cwagent.orchestrator.loop as loop
-
-    monkeypatch.setattr(loop, "ACTION_GAP", 0)
-    monkeypatch.setattr(loop.time, "sleep", lambda s: None)
-    pages = {"env": [("投资环境", 0.5, 0.09), ("追击概念股", 0.77, 0.36), ("确认", 0.56, 0.91)],
-             "end": [("对局评价", 0.5, 0.3)]}
-    sim = Sim(pages, "env", lambda state, a: {("env", ("click", 0.56, 0.91)): "end"}.get((state, a)))
-    look = [Action(type="lookup", what="guides", query="人才储备")]
-    brain = FakeBrain({"environment_choice": [look] * (LOOKUPS + 1) + [
-        [Action(type="click_text", text="追击概念股"), Action(type="click_text", text="确认")]]})
-    r = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False, guides=advisor)
-    r.run(RunOptions(max_steps=10))
-    rows = [json.loads(line) for line in (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
-    looked = [row for row in rows if (row.get("actions") or [""])[0].startswith("查攻略")]
-    assert len(looked) == LOOKUPS + 1 and "G3「刃攻略」" in looked[0]["actions"][0]
-    assert brain.results[0].startswith("查攻略:人才储备:找到 1 篇")   # 结果作为执行结果交给模型
-    assert any(row.get("actions") == ["点击「追击概念股」", "点击「确认」"] for row in rows)
-
-
 def test_report_lists_lookups(tmp_path):
     from cwagent.replay import report
 
     run = tmp_path / "run"
     run.mkdir()
     rows = [{"step": 1, "screen": "prepare", "node": "2-1",
-             "decision": {"actions": [{"type": "lookup", "what": "guides", "query": "克拉拉 刃"}]}},
+             "decision": {"lookups": [{"what": "guides", "query": "克拉拉 刃", "result": "…"}], "actions": [{"type": "buy"}]}},
             {"step": 2, "screen": "prepare", "node": "2-1", "decision": {"guide": "G11", "actions": [{"type": "ready"}]}}]
     (run / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
     text = report.render(run)

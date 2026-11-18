@@ -219,6 +219,17 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
       ) : null}
       {step.state && <StateView state={step.state} />}
 
+      {d?.lookups?.length ? (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>查资料</h2>
+          {d.lookups.map((l, i) => (
+            <details key={i} className={styles.fold}>
+              <summary>{l.result.split('\n')[0]}</summary>
+              <p className={styles.foldText}>{l.result.split('\n').slice(1).join('\n')}</p>
+            </details>
+          ))}
+        </section>
+      ) : null}
       {d?.analysis && (
         <section className={styles.block}>
           <h2 className={styles.blockTitle}>局势</h2>
@@ -366,6 +377,14 @@ export function PendingDetail({ pending }: { pending: Deciding }) {
           <Thinking text={p.reasoning} cut={p.reasoning_cut} />
         </section>
       )}
+      {p.lookups?.length ? (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>查资料</h2>
+          <ul className={styles.alternatives}>
+            {p.lookups.map((l, i) => <li key={i}>{l}</li>)}
+          </ul>
+        </section>
+      ) : null}
       {p.analysis !== null && (
         <section className={styles.block}>
           <h2 className={styles.blockTitle}>局势</h2>

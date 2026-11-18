@@ -113,8 +113,11 @@ def test_mcp_tools(server):
     async def main():
         async with Client(url) as client:
             names = {t.name for t in (await client.list_tools()).tools}
-            assert {"rules", "start_run", "wait", "act", "status", "stop_run"} <= names
-            assert "货币战争" in (await client.call_tool("rules")).content[0].text
+            assert {"rules", "start_run", "wait", "act", "lookup", "status", "stop_run"} <= names
+            rules = (await client.call_tool("rules")).content[0].text
+            assert "货币战争" in rules and "{guides}" not in rules and "{memories}" not in rules
+            idle = await client.call_tool("lookup", {"what": "guides", "query": "刃"})   # 没有对局时查不了
+            assert idle.is_error and "没有在进行的对局" in idle.content[0].text
             # 没有进行中的对局(前面的测试可能留下了「对局结束」)
             assert "start_run" in (await client.call_tool("wait")).content[0].text
             bad = await client.call_tool("act", ACT)

@@ -30,7 +30,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .. import __version__, paths
-from ..brain.screen_agent import ACT_TOOL, ActInput, load_rules, system_prompt
+from ..brain.screen_agent import ACT_TOOL, LOOKUP_TOOL, ActInput, load_rules, system_prompt
 from ..llm.base import ImageInput
 from pydantic import ValidationError
 from ..config import ConfigError
@@ -62,6 +62,7 @@ TOOLS = [
     Tool(name="wait", description="等下一个需要你判断的局面并返回它。返回「还在等待」时再调用一次。", input_schema=_EMPTY),
     Tool(name="act", description=ACT_TOOL.description + "执行完后返回执行结果和下一个需要判断的局面。",
          input_schema=ACT_TOOL.parameters),
+    Tool(name="lookup", description=LOOKUP_TOOL.description, input_schema=LOOKUP_TOOL.parameters),
     Tool(name="status", description="查看对局状态。", input_schema=_EMPTY),
     Tool(name="snapshot", description="读取完整档案及最近截图,用于接手或上下文压缩后恢复,不执行游戏操作。", input_schema=_EMPTY),
     Tool(name="observe", description="只截图并标号,用于连通性与读图测试;不开始对局、不发送键鼠。", input_schema=_EMPTY),
@@ -130,8 +131,10 @@ def _rules_text() -> str:
         return BRIDGE.system
     from ..memory import MemoryStore
 
+    from ..orchestrator.session import load_guides
+
     rules = load_rules(paths.root() / "knowledge" / "rules.md")
-    return system_prompt(rules, [m for m, _ in MemoryStore().all()])[0]
+    return system_prompt(rules, [m for m, _ in MemoryStore().all()], load_guides())[0]
 
 
 class Tools:
@@ -187,6 +190,12 @@ class Tools:
         if not BRIDGE.answer(payload, turn=args.get("turn")):
             raise ToolError("现在没有等你回答的局面(可能已经回答过)。调用 wait 看最新局面。")
         return await self._take(wait)
+
+    async def lookup(self, args: dict[str, Any], wait: float) -> str:
+        out = self.player.lookup(str(args.get("what") or ""), str(args.get("query") or ""))
+        if out is None:
+            raise ToolError("现在没有在进行的对局,查资料要在对局里用")
+        return out
 
     async def snapshot(self, args: dict[str, Any], wait: float) -> str:
         return _turn_text(BRIDGE.snapshot())

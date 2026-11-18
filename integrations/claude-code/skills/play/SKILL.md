@@ -2,7 +2,7 @@
 name: play
 description: 用 cwagent 下一局《崩坏:星穹铁道》货币战争,一直下到对局结束。用户要玩、开始或接手货币战争对局时使用。
 argument-hint: "[难度,如 A8-1]"
-allowed-tools: mcp__plugin_cwagent_cwagent__rules mcp__plugin_cwagent_cwagent__start_run mcp__plugin_cwagent_cwagent__wait mcp__plugin_cwagent_cwagent__act mcp__plugin_cwagent_cwagent__status mcp__plugin_cwagent_cwagent__stop_run mcp__plugin_cwagent_cwagent__snapshot mcp__plugin_cwagent_cwagent__observe
+allowed-tools: mcp__plugin_cwagent_cwagent__rules mcp__plugin_cwagent_cwagent__start_run mcp__plugin_cwagent_cwagent__wait mcp__plugin_cwagent_cwagent__act mcp__plugin_cwagent_cwagent__lookup mcp__plugin_cwagent_cwagent__status mcp__plugin_cwagent_cwagent__stop_run mcp__plugin_cwagent_cwagent__snapshot mcp__plugin_cwagent_cwagent__observe
 hooks:
   PostToolUse:
     - matcher: "mcp__plugin_cwagent_cwagent__.*"

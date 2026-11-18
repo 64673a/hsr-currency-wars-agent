@@ -27,8 +27,9 @@ ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "compose", "equip", "open", "take"}
 ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
 ROLL_MAX = 30
-LOOKS = ("zoom", "inspect", "recheck", "lookup")   # 只看不操作:单独提交,不占决策次数(有上限)
+LOOKS = ("zoom", "inspect", "recheck")   # 只看不操作:单独提交,不占决策次数(有上限)
 LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备"}
+LOOKUPS = 3      # 一轮决策里最多查几次资料(lookup 工具),查完接着判断,不碰游戏
 
 
 class RollTarget(BaseModel):
@@ -41,7 +42,7 @@ class RollTarget(BaseModel):
 class Action(BaseModel):
     type: str = Field(
         pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|roll|buy_exp|ready|compose|equip|open"
-                "|take|zoom|inspect|recheck|lookup)$")
+                "|take|zoom|inspect|recheck)$")
     mark: int | None = Field(default=None, ge=1, le=100)
     region: tuple[float, float, float, float] | None = None
     mode: str = Field(default="hover", pattern="^(hover|click)$")
@@ -66,8 +67,6 @@ class Action(BaseModel):
     until: str | None = Field(default=None, pattern="^(all|any)$")   # roll:all 全部达成才停(默认),any 任意一个
     keep_gold: int | None = Field(default=None, ge=0, le=999)        # roll:保底金币,买卡和刷新都不低于它
     max_refresh: int | None = Field(default=None, ge=1, le=ROLL_MAX)  # roll:最多刷新几次
-    what: str | None = Field(default=None, pattern="^(guides|guide|memory|equipment)$")   # lookup:查什么
-    query: str | None = None                                          # lookup:关键词或编号
     reason: str = ""
 
     @model_validator(mode="after")
@@ -76,7 +75,7 @@ class Action(BaseModel):
                 "zoom": ["region"], "inspect": ["mark"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
                 "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"],
-                "take": ["zone", "index", "text"], "roll": ["targets"], "lookup": ["what", "query"]}
+                "take": ["zone", "index", "text"], "roll": ["targets"]}
         missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "") or getattr(self, f) == []]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
@@ -107,7 +106,7 @@ class ActInput(BaseModel):
     @model_validator(mode="after")
     def _observation_actions(self):
         if len(self.actions) > 1 and any(a.type in LOOKS for a in self.actions):
-            raise ValueError("zoom、inspect、recheck、lookup 要单独提交,取得结果后再决定操作")
+            raise ValueError("zoom、inspect、recheck 要单独提交,取得新观察后再决定操作")
         if any(a.mark is not None for a in self.actions[1:]):
             raise ValueError("标号只对应当前截图,只能用于一组操作的第一项")
         return self
@@ -133,7 +132,7 @@ ACT_TOOL = ToolSpec(
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "roll", "buy_exp", "ready",
                                                             "compose", "equip", "open", "take", "click_text", "click", "drag",
                                                             "scroll", "key", "wait", "pause", "zoom", "inspect",
-                                                            "recheck", "lookup"]},
+                                                            "recheck"]},
                         "mark": {"type": "integer", "minimum": 1, "maximum": 100},
                         "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
                         "mode": {"type": "string", "enum": ["hover", "click"]},
@@ -150,8 +149,6 @@ ACT_TOOL = ToolSpec(
                         "until": {"type": "string", "enum": ["all", "any"]},
                         "keep_gold": {"type": "integer", "minimum": 0},
                         "max_refresh": {"type": "integer", "minimum": 1, "maximum": ROLL_MAX},
-                        "what": {"type": "string", "enum": ["guides", "guide", "memory", "equipment"]},
-                        "query": {"type": "string"},
                         "reason": {"type": "string", "description": "这个操作的理由"},
                     },
                     "required": ["type", "reason"],
@@ -173,6 +170,25 @@ ACT_TOOL = ToolSpec(
             },
         },
         "required": ["analysis", "alternatives", "actions"],
+    },
+)
+
+
+# 查资料单独做成工具(2026-11-18):放在 act 里时模型一次都没用过。说明只写资料覆盖什么,不写什么时候该查
+LOOKUP_TOOL = ToolSpec(
+    name="lookup",
+    description=("查资料,不操作游戏,结果直接返回。what 选查什么,query 填关键词或编号:"
+                 "guides 按角色、羁绊、投资环境的名字查玩家分享的阵容攻略(多个词用空格分开),返回最多 5 篇摘要和编号;"
+                 "guide 按攻略编号看全文(作者思路、前期中期和最终阵容、装备顺序、推荐投资策略);"
+                 "memory 按经验编号或关键词查经验原文;"
+                 "equipment 按角色名查他在攻略最终阵容里常配的装备。"),
+    parameters={
+        "type": "object",
+        "properties": {
+            "what": {"type": "string", "enum": ["guides", "guide", "memory", "equipment"]},
+            "query": {"type": "string"},
+        },
+        "required": ["what", "query"],
     },
 )
 
@@ -211,7 +227,6 @@ class Episode:
     chosen: dict[str, tuple[str, str]] = field(default_factory=dict)
     spotlight_role: str = ""
     free_looks: int = 0                                # 只做了 zoom / inspect 的轮数(不占决策次数,有上限)
-    lookups: int = 0                                   # 只查资料(lookup)的轮数(不占决策次数,有上限)
     grace: int = 0                                     # 最后一轮操作被打断(合成后重排、操作没成功)后多给的一轮
 
     @property
@@ -238,21 +253,27 @@ class Decision:
     alternatives: list[str] = field(default_factory=list)   # 考虑过但没采用的做法
 
 
-def system_prompt(rules: str, memories: list[Memory]) -> tuple[str, dict[str, Memory]]:
-    """系统提示词和经验编号。经验由模型自己查(2026-11-18 维护者定):这里只放目录(编号 + 标题),全文用 lookup 取。"""
+def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str, dict[str, Memory]]:
+    """系统提示词和经验编号。经验和攻略由模型自己查(2026-11-18 维护者定):这里只放目录(编号 + 标题),全文用 lookup 取。
+    目录是全量的、整局不变,不是程序按局面挑的。"""
     codes = {f"M{i}": m for i, m in enumerate((m for m in memories if m.status == "approved"), start=1)}
     catalog = "\n".join(f"- {code} [{m.kind}] {m.title}" for code, m in codes.items()) or "(暂无)"
-    text = (PROMPTS / "system.md").read_text(encoding="utf-8").replace("{memories}", catalog).replace("{rules}", rules)
+    guide_list = "\n".join(f"- {g.code} {g.title[:30]} 主 C {'、'.join(g.carries) or '?'}" for g in guides.guides) \
+        if guides is not None and guides.guides else "(攻略没有开启)"
+    text = ((PROMPTS / "system.md").read_text(encoding="utf-8").replace("{memories}", catalog)
+            .replace("{guides}", guide_list).replace("{rules}", rules))
     return text, codes
 
 
 class ScreenAgent:
     def __init__(self, endpoints: ModelEndpoint | dict[str, ModelEndpoint], index: NameIndex,
-                 memories: list[Memory], rules: str):
+                 memories: list[Memory], rules: str, guides=None):
         self.endpoints = endpoints if isinstance(endpoints, dict) else {"default": endpoints}
         self.index = index
         self.memories = memories
-        self.system, self.memory_codes = system_prompt(rules, memories)
+        self.system, self.memory_codes = system_prompt(rules, memories, guides)
+        # 查资料:Runner 接上(what, query) -> 结果文字;没接时 lookup 工具返回「没有可查的资料」
+        self.lookup_handler: Callable[[str, str], str] | None = None
 
     def lookup_memory(self, query: str, top: int = 3) -> str:
         """按编号(M3)或关键词查经验原文。关键词按空格分开,标题、内容、触发条件里对上越多越靠前。"""
@@ -384,7 +405,8 @@ class ScreenAgent:
         """
         snapshot = (list(episode.messages), list(episode.pending), episode.turns)
         if episode.pending:
-            episode.messages += [Message(role="tool", tool_call_id=cid, content=text if i == 0 else "没有执行(每轮只执行第一个 act)",
+            episode.messages += [Message(role="tool", tool_call_id=cid,
+                                         content=text if i == 0 else "没有执行(每轮只执行第一个 act;查资料要单独调用 lookup)",
                                          images=episode.images if i == 0 else [], snapshot=episode.snapshot if i == 0 else "")
                                  for i, cid in enumerate(episode.pending)]
             episode.pending = []
@@ -397,14 +419,34 @@ class ScreenAgent:
         base = dict(prompt=text, recalled=recalled or [], episode=episode.id, turn=episode.turns, role=episode.role)
         resp: LLMResponse | None = None
         last_error = ""
-        for _ in range(2):  # 输出不合法时带着错误重问一次
+        tries, looks = 0, 0
+        while tries < 2:  # 输出不合法时带着错误重问一次;查资料的几轮不算
             try:
                 episode.request_messages = list(episode.messages)
-                resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL], on_delta=on_delta)
+                resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL, LOOKUP_TOOL], on_delta=on_delta)
             except LLMError as e:
                 episode.messages, episode.pending, episode.turns = snapshot
                 return Decision("", [], None, [], response=None, error=str(e), **base)
             episode.messages.append(resp.as_message())
+            asked = [c for c in resp.tool_calls if c.name == "lookup"]
+            if asked and not any(c.name == "act" for c in resp.tool_calls):
+                if looks >= LOOKUPS:
+                    tries += 1              # 查满了还在查:按一次无效输出算,免得一直查下去
+                    last_error = f"这一轮查资料已经 {LOOKUPS} 次,还在调用 lookup,没有调用 act"
+                for c in resp.tool_calls:   # 每个工具调用都要有结果
+                    if c.name == "lookup" and looks < LOOKUPS and not c.parse_error:
+                        looks += 1
+                        what, query = str(c.arguments.get("what") or ""), str(c.arguments.get("query") or "")
+                        out = self.lookup_handler(what, query) if self.lookup_handler else "没有可查的资料"
+                        if on_delta:
+                            on_delta("lookup", f"查{LOOKUP_NAMES.get(what, what)}:{query}")
+                    elif c.name == "lookup":
+                        out = c.parse_error or f"这一轮查资料已经 {LOOKUPS} 次了,请调用 act 给出操作。"
+                    else:
+                        out = "没有执行"
+                    episode.messages.append(Message(role="tool", tool_call_id=c.id, content=out))
+                continue
+            tries += 1
             calls = [c for c in resp.tool_calls if c.name == "act"]
             ids = [c.id for c in resp.tool_calls]
             call = calls[0] if calls else None
@@ -481,8 +523,6 @@ def action_text(a: Action) -> str:
             return f"查看标号 {a.mark}({a.mode})"
         case "recheck":
             return "复查(重新截图识别)"
-        case "lookup":
-            return f"查{LOOKUP_NAMES.get(a.what or '', a.what or '')}:{a.query}"
         case "drag":
             return f"拖拽 ({_f(a.x)},{_f(a.y)})→({_f(a.x2)},{_f(a.y2)})"
         case "scroll":

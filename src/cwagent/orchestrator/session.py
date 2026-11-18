@@ -74,7 +74,9 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     eps = endpoints(cfg, model, effort)
     endpoint = eps["default"]
     memories = [m for m, _ in MemoryStore().all()]
-    brain = ScreenAgent(eps, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"))
+    guides = load_guides() if cfg.agent.use_guides else None
+    brain = ScreenAgent(eps, NameIndex(paths.knowledge_db()), memories, load_rules(paths.root() / "knowledge" / "rules.md"),
+                        guides)
     # 目录名只留字母数字和 . - _(档案名可能带空格,对局记录接口不认)
     run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{re.sub(r'[^\w.-]+', '-', endpoint.name)}"
     trace = Trace(run_dir)
@@ -83,7 +85,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
-                    guides=load_guides() if cfg.agent.use_guides else None, trailblazer=cfg.agent.trailblazer_name)
+                    guides=guides, trailblazer=cfg.agent.trailblazer_name)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),

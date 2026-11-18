@@ -180,8 +180,8 @@ def render(run: Path) -> str:
     if picks:
         lines += ["", "## 选择", ""] + [f"- {n} {c}" for n, c in picks]
     # 模型自己查的资料(2026-11-18 起攻略和经验由模型 lookup):查了几次、查了什么,用来看模型会不会去查
-    looks = [(r.get("node") or "", a.get("what"), a.get("query")) for r in steps
-             for a in (r.get("decision") or {}).get("actions") or [] if a.get("type") == "lookup"]
+    looks = [(r.get("node") or "", x.get("what"), x.get("query")) for r in steps
+             for x in (r.get("decision") or {}).get("lookups") or []]
     pinned = [(r.get("node") or "", (r.get("decision") or {}).get("guide")) for r in steps
               if (r.get("decision") or {}).get("guide")]
     if looks or pinned:
