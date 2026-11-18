@@ -179,6 +179,15 @@ def render(run: Path) -> str:
     picks = [(r.node, c) for r in rows for c in r.choices]
     if picks:
         lines += ["", "## 选择", ""] + [f"- {n} {c}" for n, c in picks]
+    # 模型自己查的资料(2026-11-18 起攻略和经验由模型 lookup):查了几次、查了什么,用来看模型会不会去查
+    looks = [(r.get("node") or "", a.get("what"), a.get("query")) for r in steps
+             for a in (r.get("decision") or {}).get("actions") or [] if a.get("type") == "lookup"]
+    pinned = [(r.get("node") or "", (r.get("decision") or {}).get("guide")) for r in steps
+              if (r.get("decision") or {}).get("guide")]
+    if looks or pinned:
+        names = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "常配装备"}
+        lines += ["", f"## 查资料({len(looks)} 次)", ""] + [f"- {n} 查{names.get(w, w)}:{q}" for n, w, q in looks]
+        lines += [f"- {n} 挂攻略:{g}" for n, g in pinned]
     return "\n".join(lines) + "\n"
 
 

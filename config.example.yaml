@@ -45,7 +45,7 @@ roles:
   review:
 
 agent:
-  use_guides: true                   # 是否给模型看官方阵容指引卡
+  use_guides: true                   # 模型能不能查官方阵容攻略(lookup)
   max_tactical_calls_per_stage: 5      # 不含单独那一轮出战;开晶矿、收集节点、合成装备都要占轮次
   max_run_minutes: 120
   trailblazer_name: ""               # 开拓者在游戏里显示的名字(玩家自己取的),商店、补给、角色详情里显示的是它

@@ -344,7 +344,7 @@ function ConfigForm({ settings, models, onSaved }: { settings: Settings; models:
             onChange={(e) => agent({ trailblazer_name: e.target.value })}
           />
           <div className={page.field}>
-            <span id={`${id}-guides`} className={page.fieldLabel}>参考官方阵容</span>
+            <span id={`${id}-guides`} className={page.fieldLabel}>允许查攻略</span>
             <div className={page.switchControl}>
               <Switch aria-labelledby={`${id}-guides`} checked={s.agent.use_guides} onCheckedChange={(on) => agent({ use_guides: on })} />
             </div>

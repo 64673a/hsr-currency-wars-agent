@@ -30,7 +30,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .. import __version__, paths
-from ..brain.screen_agent import ACT_TOOL, PROMPTS, ActInput, load_rules
+from ..brain.screen_agent import ACT_TOOL, ActInput, load_rules, system_prompt
 from ..llm.base import ImageInput
 from pydantic import ValidationError
 from ..config import ConfigError
@@ -128,8 +128,10 @@ def _turn_text(turn: Turn) -> str:
 def _rules_text() -> str:
     if BRIDGE.system:
         return BRIDGE.system
+    from ..memory import MemoryStore
+
     rules = load_rules(paths.root() / "knowledge" / "rules.md")
-    return (PROMPTS / "system.md").read_text(encoding="utf-8").replace("{rules}", rules)
+    return system_prompt(rules, [m for m, _ in MemoryStore().all()])[0]
 
 
 class Tools:

@@ -83,7 +83,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
-                    guides=load_guides(), trailblazer=cfg.agent.trailblazer_name)
+                    guides=load_guides() if cfg.agent.use_guides else None, trailblazer=cfg.agent.trailblazer_name)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),

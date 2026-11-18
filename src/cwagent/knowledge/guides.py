@@ -1,18 +1,18 @@
-"""按当前局面挑攻略:开局先定一篇作为初始方向,之后每个备战阶段按场上、备战席、商店里的角色和投资环境重新排,
-别的攻略明显更合适(例如商店刷出了它的主 C)时提示可以转向(维护者要求:动态选攻略,如 6 级时商店刷出刃就可以
-转去刃 C 的攻略)。攻略只给方向,买谁、怎么站、给谁装备仍由模型判断(设计文档 1.6)。
+"""官方阵容攻略:由模型自己检索(2026-11-18 维护者定)。程序不再替模型挑方向、不再在检查点列候选;
+模型用 lookup 按角色、羁绊、投资环境查摘要,按编号看全文,想一直看着哪篇就在 guide 字段挂上。
+攻略只是玩家分享的阵容,买谁、怎么站、给谁装备由模型判断(设计文档 1.6)。
 """
 
 from __future__ import annotations
 
 import json
-import math
 import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SWITCH_MARGIN = 3.0   # 别的攻略比当前方向高出这么多分,才提示转向(大约等于多对上一个主 C)
+SEARCH_TOP = 5          # 检索最多返回几篇
+_SPLIT = re.compile(r"[\s,,、;;/|]+")
 
 
 @dataclass
@@ -35,6 +35,8 @@ class Guide:
     stage_traits: dict = field(default_factory=dict)    # {"early": [{"name", "count"}], "middle": ..., "final": ...}
     augment_groups: dict = field(default_factory=dict)  # {"first": [...], "second": [...]}
     author: str = ""
+    code: str = ""                                      # 给模型用的编号(G1、G2……,按使用次数排,同一份知识库里固定)
+    favour: int = 0
     emblems: list[str] = field(default_factory=list)    # 最终阵容首选装备里的星徽(星徽攻略)
     sub_expired: bool = False                           # 本期(子赛季)已过期:内容可能有失效的
     expired_items: list[str] = field(default_factory=list)
@@ -42,30 +44,6 @@ class Guide:
     @property
     def final_names(self) -> set[str]:
         return {r["name"] for side in ("front", "back") for r in self.final.get(side) or [] if isinstance(r, dict)}
-
-
-@dataclass
-class Match:
-    guide: Guide
-    score: float
-    carries_have: list[str]
-    carries_shop: list[str]
-    have: list[str]
-    shop: list[str]
-
-    def why(self) -> str:
-        parts = []
-        if self.carries_have:
-            parts.append(f"主 C {'、'.join(self.carries_have)} 已经有了")
-        if self.carries_shop:
-            parts.append(f"主 C {'、'.join(self.carries_shop)} 商店里有")
-        others = [n for n in self.have if n not in self.carries_have]
-        if others:
-            parts.append(f"阵容里的 {'、'.join(others[:5])} 已经有了")
-        shop = [n for n in self.shop if n not in self.carries_shop]
-        if shop:
-            parts.append(f"{'、'.join(shop[:4])} 商店里有")
-        return ";".join(parts) or "现有角色都对不上,主要看投资环境和热门程度"
 
 
 class GuideAdvisor:
@@ -100,44 +78,47 @@ class GuideAdvisor:
                 hard=bool(g.get("support_hard")), boards=boards, stage_traits=stage_traits,
                 augment_groups=dict(g.get("augments") or {}), author=g.get("author") or "",
                 emblems=list(g.get("emblems") or []), sub_expired=bool(g.get("sub_expired")),
-                expired_items=list(g.get("expired_items") or [])))
+                expired_items=list(g.get("expired_items") or []), favour=int(g.get("favour") or 0)))
+        self.guides.sort(key=lambda g: (-g.use_count, -g.favour, g.title))
+        for i, g in enumerate(self.guides, start=1):
+            g.code = f"G{i}"
         self.by_id = {g.id: g for g in self.guides}
+        self.by_code = {g.code: g for g in self.guides}
 
-    def score(self, g: Guide, owned: set[str], shop: set[str], environment: str | None) -> Match:
-        carries = set(g.carries)
-        final = g.final_names
-        carries_have = [c for c in g.carries if c in owned]
-        carries_shop = [c for c in g.carries if c in shop and c not in owned]
-        have = sorted((final | g.early | g.middle) & owned)
-        in_shop = sorted((final - owned) & shop)
-        s = (5 * len(carries_have) + 3 * len(carries_shop) + 1.0 * len((final - carries) & owned)
-             + 0.6 * len(((g.early | g.middle) - final) & owned) + 0.4 * len(set(in_shop) - carries)
-             + (2 if environment and environment in g.environments else 0) + (0.5 if g.hard else 0)
-             + 0.3 * math.log10(1 + g.use_count))
-        return Match(g, round(s, 2), carries_have, carries_shop, have, in_shop)
-
-    def rank(self, owned: list[str], shop: list[str], environment: str | None = None, top: int = 3) -> list[Match]:
-        o, s = set(owned), set(shop) - set(owned)
-        return sorted((self.score(g, o, s, environment) for g in self.guides), key=lambda m: m.score, reverse=True)[:top]
-
-    def shop_carries(self, owned: list[str], shop: list[str], environment: str | None = None) -> list[Match]:
-        """商店里刷出了哪些攻略的主 C(还没有):每个主 C 给最合适的一篇,作为转向机会。"""
-        o, s = set(owned), set(shop) - set(owned)
-        best: dict[str, Match] = {}
+    def search(self, query: str, owned: list[str] | None = None, top: int = SEARCH_TOP) -> list[Guide]:
+        """按角色、羁绊、投资环境、节奏或标题里的词查攻略:对上的词越多、越是主 C 越靠前,一样时按使用次数。"""
+        words = [w for w in _SPLIT.split(query or "") if w]
+        if not words:
+            return []
+        scored = []
         for g in self.guides:
-            for c in g.carries:
-                if c in s:
-                    m = self.score(g, o, s, environment)
-                    if c not in best or m.score > best[c].score:
-                        best[c] = m
-        return sorted(best.values(), key=lambda m: m.score, reverse=True)
+            hit, score = 0, 0.0
+            # 最终阵容的羁绊按人数加一点(5 反击比 2 反击更像「反击阵容」);只在前中期出现的羁绊分低
+            final = {t["name"]: int(t.get("count") or 0) for t in g.stage_traits.get("final") or []
+                     if isinstance(t, dict) and t.get("name")}
+            early = {t.get("name", "") for k in ("early", "middle") for t in g.stage_traits.get(k) or [] if isinstance(t, dict)}
+            for w in words:
+                s = (3 if w in g.carries else 2 if w in g.final_names else 1 if w in (g.early | g.middle) else 0)
+                s = max(s, max((2 + min(c, 9) / 10 for t, c in final.items() if w in t), default=0),
+                        1 if any(w in t for t in early) else 0,
+                        2 if any(w in e for e in g.environments) else 0,
+                        1 if any(w in t for t in g.tempo) or w in g.title else 0)
+                if s:
+                    hit, score = hit + 1, score + s
+            if hit:
+                scored.append((hit, score, g.use_count, g.favour, g))
+        scored.sort(key=lambda x: x[:4], reverse=True)
+        return [x[4] for x in scored[:top]]
 
     @property
     def environments(self) -> set[str]:
         return {e for g in self.guides for e in g.environments}
 
     def find(self, key: str) -> Guide | None:
-        """按 id 或标题(含部分标题)找攻略。"""
+        """按编号(G12)、id 或标题(含部分标题)找攻略。"""
+        key = key.strip().strip("「」")
+        if key.upper() in self.by_code:
+            return self.by_code[key.upper()]
         if key in self.by_id:
             return self.by_id[key]
         return next((g for g in self.guides if g.title == key), None) or next(
@@ -161,6 +142,21 @@ def roster_notes(g: Guide) -> str:
     parts = re.split(r"(?<=[。!！?？;；\n])|[,，](?=[^,，]*(?:试用|星魂|命座|魂|练度))", f"{g.title}。{g.idea}")
     hits = [p.strip(" ,，。;；\n") for p in parts if _ROSTER.search(p)]
     return ";".join(dict.fromkeys(h for h in hits if h))[:160]
+
+
+def brief(g: Guide, owned: list[str] | None = None) -> str:
+    """检索结果里的一篇:编号、标题、主 C、核心羁绊、节奏、投资环境、热度,以及和现在的角色重合的部分。"""
+    traits = _traits(g.stage_traits.get("final") or []) or "、".join(g.traits[:4])
+    hot = f"{g.use_count} 次使用" if g.use_count else f"{g.favour} 收藏"
+    parts = [f"{g.code}「{g.title}」主 C:{'、'.join(g.carries) or '?'}", f"核心羁绊:{traits}" if traits else "",
+             f"节奏:{'、'.join(g.tempo)}" if g.tempo else "",
+             f"适合投资环境:{'、'.join(g.environments)}" if g.environments else "", hot,
+             f"星徽攻略(要 {'、'.join(g.emblems)})" if g.emblems else "", "本期已过期" if g.sub_expired else ""]
+    names = g.final_names | g.early | g.middle
+    same = [n for n in dict.fromkeys(owned or []) if n in names]
+    if same:
+        parts.append(f"和你现在场上、备战席重合:{'、'.join(same)}")
+    return ";".join(p for p in parts if p)
 
 
 def card(g: Guide, *, full: bool = True) -> str:
@@ -192,7 +188,7 @@ def card(g: Guide, *, full: bool = True) -> str:
         return ";".join(sides)
 
     final_traits = _traits(g.stage_traits.get("final") or []) or "、".join(g.traits[:4])
-    head = (f"「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
+    head = (f"{g.code}「{g.title}」 主 C:{'、'.join(g.carries) or '?'}" + (f";节奏:{'、'.join(g.tempo)}" if g.tempo else "")
             + (f";适合投资环境:{'、'.join(g.environments)}" if g.environments else "")
             + (f";星徽攻略(要 {'、'.join(g.emblems)})" if g.emblems else "")
             + (";本期已过期" + (f"(失效:{'、'.join(g.expired_items)})" if g.expired_items else "") if g.sub_expired else ""))

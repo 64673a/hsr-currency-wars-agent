@@ -49,18 +49,14 @@ def test_node_types_from_plane_detail():
     assert ledger.kinds_near(None) == set()
 
 
-def test_node_triggered_memories_are_recalled(tmp_path):
-    """「前台站满」「奖励节点规则」只按节点类型触发,原来组装提示词时没传节点类型,从没注入过。"""
+def test_public_memories_are_in_the_catalog(tmp_path):
+    """经验 2026-11-18 起由模型自己查:公共经验(已采纳的)都在系统提示词的目录里,原文要 lookup 才给。"""
     memories = MemoryStore(ROOT / "knowledge" / "memories.yaml", tmp_path / "m.sqlite").public()
     brain = agent(memories)
-
-    def recalled(nodes):
-        ep = Episode(id=1, key=("prepare", "1-4"), screen="prepare", node="1-4", role="tactical", max_turns=4)
-        return brain.opening(ep, [], ledger="", nodes=nodes)[1]
-
-    assert "m-20261116-front-full" not in recalled(set())
-    assert "m-20261116-front-full" in recalled({"battle"})
-    assert "m-20261114-reward-rules" in recalled({"reward"})
+    for m in memories:
+        if m.status == "approved":
+            assert f"[{m.kind}] {m.title}" in brain.system
+    assert "{memories}" not in brain.system and "{rules}" not in brain.system
 
 
 # ---------------------------------------------------------------- 出战人数未满、买经验后的上场上限

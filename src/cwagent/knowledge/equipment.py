@@ -104,9 +104,6 @@ class EquipmentBook:
         if partial:
             lines.append("用备战席道具里的选项能凑成的(道具可以先留着,等别的渠道拿到其中一半再开箱选另一半):\n"
                          + "\n".join(f"- {x}" for x in partial[:12]))
-        advice = self.advice(roles)
-        if advice:
-            lines.append("攻略里这些角色常配的装备(只作参考,要结合装备效果和当前阵容判断):\n" + "\n".join(advice))
         names = [i.name for i in items if i.name] + [p for _, _, p in combos] + [x.split("(")[0].split(" =")[0]
                                                                                 for x in partial[:12]]
         return "\n".join(lines), names

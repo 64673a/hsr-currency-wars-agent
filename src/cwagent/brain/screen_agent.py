@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from ..config import ModelEndpoint
 from ..knowledge.index import NameIndex, format_entities
 from ..llm import ImageInput, LLMError, LLMResponse, Message, ToolSpec, complete
-from ..memory import Cues, Memory, format_for_prompt, recall
+from ..memory import Memory
 from ..vision.ocr import TextBox
 
 PROMPTS = Path(__file__).parent / "prompts"
@@ -26,6 +27,8 @@ ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "compose", "equip", "open", "take"}
 ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
 ROLL_MAX = 30
+LOOKS = ("zoom", "inspect", "recheck", "lookup")   # 只看不操作:单独提交,不占决策次数(有上限)
+LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备"}
 
 
 class RollTarget(BaseModel):
@@ -38,7 +41,7 @@ class RollTarget(BaseModel):
 class Action(BaseModel):
     type: str = Field(
         pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|roll|buy_exp|ready|compose|equip|open"
-                "|take|zoom|inspect|recheck)$")
+                "|take|zoom|inspect|recheck|lookup)$")
     mark: int | None = Field(default=None, ge=1, le=100)
     region: tuple[float, float, float, float] | None = None
     mode: str = Field(default="hover", pattern="^(hover|click)$")
@@ -63,6 +66,8 @@ class Action(BaseModel):
     until: str | None = Field(default=None, pattern="^(all|any)$")   # roll:all 全部达成才停(默认),any 任意一个
     keep_gold: int | None = Field(default=None, ge=0, le=999)        # roll:保底金币,买卡和刷新都不低于它
     max_refresh: int | None = Field(default=None, ge=1, le=ROLL_MAX)  # roll:最多刷新几次
+    what: str | None = Field(default=None, pattern="^(guides|guide|memory|equipment)$")   # lookup:查什么
+    query: str | None = None                                          # lookup:关键词或编号
     reason: str = ""
 
     @model_validator(mode="after")
@@ -71,7 +76,7 @@ class Action(BaseModel):
                 "zoom": ["region"], "inspect": ["mark"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
                 "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"],
-                "take": ["zone", "index", "text"], "roll": ["targets"]}
+                "take": ["zone", "index", "text"], "roll": ["targets"], "lookup": ["what", "query"]}
         missing = [f for f in need.get(self.type, []) if getattr(self, f) in (None, "") or getattr(self, f) == []]
         if missing:
             raise ValueError(f"{self.type} 操作缺少 {', '.join(missing)}")
@@ -101,8 +106,8 @@ class ActInput(BaseModel):
 
     @model_validator(mode="after")
     def _observation_actions(self):
-        if len(self.actions) > 1 and any(a.type in ("zoom", "inspect", "recheck") for a in self.actions):
-            raise ValueError("zoom、inspect、recheck 要单独提交,取得新观察后再决定操作")
+        if len(self.actions) > 1 and any(a.type in LOOKS for a in self.actions):
+            raise ValueError("zoom、inspect、recheck、lookup 要单独提交,取得结果后再决定操作")
         if any(a.mark is not None for a in self.actions[1:]):
             raise ValueError("标号只对应当前截图,只能用于一组操作的第一项")
         return self
@@ -128,7 +133,7 @@ ACT_TOOL = ToolSpec(
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "roll", "buy_exp", "ready",
                                                             "compose", "equip", "open", "take", "click_text", "click", "drag",
                                                             "scroll", "key", "wait", "pause", "zoom", "inspect",
-                                                            "recheck"]},
+                                                            "recheck", "lookup"]},
                         "mark": {"type": "integer", "minimum": 1, "maximum": 100},
                         "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
                         "mode": {"type": "string", "enum": ["hover", "click"]},
@@ -145,6 +150,8 @@ ACT_TOOL = ToolSpec(
                         "until": {"type": "string", "enum": ["all", "any"]},
                         "keep_gold": {"type": "integer", "minimum": 0},
                         "max_refresh": {"type": "integer", "minimum": 1, "maximum": ROLL_MAX},
+                        "what": {"type": "string", "enum": ["guides", "guide", "memory", "equipment"]},
+                        "query": {"type": "string"},
                         "reason": {"type": "string", "description": "这个操作的理由"},
                     },
                     "required": ["type", "reason"],
@@ -204,6 +211,7 @@ class Episode:
     chosen: dict[str, tuple[str, str]] = field(default_factory=dict)
     spotlight_role: str = ""
     free_looks: int = 0                                # 只做了 zoom / inspect 的轮数(不占决策次数,有上限)
+    lookups: int = 0                                   # 只查资料(lookup)的轮数(不占决策次数,有上限)
     grace: int = 0                                     # 最后一轮操作被打断(合成后重排、操作没成功)后多给的一轮
 
     @property
@@ -230,13 +238,39 @@ class Decision:
     alternatives: list[str] = field(default_factory=list)   # 考虑过但没采用的做法
 
 
+def system_prompt(rules: str, memories: list[Memory]) -> tuple[str, dict[str, Memory]]:
+    """系统提示词和经验编号。经验由模型自己查(2026-11-18 维护者定):这里只放目录(编号 + 标题),全文用 lookup 取。"""
+    codes = {f"M{i}": m for i, m in enumerate((m for m in memories if m.status == "approved"), start=1)}
+    catalog = "\n".join(f"- {code} [{m.kind}] {m.title}" for code, m in codes.items()) or "(暂无)"
+    text = (PROMPTS / "system.md").read_text(encoding="utf-8").replace("{memories}", catalog).replace("{rules}", rules)
+    return text, codes
+
+
 class ScreenAgent:
     def __init__(self, endpoints: ModelEndpoint | dict[str, ModelEndpoint], index: NameIndex,
                  memories: list[Memory], rules: str):
         self.endpoints = endpoints if isinstance(endpoints, dict) else {"default": endpoints}
         self.index = index
         self.memories = memories
-        self.system = (PROMPTS / "system.md").read_text(encoding="utf-8").replace("{rules}", rules)
+        self.system, self.memory_codes = system_prompt(rules, memories)
+
+    def lookup_memory(self, query: str, top: int = 3) -> str:
+        """按编号(M3)或关键词查经验原文。关键词按空格分开,标题、内容、触发条件里对上越多越靠前。"""
+        key = query.strip().upper()
+        if key in self.memory_codes:
+            found = [(key, self.memory_codes[key])]
+        else:
+            words = [w for w in re.split(r"[\s,,、;;]+", query) if w]
+            scored = []
+            for code, m in self.memory_codes.items():
+                text = " ".join([m.content, *m.triggers.entities, *m.triggers.nodes, *m.triggers.screens])
+                hit = sum(2 if w in m.title else 1 if w in text else 0 for w in words)   # 标题里对上的排前面
+                if hit:
+                    scored.append((-hit, int(code[1:]), code, m))
+            found = [(code, m) for *_, code, m in sorted(scored)[:top]]
+        if not found:
+            return f"没有找到和「{query}」相关的经验"
+        return "\n".join(f"{code} [{m.label()}] {m.title}\n{m.content.strip()}" for code, m in found)
 
     def endpoint(self, role: str) -> ModelEndpoint:
         return self.endpoints.get(role) or self.endpoints["default"]
@@ -284,14 +318,13 @@ class ScreenAgent:
 
     def opening(self, episode: Episode, boxes: list[TextBox], *, ledger, hints: str = "",
                 names: list[str] | None = None, nodes: set[str] | None = None) -> tuple[str, list[str]]:
-        """回合的第一条消息:本局档案 + 当前界面。nodes 是当前和下一个节点的类型(记忆按它触发)。
+        """回合的第一条消息:本局档案 + 当前界面。返回(文字, 想起的经验 id);经验 2026-11-18 起由模型用 lookup 自己查,
+        这里不再自动附上,第二项总是空的(nodes 也不再用,留着兼容调用方)。
 
-        ledger 是本局档案(RunLedger)时(设计文档第 20.4 节):新出现的条目说明、第一次相关的经验追加进档案里只追加的块,
-        档案渲染出来就带着它们,之后的回合不再当作新信息重发。ledger 是字符串时照旧把条目和经验放在当前界面后面。"""
-        texts = [b.text for b in boxes]
+        ledger 是本局档案(RunLedger)时(设计文档第 20.4 节):新出现的条目说明追加进档案里只追加的块,
+        档案渲染出来就带着它们,之后的回合不再当作新信息重发。ledger 是字符串时照旧把条目放在当前界面后面。"""
         book = ledger if hasattr(ledger, "render") else None
         external = self.endpoint(episode.role).format == "external"
-        present = {e.name for e in self.index.link(texts + (names or []))}
         if book is not None:
             episode.book = book
             book.relevant = self._relevant(book, boxes, names)
@@ -299,43 +332,24 @@ class ScreenAgent:
             # 外部 agent 保留整局对话,收到过的都算(和档案共用一份,回合中途新给的也记进去)
             episode.seen = book.delivered_entries if external else set(book.relevant)
             described = ""
-        else:
-            described, _ = self._entities(boxes, names, episode)
-        cues = Cues(entities=present, texts=texts, nodes=set(nodes or ()), screen=episode.screen,
-                    layer="战术" if episode.screen == "prepare" else "选择")
-        if book is not None:
-            cues.entities.update(n for n in (book.environment, book.companion, *book.strategies, *book.spotlights) if n)
-        checkpoint = book is None or "战略检查点(" in hints or episode.screen == "environment_choice"
-        if book is not None:
-            # 经验每个回合开场都重新判断适用性(选完环境、进新节点、阵容或修正变了):检查点从全部记忆里找,
-            # 其他时候只在这局想起过的里筛;不再适用的(例如没选的「经济严重过热」带出来的抓猪经验)退出当前输入
-            pool = self.memories if checkpoint else [m for m in self.memories if m.id in book.lessons]
-            hits = recall(pool, cues)
-            for r in hits:
-                m = r.memory
-                book.add_lesson(m.id, f"- [{m.label()}] {m.title}\n  {m.content.strip()}")
-            book.active = [r.memory.id for r in hits]
             episode.cache_at = book.stable_len()
             full = book.render()
             head = [book.render_delta() if external else full]
             episode.snapshot = full
         else:
-            hits = recall(self.memories, cues) if checkpoint else []
+            described, _ = self._entities(boxes, names, episode)
             head = [ledger]
         parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
             episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
         ]
-        if book is None:
-            if described:
-                parts.append("## 界面上出现的条目\n" + described)
-            if hits:
-                parts.append("## 相关经验\n" + format_for_prompt(hits))
+        if book is None and described:
+            parts.append("## 界面上出现的条目\n" + described)
         parts.append(self._ask(episode))
         text = "\n\n".join(p for p in parts if p)
         if book is not None:
             episode.snapshot += "\n\n" + "\n\n".join(parts[len(head):])
-        return text, [r.memory.id for r in hits]
+        return text, []
 
     def observation(self, episode: Episode, results: list[str], boxes: list[TextBox], *, screen: str,
                     hints: str = "", names: list[str] | None = None) -> str:
@@ -467,6 +481,8 @@ def action_text(a: Action) -> str:
             return f"查看标号 {a.mark}({a.mode})"
         case "recheck":
             return "复查(重新截图识别)"
+        case "lookup":
+            return f"查{LOOKUP_NAMES.get(a.what or '', a.what or '')}:{a.query}"
         case "drag":
             return f"拖拽 ({_f(a.x)},{_f(a.y)})→({_f(a.x2)},{_f(a.y2)})"
         case "scroll":

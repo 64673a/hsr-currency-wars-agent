@@ -25,7 +25,7 @@ from PIL import Image
 from ..brain.ledger import MAX_LINE, RunLedger, compact_node, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
-from ..knowledge.guides import Guide, GuideAdvisor, card
+from ..knowledge.guides import Guide, GuideAdvisor, brief, card
 from ..brain.screen_agent import Action, Decision, Episode, ScreenAgent, action_text, slot_text, to_jsonable
 from .. import paths
 from ..device import UserInterrupt
@@ -132,6 +132,7 @@ GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、�
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
 FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect、recheck)不占决策次数
+LOOKUPS = 3      # 每个回合最多几轮查资料(lookup)不占决策次数
 GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
 
 
@@ -253,10 +254,7 @@ class Runner:
                                        before_ready=self._crystals_before_ready, capture=self.settle)
         self.prepare.roster = self._role_costs
         self.guides = guides
-        self._guide: Guide | None = None                       # 当前参考的攻略
-        self._guide_pinned = False                             # 模型自己选的攻略不再自动换
-        self._candidates: list[Guide] = []                     # 上次给模型看的候选攻略(按编号)
-        self._shown: tuple = ()                                # 本回合已经给模型看过的候选
+        self._guide: Guide | None = None                       # 模型挂上的攻略(guide 字段)
         self._roles: list[str] = []                            # 最近一次认出的场上 + 备战席角色
         self._shop_names: list[str] = []                       # 最近一次读到的商店角色
         self._node: str | None = None
@@ -304,10 +302,6 @@ class Runner:
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
         self._trial: dict[str, bool] = {}                      # 这局见过的角色 → 是不是试用(卡面标签)
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
-        self._checked_planes: set[str] = set()                 # 战略检查点:已经过了开头的位面
-        self._checked_boss: set[str] = set()                   # 战略检查点:已经过了的首领节点
-        self._losses = 0                                       # 连输几场(节点结算读到「挑战结束」)
-        self._checked_losses = False                           # 这一串连输已经算过检查点
 
     # ---------------------------------------------------------------- 截图
 
@@ -358,6 +352,8 @@ class Runner:
         if a.type == "zoom":
             self._zoom_region = a.region
             return action_text(a)
+        if a.type == "lookup":
+            return self.lookup(a)
         if a.type == "recheck":
             self._recheck = True
             time.sleep(RECHECK_WAIT)
@@ -657,61 +653,52 @@ class Runner:
                 break
         return frame, boxes
 
-    # ---------------------------------------------------------------- 攻略
+    # ---------------------------------------------------------------- 攻略和经验(模型自己查,2026-11-18 维护者定)
 
-    def _set_guide(self, g: Guide) -> None:
+    def _set_guide(self, g: Guide | None) -> None:
         self._guide = g
-        self.ledger.guide = card(g)
-        self.ledger.add(f"[{self._node or '开局'} 攻略] 参考攻略改为「{g.title}」(主 C {'、'.join(g.carries)})")
+        self.ledger.guide = card(g) if g else ""
+        self.ledger.add(f"[{self._node or '开局'} 攻略] " + (f"挂上攻略 {g.code}「{g.title}」(主 C {'、'.join(g.carries)})"
+                                                          if g else "取消了挂着的攻略"))
 
-    def checkpoint(self) -> str:
-        """现在是不是战略检查点(设计文档第 20.5 节),是就返回原因:每个位面的第一个备战回合、首领节点、连输两场以上。
-        同一个原因只算一次。攻略候选只在检查点给,平时不再每回合附上、也不自动换方向。"""
-        node = self._node or ""
-        plane = node.split("-")[0] if node else ""
-        if plane and plane not in self._checked_planes:
-            self._checked_planes.add(plane)
-            return f"位面 {plane} 开始"
-        if "boss" in self.ledger.node_kinds.get(node, set()) and node not in self._checked_boss:
-            self._checked_boss.add(node)
-            return f"{node} 首领节点"
-        if self._losses >= 2 and not self._checked_losses:
-            self._checked_losses = True
-            return f"连输 {self._losses} 场"
-        return ""
+    def choose_guide(self, key: str, n: int) -> None:
+        """模型在 guide 字段填的攻略编号(或标题):挂上,全文一直显示在当前状态里;填「无」取消。"""
+        key = key.strip()
+        if key in ("无", "none", "None", ""):
+            if self._guide is not None:
+                self.log(f"[{n}] 模型取消了挂着的攻略")
+                self._set_guide(None)
+            return
+        g = self.guides.find(key) if self.guides else None
+        if g is None:
+            self.log(f"[{n}] 找不到模型选的攻略:{key}")
+            return
+        if self._guide is None or g.id != self._guide.id:
+            self.log(f"[{n}] 模型挂上攻略 {g.code}「{g.title}」")
+            self._set_guide(g)
 
-    def guide_advice(self, opening: bool, record: dict) -> str:
-        """攻略方向:还没定方向时按场上、备战席、商店和投资环境定下第一名;之后不自动换(设计文档第 20.5 节),
-        只在战略检查点的回合开头列出别的候选和当前方向的匹配情况,由模型决定换不换(guide 字段)。"""
-        if self.guides is None:
-            return ""
-        env = self.ledger.environment or None
-        ranked = self.guides.rank(self._roles, self._shop_names, env)
-        if not ranked:
-            return ""
-        if self._guide is None:
-            best = ranked[0]
-            self._set_guide(best.guide)
-            self.log(f"初始方向:攻略「{best.guide.title}」({best.why()})")
-        reason = self.checkpoint() if opening else ""
-        if not reason:
-            return ""
-        current = self.guides.score(self._guide, set(self._roles), set(self._shop_names) - set(self._roles), env)
-        shop = [m for m in self.guides.shop_carries(self._roles, self._shop_names, env)
-                if m.guide.id != self._guide.id and not set(m.guide.carries) & set(self._guide.carries)]
-        cands: list = []
-        for m in ranked + shop[:2]:
-            if m.guide.id != self._guide.id and all(c.guide.id != m.guide.id for c in cands):
-                cands.append(m)
-        cands = cands[:3]
-        self._candidates = [m.guide for m in cands]
-        record["guides"] = {"checkpoint": reason, "current": self._guide.title, "score": current.score,
-                            "candidates": [{"title": m.guide.title, "score": m.score} for m in cands]}
-        lines = [f"战略检查点({reason}):可以重新比较方向;要换就在 guide 填候选编号,并在 run_notes 改写笔记。",
-                 f"当前方向「{self._guide.title}」:{current.why()}(匹配分 {current.score})"]
-        for i, m in enumerate(cands, start=1):
-            lines.append(f"候选 {i}(匹配分 {m.score}):{m.why()}\n{card(m.guide, full=False)}")
-        return "\n".join(lines)
+    def lookup(self, a: Action) -> str:
+        """lookup:查攻略、攻略全文、经验、攻略常配装备。只查资料,不操作游戏;结果作为执行结果交给模型。"""
+        head = action_text(a)
+        query = (a.query or "").strip()
+        if a.what in ("guides", "guide", "equipment") and self.guides is None:
+            return f"{head}:攻略没有开启(设置里关掉了,或知识库还没同步)"
+        if a.what == "guides":
+            found = self.guides.search(query, self._roles)
+            if not found:
+                return f"{head}:没有找到相关的攻略"
+            return f"{head}:找到 {len(found)} 篇\n" + "\n".join(f"- {brief(g, self._roles)}" for g in found)
+        if a.what == "guide":
+            g = self.guides.find(query)
+            return f"{head}\n{card(g)}" if g else f"{head}:没有这篇攻略(编号见查攻略的结果)"
+        if a.what == "equipment":
+            names = [w for w in re.split(r"[\s,,、;;]+", query) if w]
+            lines = self.equipment.advice(names, top=5) if self.equipment else []
+            return f"{head}\n" + "\n".join(lines) if lines else f"{head}:攻略的最终阵容里没有这些角色"
+        if a.what == "memory":
+            find = getattr(self.brain, "lookup_memory", None)
+            return f"{head}\n{find(query)}" if find else f"{head}:没有经验库"
+        return f"{head}:不认识要查的内容"
 
     def _track_env_refresh(self, boxes: list[TextBox], n: int) -> None:
         """投资环境开局固定 1 次刷新(维护者 2026-11-18):三张卡里至少两张换了名字就当刷新过了。
@@ -724,41 +711,6 @@ class Runner:
             self._env_left = 0
             self.log(f"[{n}] 投资环境刷新过了:{'、'.join(self._env_titles)} → {'、'.join(titles)}")
             self._env_titles = titles
-
-    def environment_advice(self, boxes: list[TextBox]) -> str:
-        """投资环境界面:每个看得到的环境列出适合它的热门攻略,让模型把环境和开局方向一起考虑(trail-cli 的做法)。"""
-        if self.guides is None:
-            return ""
-        envs = sorted(self.guides.environments, key=len, reverse=True)
-        seen: list[str] = []
-        for b in sorted(boxes, key=lambda b: b.x):
-            env = next((e for e in envs if e in b.text), None)
-            if env and env not in seen:
-                seen.append(env)
-        self._candidates, lines = [], []
-        for env in seen:
-            for g in sorted((g for g in self.guides.guides if env in g.environments),
-                            key=lambda g: g.use_count, reverse=True)[:ENV_GUIDES]:
-                self._candidates.append(g)
-                lines.append(f"- {env}:候选 {len(self._candidates)}「{g.title}」主 C {'、'.join(g.carries)}"
-                             + (f";节奏 {'、'.join(g.tempo)}" if g.tempo else ""))
-        if not lines:
-            return ""
-        return ("各投资环境适合的热门攻略(可以把投资环境和开局方向一起考虑;想定下方向就在 guide 字段填候选编号,"
-                "不填就由程序在第一个备战阶段按阵容挑):\n" + "\n".join(lines))
-
-    def choose_guide(self, key: str, n: int) -> None:
-        key = key.strip().removeprefix("候选").strip()
-        g = (self._candidates[int(key) - 1] if key.isdigit() and 0 < int(key) <= len(self._candidates)
-             else self.guides.find(key.strip("「」")) if self.guides else None)
-        if g is None:
-            self.log(f"[{n}] 找不到模型选的攻略:{key}")
-            return
-        if self._guide is None or g.id != self._guide.id:
-            self.log(f"[{n}] 模型改用攻略「{g.title}」")
-            self._set_guide(g)
-        self._guide_pinned = True
-        self._shown = ()
 
     def _peek_items(self, n: int, boxes: list[TextBox]) -> tuple | None:
         """备战席里没看过的道具(武装箱等)先点开看选项、不选:模型据此决定现在开还是留着凑配方。
@@ -1061,10 +1013,6 @@ class Runner:
                     return [Action(type="click", x=0.5, y=0.832, reason="离开启动前的旧局结算页")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
-                if find(boxes, "挑战成功"):
-                    self._losses, self._checked_losses = 0, False
-                elif find(boxes, "挑战结束") and sig != self._last_sig:
-                    self._losses += 1
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
             case "deploy_confirm":
                 # 出战时「可出战角色人数未达上限」(设计文档第 9 节):这个节点第一次弹就取消、告诉模型;模型看过以后
@@ -1278,22 +1226,12 @@ class Runner:
                 hints += "\n\n## 程序识别的局面\n" + seen
             except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
                 self.log(f"[{record['step']}] 局面识别出错:{type(e).__name__}: {e}")
-            try:
-                advice = self.guide_advice(opening, record)
-                if advice:
-                    hints += "\n\n## 攻略参考\n" + advice
-            except Exception as e:  # noqa: BLE001
-                self.log(f"[{record['step']}] 攻略匹配出错:{type(e).__name__}: {e}")
         elif opening and screen == "difficulty":
             hints = DIFFICULTY_HINT.format(target=self.difficulty)
         elif opening and screen == "spotlight_choice":
             hints = SPOTLIGHT_LAYOUT
         elif opening and screen == "environment_choice":
-            advice = self.environment_advice(boxes)
-            hints = "## 攻略参考\n" + advice if advice else ""
-            left = investment_hint(boxes, "environment_choice", self._env_left)
-            if left:
-                hints = (hints + "\n\n" + left).strip()
+            hints = investment_hint(boxes, "environment_choice", self._env_left)
         elif screen == "tea_break":
             hints = TEA_BREAK_HINT
         elif screen in OVERLAY_HINTS:
@@ -1440,7 +1378,10 @@ class Runner:
         for note in decision.notes:   # 本局学到的,之后的回合也要知道
             self.ledger.add(f"[{self._node or '开局'} {note.kind}] {note.title}:{note.content}")
         self.log(f"[{n}] {screen} | {decision.analysis[:120]}")
-        if (decision.actions and all(a.type in ("zoom", "inspect", "recheck") for a in decision.actions)
+        if decision.actions and all(a.type == "lookup" for a in decision.actions) and ep.lookups < LOOKUPS:
+            ep.lookups += 1          # 查资料的一轮不占决策次数,和 zoom 等分开计数
+            ep.max_turns += 1
+        elif (decision.actions and all(a.type in ("zoom", "inspect", "recheck") for a in decision.actions)
                 and ep.free_looks < FREE_LOOKS):
             # 只看不操作的一轮不占备战决策次数(Codex 2026-11-16:1-1 放大一次、查看两次后就被强制出战)
             ep.free_looks += 1

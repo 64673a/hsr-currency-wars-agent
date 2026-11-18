@@ -35,44 +35,48 @@ def make_runner(tmp_path, advisor):
                   guides=advisor)
 
 
-def test_rank_prefers_owned_carry(advisor):
-    top = advisor.rank(["刃", "白露"], [], None)
-    assert top[0].guide.id == "c"
-    assert "主 C 刃 已经有了" in top[0].why()
-    assert [m.guide.id for m in advisor.shop_carries([], ["黑天鹅", "白露"])] == ["b"]
+def test_codes_and_search(advisor):
+    """攻略按使用次数编号(G1、G2……);检索按对上的词排,主 C 对上比阵容里有分高。"""
+    assert [g.code for g in advisor.guides] == ["G1", "G2", "G3"] and advisor.find("g3").id == "c"
+    assert [g.id for g in advisor.search("刃")] == ["c"]
+    assert [g.id for g in advisor.search("白露 符玄")] == ["a", "c"]          # 一样多时按使用次数
+    assert [g.id for g in advisor.search("刃 白露")][0] == "c"
+    assert [g.id for g in advisor.search("人才储备")] == ["c"] and advisor.search("") == []
+    from cwagent.knowledge.guides import brief
+    text = brief(advisor.find("c"), ["白露", "刃", "银狼"])
+    assert text.startswith("G3「刃攻略」主 C:刃") and "适合投资环境:人才储备" in text
+    assert "和你现在场上、备战席重合:白露、刃" in text
 
 
-def test_initial_direction_then_no_auto_switch(tmp_path, advisor):
-    """开局按热门程度定方向;之后不自动换(设计文档第 20.5 节),只在战略检查点列候选。"""
+def test_lookup_and_pin(tmp_path, advisor):
+    """模型用 lookup 查攻略和全文,在 guide 字段挂上;程序不再替模型挑方向(维护者 2026-11-18)。"""
+    from cwagent.brain.screen_agent import Action
+
     r = make_runner(tmp_path, advisor)
-    r._node = "1-1"
-    text = r.guide_advice(True, {})
-    assert r._guide.id == "a"                     # 什么都没有时按热门程度定
-    assert "景元攻略" in r.ledger.render()
-    assert "战略检查点(位面 1 开始)" in text and "当前方向「景元攻略」" in text
-    r._roles = ["黑天鹅", "卡芙卡"]
-    r._node = "1-2"
-    assert r.guide_advice(True, {}) == ""         # 不是检查点:不附候选
-    assert r._guide.id == "a"                     # 也不自动换
+    r._roles = ["白露"]
+    out = r.lookup(Action(type="lookup", what="guides", query="刃"))
+    assert out.startswith("查攻略:刃:找到 1 篇") and "G3「刃攻略」" in out and "重合:白露" in out
+    assert "最终阵容" in r.lookup(Action(type="lookup", what="guide", query="G3"))
+    assert "没有这篇攻略" in r.lookup(Action(type="lookup", what="guide", query="G9"))
+    assert "没有经验库" in r.lookup(Action(type="lookup", what="memory", query="扑满"))   # 假的 brain 没有经验
+    assert r._guide is None and "挂上的攻略" not in r.ledger.render()
+    r.choose_guide("G3", 1)
+    assert r._guide.id == "c" and "G3「刃攻略」" in r.ledger.render()
+    r.choose_guide("无", 2)
+    assert r._guide is None and "挂上的攻略" not in r.ledger.render()
+    off = make_runner(tmp_path, None)
+    assert "攻略没有开启" in off.lookup(Action(type="lookup", what="guides", query="刃"))
 
 
-def test_candidates_only_at_checkpoints(tmp_path, advisor):
-    r = make_runner(tmp_path, advisor)
-    r._roles, r._node = ["景元", "白露"], "1-1"
-    r.guide_advice(True, {})
-    r._shop_names, r._node = ["刃"], "1-4"
-    assert r.guide_advice(True, {}) == ""         # 同一位面、不是首领、没连输
-    r._losses = 2                                 # 连输两场是检查点
-    text = r.guide_advice(True, {})
-    assert "连输 2 场" in text and "刃攻略" in text
-    assert r.guide_advice(True, {}) == ""         # 同一串连输只算一次
-    r.ledger.node_kinds["1-9"] = {"boss"}
-    r._node = "1-9"
-    assert "1-9 首领节点" in r.guide_advice(True, {})
-    n = next(i for i, g in enumerate(r._candidates, start=1) if g.id == "c")
-    r.choose_guide(f"候选{n}", 1)
-    assert r._guide.id == "c" and r._guide_pinned
-    assert "刃攻略" in r.ledger.render()
+def test_lookup_must_be_alone():
+    from pydantic import ValidationError
+
+    from cwagent.brain.screen_agent import Action, ActInput
+
+    with pytest.raises(ValidationError, match="单独提交"):
+        ActInput(analysis="x", actions=[Action(type="lookup", what="guides", query="刃"), Action(type="ready")])
+    with pytest.raises(ValidationError, match="what"):
+        Action(type="lookup", query="刃")
 
 
 def test_environment_recorded_from_choice(tmp_path, advisor):
@@ -84,14 +88,41 @@ def test_environment_recorded_from_choice(tmp_path, advisor):
     assert r.ledger.environment == "人才储备"
 
 
-def test_environment_advice_lists_guides(tmp_path, advisor):
-    from cwagent.vision.ocr import TextBox
 
-    r = make_runner(tmp_path, advisor)
-    boxes = [TextBox("人才储备", 0.5, 0.3, 0.1, 0.03, 0.9), TextBox("二手市场", 0.2, 0.3, 0.1, 0.03, 0.9)]
-    text = r.environment_advice(boxes)
-    assert "人才储备:候选 1「刃攻略」主 C 刃" in text and "二手市场" not in text
-    r.choose_guide("1", 1)
-    assert r._guide.id == "c" and r._guide_pinned
-    r.guide_advice(True, {})                       # 第一个备战阶段不再自动换
-    assert r._guide.id == "c"
+
+def test_lookup_turn_does_not_use_a_decision(tmp_path, advisor, monkeypatch):
+    """查资料的一轮像 zoom 一样不占回合的决策次数(每回合最多 LOOKUPS 轮),结果交给下一轮。"""
+    from cwagent.brain.screen_agent import Action
+    from cwagent.orchestrator.loop import LOOKUPS, RunOptions
+
+    from .test_loop import FakeOcr, Sim
+    import cwagent.orchestrator.loop as loop
+
+    monkeypatch.setattr(loop, "ACTION_GAP", 0)
+    monkeypatch.setattr(loop.time, "sleep", lambda s: None)
+    pages = {"env": [("投资环境", 0.5, 0.09), ("追击概念股", 0.77, 0.36), ("确认", 0.56, 0.91)],
+             "end": [("对局评价", 0.5, 0.3)]}
+    sim = Sim(pages, "env", lambda state, a: {("env", ("click", 0.56, 0.91)): "end"}.get((state, a)))
+    look = [Action(type="lookup", what="guides", query="人才储备")]
+    brain = FakeBrain({"environment_choice": [look] * (LOOKUPS + 1) + [
+        [Action(type="click_text", text="追击概念股"), Action(type="click_text", text="确认")]]})
+    r = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False, guides=advisor)
+    r.run(RunOptions(max_steps=10))
+    rows = [json.loads(line) for line in (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    looked = [row for row in rows if (row.get("actions") or [""])[0].startswith("查攻略")]
+    assert len(looked) == LOOKUPS + 1 and "G3「刃攻略」" in looked[0]["actions"][0]
+    assert brain.results[0].startswith("查攻略:人才储备:找到 1 篇")   # 结果作为执行结果交给模型
+    assert any(row.get("actions") == ["点击「追击概念股」", "点击「确认」"] for row in rows)
+
+
+def test_report_lists_lookups(tmp_path):
+    from cwagent.replay import report
+
+    run = tmp_path / "run"
+    run.mkdir()
+    rows = [{"step": 1, "screen": "prepare", "node": "2-1",
+             "decision": {"actions": [{"type": "lookup", "what": "guides", "query": "克拉拉 刃"}]}},
+            {"step": 2, "screen": "prepare", "node": "2-1", "decision": {"guide": "G11", "actions": [{"type": "ready"}]}}]
+    (run / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    text = report.render(run)
+    assert "## 查资料(1 次)" in text and "- 2-1 查攻略:克拉拉 刃" in text and "- 2-1 挂攻略:G11" in text

@@ -25,16 +25,24 @@ def agent():
     return ScreenAgent(endpoint(), FakeIndex(), [], "规则")
 
 
-def test_selected_environment_is_a_memory_cue(tmp_path):
+def test_memories_are_a_catalog_and_looked_up(tmp_path):
+    """经验由模型自己查(维护者 2026-11-18):系统提示词里只有目录(编号 + 标题),开场不再自动附上原文,
+    lookup memory 按编号或关键词取原文(标题里对上的排前面)。"""
     from cwagent.memory import MemoryStore
 
-    a = agent()
-    a.memories = MemoryStore(local_path=tmp_path / "memory.sqlite").public()
+    memories = MemoryStore(local_path=tmp_path / "memory.sqlite").public()
+    a = ScreenAgent(endpoint(), FakeIndex(), memories, "规则")
+    piggy = next(code for code, m in a.memory_codes.items() if m.id == "m-20261114-piggy-bank")
+    assert f"- {piggy} [打法] 次元扑满主题" in a.system and "掉落超多战利品" not in a.system
     book = RunLedger(environment="经济严重过热")
     ep = Episode(id=1, key=("prepare", "1-1"), screen="prepare", node="1-1", role="tactical", max_turns=4)
-    _, recalled = a.opening(ep, [], ledger=book, nodes={"reward"}, hints="战略检查点(1-1)")
-    assert "m-20261114-piggy-bank" in recalled and "m-20261116-piggy-chase" in recalled
-    assert "m-20261114-feiying-stack" not in recalled
+    text, recalled = a.opening(ep, [], ledger=book, nodes={"reward"})
+    assert recalled == [] and "经验" not in text
+    assert a.lookup_memory(piggy.lower()).startswith(f"{piggy} [打法|已采纳")
+    found = a.lookup_memory("扑满")
+    assert found.splitlines()[0].endswith("抓次元扑满要带「基础伤害」的羁绊或击破角色,破韧能防止扑满逃跑") or \
+        "次元扑满主题" in found.splitlines()[0]
+    assert a.lookup_memory("不存在的词") == "没有找到和「不存在的词」相关的经验"
 
 
 def reply(args=None, *, call_id="c1", raw=None):

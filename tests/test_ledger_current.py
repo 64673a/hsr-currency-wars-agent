@@ -45,19 +45,19 @@ def piggy():
                   confidence="medium", triggers=Triggers(entities=["经济严重过热"]), scope=["选择", "战术"])
 
 
-def test_stale_entries_and_lessons_leave_the_input_but_stay_in_the_ledger():
+def test_stale_entries_leave_the_input_but_stay_in_the_ledger():
     brain = ScreenAgent(ModelEndpoint(name="m", format="openai"), Index(), [piggy()], "")
     book = RunLedger(difficulty="A8-20")
     first, recalled = brain.opening(episode(1, "environment_choice"),
                                     boxes("能量概念股", "经济严重过热", "持续伤害概念股"), ledger=book)
-    assert "奖励节点换成超级次元扑满" in first and "抓猪要带基础伤害" in first and recalled
+    assert "奖励节点换成超级次元扑满" in first
+    assert "抓猪要带基础伤害" not in first and not recalled          # 经验由模型自己查(2026-11-18),开场不附
     book.environment = "持续伤害概念股"                 # 选完环境
 
     # 商店里有托帕,卡面上带着「千星商会」标签
     second, recalled = brain.opening(episode(2, "prepare"), boxes("托帕&账账", "千星商会"), ledger=book, names=["桂乃芬"])
     assert "开局获得持续伤害角色" in second                                  # 选的环境一直在
     assert "开局获得能量角色" not in second and "超级次元扑满" not in second    # 没选的环境退出
-    assert "抓猪要带基础伤害" not in second and not recalled                  # 不再适用的经验退出
     assert "深红荆棘" in second and "星槎" in second                          # 场上角色带羁绊
     assert "1费 前后台" in second and "KO 值" not in second and "开启宝库" not in second   # 商店角色在,羁绊不带
 
@@ -66,7 +66,6 @@ def test_stale_entries_and_lessons_leave_the_input_but_stay_in_the_ledger():
     assert "托帕&账账" not in third                                           # 商店里没买的不再带着
     assert "后期主 C" in third                                               # 笔记里的计划涉及的条目
     assert {"经济严重过热", "能量概念股", "托帕&账账"} <= set(book.entries)       # 档案里都还在
-    assert "piggy" not in book.active and book.lessons
 
 
 def test_api_observation_redescribes_entry_that_left_the_current_set():
