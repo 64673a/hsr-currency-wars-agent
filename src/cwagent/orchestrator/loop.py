@@ -65,6 +65,7 @@ from .screens import (
     companion_name,
     investment_cards,
     investment_hint,
+    result_page,
     paired_investment,
     PAIRED_INVEST_X,
     PAIRED_INVEST_TITLE_Y,
@@ -255,6 +256,8 @@ class Runner:
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self.entry = EntryNavigator()
         self._settlement_tries = 0
+        self._result_page: str | None = None
+        self._result_tries = 0
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
         self._marks: list[dict] = []  # 本步实际点击 / 拖拽的位置,给网页在截图上标出来
         self._stop: threading.Event | None = None              # 网页上的停止(战斗监视里也要随时能停)
@@ -948,6 +951,8 @@ class Runner:
         """不需要模型的界面:返回要做的操作;需要模型判断时返回 None。"""
         if screen != "settlement":
             self._settlement_tries = 0
+        if screen != "previous_run":
+            self._result_page, self._result_tries = None, 0
         if screen != "quit_dialog":
             self._quits = 0
         match screen:
@@ -1026,9 +1031,18 @@ class Runner:
                                 "先把角色放上场再出战;确实没有角色可上就再发一次 ready,会照常出战。")
                 return [Action(type="click_text", text="取消", reason="人数未满,先交回模型")]
             case "previous_run":
-                if find(boxes, "^返回货币战争$"):
-                    return [Action(type="click_text", text="返回货币战争", reason="上一局的结算")]
-                return [Action(type="click_text", text="下一页", reason="上一局的结算")]
+                page = result_page(boxes)
+                self._result_tries = self._result_tries + 1 if page == self._result_page else 1
+                self._result_page = page
+                record["note"] = "对局伤害统计" if page == "statistics" else "对局阵容总结"
+                if self._result_tries > 4:
+                    return [Action(type="pause", reason="结算后续页面多次尝试仍未推进,保留当前页面")]
+                button = "返回货币战争" if page == "statistics" else "下一页"
+                if find(boxes, f"^{button}$"):
+                    return [Action(type="click_text", text=button, reason=record["note"])]
+                if page is not None:
+                    return [Action(type="click", x=0.5, y=0.832, reason=f"{record['note']}的{button}按钮漏读,按实测位置点击")]
+                return [Action(type="pause", reason="无法确认结算后续页面,保留当前页面")]
             case "quit_dialog":
                 # 误按 Esc 弹出的中断确认:两个按钮都会离开对局,再按一次 Esc 关掉(2026-11-14 记录里这样关掉过)
                 self._quits += 1

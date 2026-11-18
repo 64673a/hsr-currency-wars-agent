@@ -12,6 +12,19 @@ def _top(boxes: list[TextBox], pattern: str, y1: float = 0.12) -> bool:
     return find(boxes, pattern, region=(0.28, 0.0, 0.48, y1)) is not None
 
 
+def result_page(boxes: list[TextBox]) -> str | None:
+    """结算后续的阵容总结或伤害统计页;按钮漏读时用页面栏目识别。"""
+    if find(boxes, "^返回货币战争$") is not None or (
+            find(boxes, "^伤害统计$", region=(0.65, 0.15, 0.25, 0.18)) is not None
+            and has(boxes, "^总经济$", "^阵容价值$")):
+        return "statistics"
+    if find(boxes, "对局未完成") is not None or (
+            find(boxes, "^我的阵容$", region=(0.35, 0.30, 0.20, 0.14)) is not None
+            and has(boxes, "^本局奇遇$|^羁绊信息$")):
+        return "summary"
+    return None
+
+
 def companion_banner(boxes: list[TextBox]) -> tuple[float, float] | None:
     """奇遇伙伴的介绍横幅:返回点哪里能跳过,不是横幅返回 None。
 
@@ -22,7 +35,8 @@ def companion_banner(boxes: list[TextBox]) -> tuple[float, float] | None:
 
     但它带「下一步」,不归这里管。
     """
-    if (find(boxes, "^本局奇遇$") is None or find(boxes, "^下一步$|^下一页$|^返回货币战争$") is not None
+    if (result_page(boxes) is not None or find(boxes, "^本局奇遇$") is None
+            or find(boxes, "^下一步$|^下一页$|^返回货币战争$") is not None
             or find(boxes, "对局未完成|对局评价|我的阵容") is not None):
         return None
     hint = find(boxes, "点击空白处继续")
@@ -35,9 +49,9 @@ def classify(boxes: list[TextBox]) -> str:
         return "reconnect"
     if (has(boxes, "连接中断") and has(boxes, "退出游戏")) or (has(boxes, "加载失败") and has(boxes, "立即切换")):
         return "disconnected"
-    # 奇遇伙伴的介绍横幅可能出现 ANY 时刻(投资策略、补给、备战……),而且不是每局都有(维护者 2026-11-16),
-    # 所以在所有界面判断之前先认它,认出就点掉
-    if has(boxes, "点击空白处继续") or companion_banner(boxes) is not None:
+    page = result_page(boxes)
+    # 伙伴横幅可覆盖投资策略、补给或备战;结算栏目不当作伙伴横幅。
+    if page is None and (has(boxes, "点击空白处继续") or companion_banner(boxes) is not None):
         return "tap_continue"
     if has(boxes, "点击空白处关闭"):
         return "tap_close"
@@ -49,12 +63,12 @@ def classify(boxes: list[TextBox]) -> str:
         return "deploy_confirm"
     if has(boxes, "前台区域无角色|前台无角色") and find(boxes, "^确认$"):
         return "empty_front"
+    if page is not None:
+        return "previous_run"
     if find(boxes, "^前往结算$") and find(boxes, "挑战结束"):   # 小队生命耗尽,整局失败(M7A)
         return "settlement"
     if find(boxes, "^继续挑战$") and find(boxes, "挑战成功|挑战结束|获得金币总览"):
         return "node_result"
-    if has(boxes, "对局未完成") or find(boxes, "^返回货币战争$"):
-        return "previous_run"
     if has(boxes, "本场对局首领") and find(boxes, "^下一步$"):
         return "run_intro"
     if has(boxes, "是否中断挑战"):
