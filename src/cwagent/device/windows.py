@@ -158,7 +158,8 @@ class WindowsDevice:
         time.sleep(0.05)
         _send(_mouse(up))
 
-    def drag(self, x1: float, y1: float, x2: float, y2: float, *, duration: float = 0.4) -> None:
+    def drag(self, x1: float, y1: float, x2: float, y2: float, *, duration: float = 0.4, hold: float = 0.0) -> None:
+        """按住从 (x1, y1) 拖到 (x2, y2);hold 是到了目标以后按住不放的秒数(黄金大饭店喂食要按住约 5 秒)。"""
         self._guard()
         a, b = self._screen_point(x1, y1), self._screen_point(x2, y2)
         self._move_abs(*a)
@@ -171,7 +172,7 @@ class WindowsDevice:
                 t = i / steps
                 self._move_abs(round(a[0] + (b[0] - a[0]) * t), round(a[1] + (b[1] - a[1]) * t))
                 time.sleep(duration / steps)
-            time.sleep(0.1)
+            time.sleep(0.1 + hold)
         finally:
             _send(_mouse(BUTTONS["left"][1]))
 

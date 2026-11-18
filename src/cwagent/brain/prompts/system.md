@@ -35,7 +35,7 @@
 
 通用:
 - click_text:点击界面上文字为 text 的位置(与识别出的文字完全一致或包含它;有多个时用 nth 指定第几个,从 0 开始);
-- click:点击坐标 (x, y);drag:从 (x, y) 按住拖到 (x2, y2);scroll:在 (x, y) 处滚动 notches 格,正数向上、负数向下;
+- click:点击坐标 (x, y);drag:从 (x, y) 按住拖到 (x2, y2),要在目标上按住一会儿再松开时 seconds 填秒数(最多 15);scroll:在 (x, y) 处滚动 notches 格,正数向上、负数向下;
 - key:按键;wait:等待 seconds 秒,用于动画进行中;
 - pause:遇到看不懂或可能造成不可逆后果的界面时,暂停并请人处理(在 reason 里说明原因)。
 

@@ -94,7 +94,7 @@ class Dev:
     def grab(self):
         return Frame(image=Image.new("RGB", (1920, 1080)), timestamp=0)
 
-    def drag(self, x1, y1, x2, y2, *, duration=0.4):
+    def drag(self, x1, y1, x2, y2, *, duration=0.4, hold=0.0):
         self.actions.append(("drag", round(x2, 3), round(y2, 3)))
         idx = {cell_center(n): n for n in range(1, len(self.bag.names) + 1)}
         a, b = idx.get((x1, y1)), idx.get((x2, y2))

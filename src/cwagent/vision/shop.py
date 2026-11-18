@@ -67,6 +67,25 @@ def read_shop(boxes: list[TextBox]) -> list[tuple[int, str | None, int | None]]:
     return out
 
 
+def reread_names(image: Image.Image, cards: list[tuple[int, str | None, int | None]], ocr: Ocr,
+                 known: set[str]) -> list[tuple[int, str | None, int | None]]:
+    """整屏识别读出的名字不是已知角色时(「翡翠」认成「霏」、青绿底的「娜塔莎」认成「亦」,2026-11-18 实机),
+    把这张卡的名字条单独裁出来放大、只识别不检测再读一遍;读出已知角色才换上,否则照旧(重读也可能读错,
+    「爻光」重读成「交光」,所以本来认得的名字不重读)。"""
+    W, H = image.size
+    out = []
+    for i, name, price in cards:
+        if name is None or name in known:
+            out.append((i, name, price))
+            continue
+        cx = SHOP_X[i - 1]
+        crop = image.crop((int((cx - 0.064) * W), int(SHOP_NAME_Y[0] * H), int((cx + 0.03) * W), int(SHOP_NAME_Y[1] * H)))
+        crop = crop.resize((crop.width * 2, crop.height * 2), Image.LANCZOS)
+        again, _ = _split(re.sub(r"\s+", "", ocr.line(crop, min_score=0.5)))
+        out.append((i, again if again in known else name, price))
+    return out
+
+
 def read_prices(image: Image.Image, ocr: Ocr) -> dict[int, int]:
     """每张卡名字栏右边「金币图标 + 价格」里的价格:{格子: 价格}。
 

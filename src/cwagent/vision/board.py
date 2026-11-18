@@ -190,10 +190,18 @@ def _inner(card: np.ndarray) -> np.ndarray:
 
 
 def _filled(card: np.ndarray) -> bool:
-    """空格几乎全是棋盘的紫色底(实测空格 ≥0.98,有角色的 ≤0.31)。"""
-    hsv = cv2.cvtColor(_inner(card), cv2.COLOR_BGR2HSV)
-    purple = (hsv[..., 0] >= 110) & (hsv[..., 0] <= 150) & (hsv[..., 1] >= 60)
-    return float(purple.mean()) < 0.8
+    """空格几乎全是棋盘的紫色底(实测空格 ≥0.98,有角色的 ≤0.31)。
+    「备战席已满」等警告时整个棋盘泛红,空格的紫色只剩 0.77 左右(2026-11-18 实机,后台 4~6 号被认成「认不出」):
+    紫色占多数、又几乎没有纹理(空格的边缘密度 <0.1,有角色的 ≥0.19)也算空格。"""
+    inner = _inner(card)
+    hsv = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)
+    purple = float(((hsv[..., 0] >= 110) & (hsv[..., 0] <= 150) & (hsv[..., 1] >= 60)).mean())
+    if purple >= 0.8:
+        return False
+    if purple >= 0.6:
+        edges = float((cv2.Canny(cv2.cvtColor(inner, cv2.COLOR_BGR2GRAY), 60, 150) > 0).mean())
+        return edges >= 0.13
+    return True
 
 
 def _load(path: Path) -> np.ndarray:

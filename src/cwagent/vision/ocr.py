@@ -45,7 +45,9 @@ class Ocr:
             box = (round(x * W), round(y * H), round((x + w) * W), round((y + h) * H))
             img = img.crop(box)
             ox, oy = box[0] / W, box[1] / H
-        res = self._get()(img, use_det=True, use_cls=True, use_rec=True)
+        # 不做方向分类:游戏界面上没有倒着的字,分类器反而会把短数字判成倒置再翻过来认
+        # (2026-11-18 那局「9/9」被认成「6/6」,3-4 到 3-7 上场人数一直报错)
+        res = self._get()(img, use_det=True, use_cls=False, use_rec=True)
         out: list[TextBox] = []
         if res.boxes is None:
             return out

@@ -41,7 +41,7 @@ from ..vision.cards import FIXED_UNITS
 from ..vision.supply import describe as describe_supply
 from ..vision.supply import read_supply
 from ..vision.supply import required as supply_required
-from ..vision.shop import format_shop, read_prices, read_shop, trial_slots, two_star
+from ..vision.shop import format_shop, read_prices, read_shop, reread_names, trial_slots, two_star
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
@@ -387,7 +387,8 @@ class Runner:
                             xs, y = coords[slot.zone]
                             if slot.index < len(xs) and abs(a.x - xs[slot.index]) < 0.025 and abs(a.y - y) < 0.04:
                                 self.episode.spotlight_role = slot.name or "角色未识别"
-            self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8)
+            # seconds:拖到目标后按住几秒再松开(黄金大饭店把角色拖到白厄身上要按住约 5 秒才喂食,维护者 2026-11-18)
+            self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8, hold=min(a.seconds or 0.0, 15.0))
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
             if a.x >= ITEM_BAR[0] and ITEM_BAR[1] <= a.y <= ITEM_BAR[2]:
                 time.sleep(ACTION_GAP)
@@ -497,6 +498,12 @@ class Runner:
         cards: list = []
         if shop:
             cards = read_shop(boxes)
+            known = set(self._role_costs()) | {"开拓者"}
+            if known and any(name and name not in known for _, name, _ in cards):
+                try:
+                    cards = reread_names(image, cards, self.ocr, known)
+                except Exception as e:  # noqa: BLE001 - 重读不了就照整屏识别的给
+                    self.log(f"重读商店名字出错:{type(e).__name__}: {e}")
             if any(name and price is None for _, name, price in cards):
                 try:
                     prices = read_prices(image, self.ocr)

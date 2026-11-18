@@ -72,7 +72,7 @@ class Sim:
     def click(self, x, y, *, button="left"):
         self._do(("click", round(x, 3), round(y, 3)))
 
-    def drag(self, x1, y1, x2, y2, *, duration=0.4):
+    def drag(self, x1, y1, x2, y2, *, duration=0.4, hold=0.0):
         self._do(("drag", round(x1, 3), round(y1, 3), round(x2, 3), round(y2, 3)))
 
     def key(self, key):

@@ -64,7 +64,7 @@ class Dev:
     def pad_exit(self):
         self.calls.append("back")
 
-    def drag(self, x1, y1, x2, y2, *, duration=0.4):
+    def drag(self, x1, y1, x2, y2, *, duration=0.4, hold=0.0):
         self.calls.append("drag")
         y = y1 * 1080
         hit = [o for o in self.orbs if abs(o[1] - y) < 5 and x1 * 1920 <= o[0] <= x2 * 1920]

@@ -38,12 +38,14 @@ class Hud:
         return {k: v for k, v in asdict(self).items() if v is not None}
 
     def text(self) -> str:
+        # 数字发红不一定是超员:备战席满了的警告状态下 7/7 也是红的(2026-11-18 实机),已上场大于上限才说超过
+        beyond = self.over and _beyond(self.deployed)
         parts = [f"节点 {self.node}" if self.node else "",
                  f"小队生命 {self.hp}" if self.hp is not None else "",
                  f"金币 {self.gold}" if self.gold is not None else "金币 认不出",
                  f"等级 {self.level}" if self.level is not None else "",
                  f"经验 {self.exp}" if self.exp else "",
-                 f"上场 {self.deployed}" + ("(超过上限,数字是红的)" if self.over else "") if self.deployed else ""]
+                 f"上场 {self.deployed}" + ("(超过上限,数字是红的)" if beyond else "") if self.deployed else ""]
         return ",".join(p for p in parts if p)
 
 
@@ -122,17 +124,33 @@ def over_capacity(image: Image.Image) -> bool:
     return int(((r >= 186) & (r - g >= 80) & (r - b >= 70)).sum()) >= 150 * scale
 
 
+def _beyond(deployed: str | None) -> bool:
+    m = re.fullmatch(r"(\d+)/(\d+)", deployed or "")
+    return bool(m) and int(m.group(1)) > int(m.group(2))
+
+
 def parse_deployed(text: str, over: bool = False) -> str | None:
     """「已上场/上限」。左边的小人图标常被认成 i、1 或冒号:「i3/5久」→ 3/5,「12/3」→ 2/3(M7A)。
+    斜杠也会被认成 1:「i919」是 9/9(2026-11-18 实机),没有斜杠时把其中一个 1 当斜杠试。
     上限 3~14;已上场一般不超过上限,数字变红(超员)时最多 14。"""
-    for m in re.finditer(r"(\d{1,2})/(\d{1,2})", text or ""):
-        used, cap = int(m.group(1)), int(m.group(2))
+    def check(used: int, cap: int) -> str | None:
         if not 3 <= cap <= 14:
-            continue
+            return None
         if used > cap and not over and used >= 10 and used - 10 <= cap:
             used -= 10
-        if used <= cap or (over and used <= 14):
-            return f"{used}/{cap}"
+        return f"{used}/{cap}" if used <= cap or (over and used <= 14) else None
+
+    for m in re.finditer(r"(\d{1,2})/(\d{1,2})", text or ""):
+        if value := check(int(m.group(1)), int(m.group(2))):
+            return value
+    if "/" not in (text or ""):
+        digits = re.sub(r"\D", "", text or "")
+        for start in (0, 1):                     # 开头的 1 可能是小人图标
+            s = digits[start:]
+            for i in range(1, len(s) - 1):
+                if s[i] == "1" and len(s[:i]) <= 2 and len(s[i + 1:]) <= 2:
+                    if value := check(int(s[:i]), int(s[i + 1:])):
+                        return value
     return None
 
 
