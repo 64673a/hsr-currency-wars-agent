@@ -91,6 +91,7 @@ class Note(BaseModel):
 
 class ActInput(BaseModel):
     analysis: str
+    alternatives: list[str] = Field(default_factory=list, max_length=10)
     actions: list[Action] = Field(min_length=1, max_length=MAX_ACTIONS)
     run_notes: str | None = None
     summary: str | None = None
@@ -110,11 +111,15 @@ class ActInput(BaseModel):
 _SLOT = {"type": "string", "enum": list(ZONES)}
 ACT_TOOL = ToolSpec(
     name="act",
-    description="提交对当前界面的判断和要按顺序执行的操作。",
+    description="提交局势判断、考虑过但没有采用的做法,以及要按顺序执行的操作。",
     parameters={
         "type": "object",
         "properties": {
-            "analysis": {"type": "string", "description": "对当前界面和局势的判断,以及这样操作的理由"},
+            # 2026-11-18 维护者要求:分开写局势、没采用的做法和每个操作的理由,网页分块显示,方便对比不同模型的想法。
+            # 只描述每块写什么,不给打法上的引导
+            "analysis": {"type": "string", "description": "局势:你对当前局面的判断和依据"},
+            "alternatives": {"type": "array", "items": {"type": "string"},
+                             "description": "考虑过、但这一轮没有采用的做法,每条写做法和没采用的原因;没有就给空数组"},
             "actions": {
                 "type": "array", "minItems": 1, "maxItems": MAX_ACTIONS,
                 "items": {
@@ -140,9 +145,9 @@ ACT_TOOL = ToolSpec(
                         "until": {"type": "string", "enum": ["all", "any"]},
                         "keep_gold": {"type": "integer", "minimum": 0},
                         "max_refresh": {"type": "integer", "minimum": 1, "maximum": ROLL_MAX},
-                        "reason": {"type": "string"},
+                        "reason": {"type": "string", "description": "这个操作的理由"},
                     },
-                    "required": ["type"],
+                    "required": ["type", "reason"],
                 },
             },
             "run_notes": {"type": "string", "description": "整体改写对局方向与计划(可选)"},
@@ -160,7 +165,7 @@ ACT_TOOL = ToolSpec(
                     "required": ["title", "content"]},
             },
         },
-        "required": ["analysis", "actions"],
+        "required": ["analysis", "alternatives", "actions"],
     },
 )
 
@@ -222,6 +227,7 @@ class Decision:
     guide: str | None = None       # 模型改选的攻略(候选编号或标题)
     summary: str | None = None     # 回合小结
     perception_issues: list[str] = field(default_factory=list)
+    alternatives: list[str] = field(default_factory=list)   # 考虑过但没采用的做法
 
 
 class ScreenAgent:
@@ -402,7 +408,8 @@ class ScreenAgent:
                     if data.summary:
                         episode.summary = data.summary.strip()[:200]
                     return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
-                                    guide=data.guide, summary=data.summary, perception_issues=data.perception_issues, **base)
+                                    guide=data.guide, summary=data.summary, perception_issues=data.perception_issues,
+                                    alternatives=[a.strip() for a in data.alternatives if a.strip()], **base)
                 except ValidationError as e:
                     last_error = "; ".join(f"{'.'.join(map(str, er['loc']))}: {er['msg']}" for er in e.errors()[:5])
                 except ValueError as e:
@@ -474,7 +481,8 @@ def action_text(a: Action) -> str:
 
 def to_jsonable(d: Decision) -> dict[str, Any]:
     r = d.response
-    return {"analysis": d.analysis, "actions": [a.model_dump(exclude_none=True) for a in d.actions],
+    return {"analysis": d.analysis, "alternatives": d.alternatives,
+            "actions": [a.model_dump(exclude_none=True) for a in d.actions],
             "run_notes": d.run_notes, "notes": [n.model_dump() for n in d.notes], "recalled": d.recalled,
             "error": d.error, "reasoning": r.reasoning if r else "", "usage": r.usage.model_dump() if r else None,
             "latency_s": r.latency_s if r else None, "model": r.model if r else "",

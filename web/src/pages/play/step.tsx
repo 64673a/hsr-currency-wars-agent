@@ -221,10 +221,18 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
 
       {d?.analysis && (
         <section className={styles.block}>
-          <h2 className={styles.blockTitle}>判断</h2>
+          <h2 className={styles.blockTitle}>局势</h2>
           <p className={styles.analysis}>{d.analysis}</p>
         </section>
       )}
+      {d?.alternatives?.length ? (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>没采用的做法</h2>
+          <ul className={styles.alternatives}>
+            {d.alternatives.map((a, i) => <li key={i}>{a}</li>)}
+          </ul>
+        </section>
+      ) : null}
 
       {results.length > 0 && (
         <section className={styles.block}>
@@ -328,11 +336,13 @@ export function PendingDetail({ pending }: { pending: Deciding }) {
       ? '等外部 agent 回答'
       : p.acting
         ? '正在给出操作'
-        : p.analysis !== null
-          ? '正在写判断'
-          : p.reasoning
-            ? '正在思考'
-            : '等模型回复';
+        : p.alternatives !== null
+          ? '正在写没采用的做法'
+          : p.analysis !== null
+            ? '正在写局势'
+            : p.reasoning
+              ? '正在思考'
+              : '等模型回复';
   return (
     <div className={styles.detail}>
       <div className={styles.detailHead}>
@@ -358,11 +368,25 @@ export function PendingDetail({ pending }: { pending: Deciding }) {
       )}
       {p.analysis !== null && (
         <section className={styles.block}>
-          <h2 className={styles.blockTitle}>判断</h2>
+          <h2 className={styles.blockTitle}>局势</h2>
           <p className={styles.analysis}>
             {p.analysis}
-            {writing && <span className={styles.caret} aria-hidden="true" />}
+            {writing && p.alternatives === null && <span className={styles.caret} aria-hidden="true" />}
           </p>
+        </section>
+      )}
+      {p.alternatives !== null && (p.alternatives.length > 0 || writing) && (
+        <section className={styles.block}>
+          <h2 className={styles.blockTitle}>没采用的做法</h2>
+          <ul className={styles.alternatives}>
+            {p.alternatives.map((a, i) => (
+              <li key={i}>
+                {a}
+                {writing && i === p.alternatives!.length - 1 && <span className={styles.caret} aria-hidden="true" />}
+              </li>
+            ))}
+            {writing && p.alternatives.length === 0 && <li><span className={styles.caret} aria-hidden="true" /></li>}
+          </ul>
         </section>
       )}
       {p.text && (

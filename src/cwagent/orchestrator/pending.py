@@ -19,15 +19,15 @@ MAX_REASONING = 12000   # 文件里只留思考的最后这么多字(完整的�
 _ESCAPES = {"n": "\n", "t": "\t", "r": "", "b": "", "f": "", '"': '"', "\\": "\\", "/": "/"}
 
 
-def partial_string(src: str, key: str) -> str | None:
-    """还没写完的 JSON 里某个字符串字段已经写出来的部分(流式时从工具参数里取模型的判断)。没出现返回 None。"""
-    m = re.search(rf'"{key}"\s*:\s*"', src)
-    if not m:
-        return None
-    out, i = [], m.end()
+def _read_string(src: str, i: int) -> tuple[str, int, bool]:
+    """从 src[i](开头引号之后)读一个 JSON 字符串:返回已经写出来的内容、结束位置、是否读到了结尾的引号。"""
+    out = []
+    closed = False
     while i < len(src):
         c = src[i]
         if c == '"':
+            closed = True
+            i += 1
             break
         if c != "\\":
             out.append(c)
@@ -49,7 +49,33 @@ def partial_string(src: str, key: str) -> str | None:
         out.append(_ESCAPES.get(nxt, nxt))
         i += 2
     # 😀 这样的代理对拼回一个字符;只收到一半的丢掉
-    return "".join(out).encode("utf-16", "surrogatepass").decode("utf-16", "ignore")
+    return "".join(out).encode("utf-16", "surrogatepass").decode("utf-16", "ignore"), i, closed
+
+
+def partial_string(src: str, key: str) -> str | None:
+    """还没写完的 JSON 里某个字符串字段已经写出来的部分(流式时从工具参数里取模型的判断)。没出现返回 None。"""
+    m = re.search(rf'"{key}"\s*:\s*"', src)
+    return _read_string(src, m.end())[0] if m else None
+
+
+def partial_strings(src: str, key: str) -> list[str] | None:
+    """还没写完的 JSON 里某个字符串数组字段已经写出来的各项(最后一项可能只写了一半)。没出现返回 None。"""
+    m = re.search(rf'"{key}"\s*:\s*\[', src)
+    if not m:
+        return None
+    out, i = [], m.end()
+    while i < len(src):
+        c = src[i]
+        if c == "]":
+            break
+        if c == '"':
+            text, i, closed = _read_string(src, i + 1)
+            out.append(text)
+            if not closed:
+                break
+            continue
+        i += 1
+    return out
 
 
 class PendingDecision:
@@ -86,6 +112,7 @@ class PendingDecision:
         return {**self.info, "updated": time.time(), "retries": self.retries,
                 "reasoning": reasoning[-MAX_REASONING:], "reasoning_cut": len(reasoning) > MAX_REASONING,
                 "analysis": partial_string(src, "analysis"),
+                "alternatives": partial_strings(src, "alternatives"),
                 "acting": '"actions"' in src,
                 # 原生工具调用时正文多半是空的;JSON 模式下正文就是参数本身,不重复给
                 "text": "" if text.startswith(("{", "```")) else text}

@@ -257,3 +257,27 @@ def test_intro_text_skips_performance_overlay():
              TextBox(") CPU 63℃ 5217 MHz", 0.141, 0.009, 0.1, 0.02, 0.9), TextBox("82 W", 0.210, 0.009, 0.03, 0.02, 0.9),
              TextBox("本场对局首领", 0.3, 0.2, 0.1, 0.03, 0.9), TextBox("下一步", 0.5, 0.9, 0.1, 0.03, 0.9)]
     assert intro_text(words) == "本场对局首领"
+
+
+def test_situation_alternatives_and_reasons_are_kept(monkeypatch):
+    """2026-11-18 维护者要求:局势、没采用的做法、每个操作的理由分开写,网页分块显示。
+    alternatives 和 reason 在工具定义里是必填,但旧模型漏写也照常执行,不为这个重问。"""
+    from cwagent.brain.screen_agent import ACT_TOOL, to_jsonable
+
+    schema = ACT_TOOL.parameters
+    assert list(schema["properties"])[:3] == ["analysis", "alternatives", "actions"]   # 流式时先出局势
+    assert schema["required"] == ["analysis", "alternatives", "actions"]
+    assert schema["properties"]["actions"]["items"]["required"] == ["type", "reason"]
+    answers = [reply({"analysis": "血量 61,金币 41,上一场首领 66% 没打完",
+                      "alternatives": ["转反击:克拉拉只有 1 星,刃要 4 金币", " "],
+                      "actions": [{"type": "buy", "slot": 1, "reason": "刃和克拉拉凑 2 反击"}]}),
+               reply({"analysis": "出战", "actions": [{"type": "ready"}]}, call_id="c2")]
+    monkeypatch.setattr(screen_agent, "complete", lambda *a, **k: answers.pop(0))
+    a = agent()
+    ep = Episode(id=1, key=("prepare", "2-1"), screen="prepare", node="2-1", role="tactical", max_turns=4)
+    d = a.decide(ep, "开场")
+    assert d.alternatives == ["转反击:克拉拉只有 1 星,刃要 4 金币"]
+    out = to_jsonable(d)
+    assert out["alternatives"] == d.alternatives and out["actions"][0]["reason"] == "刃和克拉拉凑 2 反击"
+    d2 = a.decide(ep, "执行结果")
+    assert d2.error == "" and d2.alternatives == [] and d2.actions[0].reason == ""

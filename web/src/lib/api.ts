@@ -200,6 +200,8 @@ export interface StepMark {
 
 export interface StepDecision {
   analysis: string;
+  /** 考虑过但没采用的做法(2026-11-18 起) */
+  alternatives?: string[];
   actions: { type: string; text?: string; reason?: string }[];
   run_notes: string | null;
   reasoning: string;
@@ -233,6 +235,7 @@ export interface PendingStep {
   reasoning: string;
   reasoning_cut: boolean;
   analysis: string | null;
+  alternatives: string[] | null;
   acting: boolean;
   text: string;
 }

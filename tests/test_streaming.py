@@ -115,6 +115,16 @@ def test_partial_string_reads_unfinished_json():
     assert partial_string('{"actions": []', "analysis") is None
 
 
+def test_partial_strings_reads_unfinished_list():
+    from cwagent.orchestrator.pending import partial_strings
+
+    src = '{"analysis": "x", "alternatives": ["转反击:克拉拉\\n只有 1 星", "继续刷'
+    assert partial_strings(src, "alternatives") == ["转反击:克拉拉\n只有 1 星", "继续刷"]
+    assert partial_strings('{"alternatives": [], "actions": [', "alternatives") == []
+    assert partial_strings('{"alternatives": ["a", "b"], "actions": [{"type": "x"', "alternatives") == ["a", "b"]
+    assert partial_strings('{"analysis": "x"', "alternatives") is None
+
+
 def test_pending_file_follows_the_stream_and_goes_away(tmp_path, monkeypatch):
     import cwagent.orchestrator.pending as pending
 
@@ -128,7 +138,10 @@ def test_pending_file_follows_the_stream_and_goes_away(tmp_path, monkeypatch):
     p.feed("tool", '{"analysis": "先升级再')
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["reasoning"] == "金币够升 5 级" and data["analysis"] == "先升级再" and not data["acting"]
-    p.feed("tool", '补人", "actions": [')
+    assert data["alternatives"] is None
+    p.feed("tool", '补人", "alternatives": ["存钱吃利')
+    assert json.loads(path.read_text(encoding="utf-8"))["alternatives"] == ["存钱吃利"]
+    p.feed("tool", '息"], "actions": [')
     p.feed("reset", "")                          # 输出不合法重问
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["retries"] == 1 and data["reasoning"] == "" and data["analysis"] is None
