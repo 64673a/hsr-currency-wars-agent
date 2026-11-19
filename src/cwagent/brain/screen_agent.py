@@ -118,17 +118,13 @@ class ActInput(BaseModel):
 _SLOT = {"type": "string", "enum": list(ZONES)}
 ACT_TOOL = ToolSpec(
     name="act",
-    description="提交局势判断、不选的其他做法,以及要按顺序执行的操作。",
+    description="提交局势判断和要按顺序执行的操作。可以附上其他可行做法。",
     parameters={
         "type": "object",
         "properties": {
-            # 2026-11-18 维护者要求:分开写局势、没采用的做法和每个操作的理由,网页分块显示,方便对比不同模型的想法。
-            # 2026-11-19:alternatives 只要结论(原来写「考虑过、但没有采用的做法」,外接 Claude Code 的 Opus 5.5
-            # 被安全分类器以 reasoning_extraction 拦下,试着去掉要求写出权衡过程的说法)
-            # 只描述每块写什么,不给打法上的引导
             "analysis": {"type": "string", "description": "局势:你对当前局面的判断和依据"},
             "alternatives": {"type": "array", "items": {"type": "string"},
-                             "description": "其他可行做法,每条一句话:做法和不选它的结论;没有就给空数组"},
+                             "description": "可选。自行决定是否填写其他可行做法,每条一句话说明做法和结论"},
             "actions": {
                 "type": "array", "minItems": 1, "maxItems": MAX_ACTIONS,
                 "items": {
@@ -174,7 +170,7 @@ ACT_TOOL = ToolSpec(
                     "required": ["title", "content"]},
             },
         },
-        "required": ["analysis", "alternatives", "actions"],
+        "required": ["analysis", "actions"],
     },
 )
 

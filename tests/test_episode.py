@@ -269,13 +269,12 @@ def test_intro_text_skips_performance_overlay():
 
 
 def test_situation_alternatives_and_reasons_are_kept(monkeypatch):
-    """2026-11-18 维护者要求:局势、没采用的做法、每个操作的理由分开写,网页分块显示。
-    alternatives 和 reason 在工具定义里是必填,但旧模型漏写也照常执行,不为这个重问。"""
+    """保留已填写的其他做法和操作理由,也接受省略其他做法和旧格式的操作。"""
     from cwagent.brain.screen_agent import ACT_TOOL, to_jsonable
 
     schema = ACT_TOOL.parameters
     assert list(schema["properties"])[:3] == ["analysis", "alternatives", "actions"]   # 流式时先出局势
-    assert schema["required"] == ["analysis", "alternatives", "actions"]
+    assert schema["required"] == ["analysis", "actions"]
     assert schema["properties"]["actions"]["items"]["required"] == ["type", "reason"]
     answers = [reply({"analysis": "血量 61,金币 41,上一场首领 66% 没打完",
                       "alternatives": ["转反击:克拉拉只有 1 星,刃要 4 金币", " "],
