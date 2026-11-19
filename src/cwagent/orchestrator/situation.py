@@ -128,6 +128,8 @@ def traits(board: list, facts: RoleFacts) -> list[str]:
 
     计数规则特殊的按官方说明算(2026-11-16 实机:千星商会按人头算成「1 人已激活」,游戏里是 1/2):
     千星商会只数 3 星的人,少女乐队只在人数恰好等于某档时激活。
+    只写全已激活的和「恰好」类的;再上 1 人就激活的只列名字;差得更远的只报个数(2026-11-19 报告 P1-8:
+    原来每个只有 1 人的羁绊都写一遍档位,羁绊行占回合内返回文字的 11%)。
     """
     stars: dict[str, int] = {}
     for s in board:
@@ -140,11 +142,17 @@ def traits(board: list, facts: RoleFacts) -> list[str]:
             heads[t] += 1
             if st >= facts.star_req.get(t, 0):
                 count[t] += 1
-    lines = []
+    lines, near, far = [], [], 0
     for t, h in sorted(heads.items(), key=lambda kv: (-count[kv[0]], kv[0])):
         c = count[t]
         layers = facts.layers.get(t) or []
         on = (lambda l: c == l) if t in facts.exact else (lambda l: c >= l)
+        if t not in facts.exact and not any(on(l) for l in layers):
+            if layers and layers[0] - c == 1:
+                near.append(f"{t}(要 {facts.star_req[t]} 星)" if t in facts.star_req else t)
+            else:
+                far += 1
+            continue
         marks = ",".join(f"{l}*" if on(l) else str(l) for l in layers)
         if t in facts.star_req:
             text = f"{t} {facts.star_req[t]} 星 {c} 人(场上 {h} 人)"
@@ -157,6 +165,10 @@ def traits(board: list, facts: RoleFacts) -> list[str]:
             nxt = next((l for l in layers if l > c), None)
             text += f",下一档差 {nxt - c} 人" if nxt else ""
         lines.append(text)
+    if near:
+        lines.append("再上 1 人就激活:" + "、".join(near))
+    if far:
+        lines.append(f"另有 {far} 个离激活差 2 人以上,没列")
     return lines
 
 

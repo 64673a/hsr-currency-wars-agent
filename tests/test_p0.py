@@ -367,6 +367,7 @@ def test_situation_facts():
     assert "商店 4 号 景元" not in text                    # 那是二星卡,场上没有两张 2 星景元
     assert "云上五骁 2 人(档位 2*,3,4,5),下一档差 1 人" in text
     assert "星核猎手 2 人(档位 2*,3,5)" in text
+    assert "再上 1 人就激活:召唤、治疗" in text and "召唤 1 人" not in text   # 没激活的只列名字
     # 千星商会按 3 星人数、少女乐队要人数恰好等于某档(官方说明),不按人头算
     special = situation.RoleFacts(traits_of={"真珠": ["千星商会"], "爻光": ["千星商会"], "景元": ["少女乐队"],
                                              "白露": ["少女乐队"]},
@@ -377,7 +378,12 @@ def test_situation_facts():
                                                     Slot("back", 2, 0.5, 0.5, name="景元", score=0.9, stars=1),
                                                     Slot("back", 3, 0.5, 0.5, name="白露", score=0.9, stars=1)], special)
     assert "千星商会 3 星 1 人(场上 2 人)(档位 1*,2,3),下一档差 1 人" in lines
-    assert "少女乐队 2 人(档位 1,4),人数恰好等于某档才激活" in lines
+    assert "少女乐队 2 人(档位 1,4),人数恰好等于某档才激活" in lines   # 「恰好」类没激活也写全:多上了人反而掉档
+    far = situation.RoleFacts(traits_of={"景元": ["追击"], "白露": ["千星商会"]}, layers={"追击": [3, 5], "千星商会": [1, 2]},
+                              star_req={"千星商会": 3})
+    assert situation.traits([Slot("back", 0, 0.5, 0.5, name="景元", score=0.9, stars=1),
+                             Slot("back", 1, 0.5, 0.5, name="白露", score=0.9, stars=1)], far) == [
+        "再上 1 人就激活:千星商会(要 3 星)", "另有 1 个离激活差 2 人以上,没列"]
     assert situation.at_ready(gpt_1_7_board(), hud) == "出战时前台 1/4,场上 5 人其中 2 星及以上 0 个,剩 56 金币(其中 6 不产生利息)"
 
 
