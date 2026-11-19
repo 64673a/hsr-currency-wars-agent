@@ -368,7 +368,7 @@ def test_crystal_timing(tmp_path, monkeypatch):
     runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     results = []
     monkeypatch.setattr(loop, "open_crystals", lambda *a, **k: results.pop(0))
-    monkeypatch.setattr(runner, "ready_prepare", lambda: (sim.grab(), []))
+    monkeypatch.setattr(runner, "ready_prepare", lambda **_: (sim.grab(), []))
     runner._surveyed = "1"
     runner._companion_done = True                                    # 奇遇伙伴只在第一位面收集完节点后读一次
 

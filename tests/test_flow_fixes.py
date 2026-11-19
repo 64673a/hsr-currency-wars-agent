@@ -186,7 +186,7 @@ def test_companions_read_once_after_first_plane_survey(tmp_path, monkeypatch):
     monkeypatch.setattr(loop, "survey_plane", lambda *a, **k: ["战斗", "奖励"])
     runner = Runner(Sim(), FakeBrain({}), Trace(tmp_path / "run"), ocr=lambda im, region=None: [], log=lambda m: None,
                     settle=False)
-    monkeypatch.setattr(runner, "ready_prepare", lambda: (Sim().grab(), []))
+    monkeypatch.setattr(runner, "ready_prepare", lambda **_: (Sim().grab(), []))
 
     assert runner.macros(None, [], "1-2") == "收集本位面的节点序列"     # 第一位面:先收集词条和节点
     assert calls == []

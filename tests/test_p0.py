@@ -182,6 +182,34 @@ def test_boss_node_opens_spotlight_once(tmp_path):
     assert r.macros(frame.image, FakeOcr(sim)(frame.image), "1-9") is None   # 同一节点不再自动打开
 
 
+def test_boss_preparation_waits_for_controls_before_opening_crystals(tmp_path):
+    prep = [("2-7", x, y) if text == "1-9" else (text, x, y) for text, x, y in BOSS_PREP]
+    pages = {"loading": prep[:-2], "prep": prep, "spot": [("选择一个角色获得主角光环", 0.5, 0.1)]}
+    sim = Sim(pages, "loading", lambda _, a: "spot" if a == ("click", 0.946, 0.62) else None)
+    r = runner_for(sim, tmp_path)
+    r._surveyed, r._node = "2", "2-7"
+    r.ledger.node_kinds["2-7"] = {"boss"}
+    initial = sim.grab()
+    remaining = iter(["loading", "loading", "prep"])
+    grab = sim.grab
+
+    def advance():
+        sim.state = next(remaining, sim.state)
+        return grab()
+
+    def collect(image):
+        assert sim.state == "prep" and not sim.actions
+        assert image.getpixel((0, 0))[0] == sim.names.index("prep")
+        return "划开晶矿(5 个)"
+
+    sim.grab = advance
+    r._open_crystals = collect
+    assert r.macros(initial.image, r.ocr(initial.image), "2-7") == "划开晶矿(5 个)"
+    r._open_crystals = lambda _: None
+    assert r.macros(initial.image, r.ocr(initial.image), "2-7").startswith("打开主角光环选择")
+    assert sim.state == "spot"
+
+
 def test_deploy_confirm_reflex_cancels_first(tmp_path):
     pages = {"dlg": [("可出战角色人数未达上限，是否确认出战？", 0.498, 0.473), ("取消", 0.43, 0.572),
                      ("确认", 0.57, 0.572), ("本局不再提示", 0.45, 0.53)]}

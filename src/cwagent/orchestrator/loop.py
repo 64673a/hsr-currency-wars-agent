@@ -103,6 +103,8 @@ TRANSIENT = "阿哈帮大忙了|啊哈帮大忙了"
 POST_READY = 40.0
 CLICKABLE = r"确认|取消|继续|跳过|选择|返回|关闭|下一步|开始对局|前往|领取"
 SPOTLIGHT_BUTTON = "^选择主角$"   # 首领节点备战界面右下的按钮(实机:商店开着时点不到)
+BOSS_PREP_BUTTON = r"^(选择主角|出战)$"
+BOSS_PREP_BUTTON_AREA = (0.86, 0.60, 0.14, 0.15)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
                   "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor", "equipment_reward"}
@@ -773,10 +775,10 @@ class Runner:
 
     # ---------------------------------------------------------------- 固定流程
 
-    def ready_prepare(self) -> tuple | None:
+    def ready_prepare(self, *, boss: bool = False) -> tuple | None:
         """关键操作(收集节点、开晶矿、看道具)前确认界面状态(维护者建议):是备战界面、商店收起、棋盘中间没有弹窗、
         画面静止。打完一关回到备战界面时游戏会自动打开商店,奇遇伙伴也常在开局等时候弹出动画(如「团队规模提升」),
-        这时的点击、手柄操作都会被吞掉。最多等 READY_SECONDS 秒;等不到返回 None,交给模型看着处理。"""
+        这时的点击、手柄操作都会被吞掉。首领备战还要等右侧按钮出现。等不到就返回 None。"""
         deadline = time.monotonic() + READY_SECONDS
         prev, popup = None, []
         while time.monotonic() < deadline:
@@ -801,7 +803,8 @@ class Runner:
                 prev = None
                 continue
             popup = overlay_texts(boxes)
-            if not popup and prev is not None and frame_diff(prev, frame.image) < STABLE_DIFF:
+            controls_ready = not boss or find(boxes, BOSS_PREP_BUTTON, region=BOSS_PREP_BUTTON_AREA) is not None
+            if controls_ready and not popup and prev is not None and frame_diff(prev, frame.image) < STABLE_DIFF:
                 return frame, boxes
             prev = frame.image
             time.sleep(0.6)
@@ -816,11 +819,12 @@ class Runner:
         plane = node.split("-")[0]
         full = self._crystal_full is not None and self._crystal_full[0] == node   # 等模型腾出备战席,出战前再开
         pending_companion = plane == "1" and not self._companion_done   # 奇遇伙伴整局只读一次,第一位面读
-        spotlight = node not in self._spotlight_opened and find(boxes, SPOTLIGHT_BUTTON) is not None
+        boss = "boss" in self.ledger.node_kinds.get(node, ()) or find(boxes, SPOTLIGHT_BUTTON) is not None
+        pending_spotlight = boss and node not in self._spotlight_opened
         if (plane == self._surveyed and (full or self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES)
-                and not pending_companion and not spotlight):
+                and not pending_companion and not pending_spotlight):
             return None   # 没有要做的
-        ready = self.ready_prepare()
+        ready = self.ready_prepare(boss=boss)
         if ready is None:
             if plane != self._surveyed and self._survey_waits.get(node, 0) < SURVEY_WAITS:
                 # 新位面还没收集节点和词条:先别叫模型(Codex 2026-11-16 那局 1-1 开局弹窗没静下来,
@@ -829,7 +833,7 @@ class Runner:
                 time.sleep(1.5)
                 return f"等界面静下来再收集本位面的节点(第 {self._survey_waits[node]} 次)"
             return None
-        image = ready[0].image
+        frame, boxes = ready
         if plane != self._surveyed:
             # 打不开位面详情(节点图标正在播动画时点击会被吞,2026-11-16 实机)就下个回合再试。
             # survey_plane 内部已经等了两轮、点了两次,所以这里给 2 次机会就够,别把一个位面拖太久
@@ -861,24 +865,18 @@ class Runner:
             # 详情页左下角列着本局所有伙伴,悬停读气泡。读不到下个节点再试一次,不影响备战。
             self._read_companions()
             return "读取本局奇遇伙伴"
-        did = self._open_crystals(image)
-        if did is None and spotlight:
-            did = self._open_spotlight(node)
-        return did
-
-    def _open_spotlight(self, node: str) -> str | None:
-        """首领节点开局先打开「选择主角」(设计文档第 20.5 节:必做的界面操作由程序包办)。原来交给模型自己找,
-        外部 agent 花了两三轮才发现按钮被商店挡住。每个节点只开一次:模型从光环界面返回备战后要自己再点。"""
-        self._spotlight_opened.add(node)
-        boxes = self.ocr(self.device.grab().image)
-        if self.prepare.shop_now(boxes):
-            boxes = self.prepare.set_shop(PrepareResult(), boxes, False)
-        button = find(boxes, SPOTLIGHT_BUTTON)
-        if button is None:
-            return None
-        self.device.click(float(button.x), float(button.y))
-        time.sleep(1.0)
-        return "打开主角光环选择(首领节点要选完光环才能出战)"
+        if not full:
+            did = self._open_crystals(frame.image)
+            if did is not None:
+                return did
+        if node not in self._spotlight_opened:
+            button = find(boxes, SPOTLIGHT_BUTTON)
+            if button is not None:
+                self.device.click(float(button.x), float(button.y))
+                self._spotlight_opened.add(node)
+                time.sleep(1.0)
+                return "打开主角光环选择(首领节点要选完光环才能出战)"
+        return None
 
     def _note_roster(self, seen: dict[str, bool]) -> None:
         """记下这局见到的角色是试用还是自己的(商店、补给卡面上的「试用」标签)。一次标过试用就算试用。"""
