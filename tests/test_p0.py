@@ -405,3 +405,12 @@ def test_node_report_lists_more_choices(tmp_path):
     [row] = report.node_rows(report._steps(tmp_path))
     assert row.choices == ["骇入效果:点击「数据拷贝仪LV.1」、点击「确认选择」", "道具:拿到 量产型装甲(来自简易武装箱)",
                            "巡海游侠任命:点击「银狼LV.999」、点击「确认选择」", "其他界面:点击「精雕细琢慢慢画。」"]
+
+
+def test_node_report_external_agent_has_no_token_count(tmp_path):
+    """外部 agent 的 token 用量程序看不到,不写成 0(2026-11-19 报告 R1)。"""
+    steps = [{"step": 1, "screen": "prepare", "node": "1-1", "state": {"hud": {"hp": 80}}, "decision": {"turn": 1}}]
+    (tmp_path / "steps.jsonl").write_text(json.dumps(steps[0], ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps({"profile": "外部 agent"}, ensure_ascii=False), encoding="utf-8")
+    text = report.render(tmp_path)
+    assert "token 用量程序看不到" in text and "输入 0 token" not in text and text.rstrip().endswith("| 1 | - |")

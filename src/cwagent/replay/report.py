@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..brain.ledger import node_types
+from ..llm.external import EXTERNAL
 
 RESULT_BUTTONS = ("继续挑战", "前往结算")   # 每场战斗的结算画面;最终首领打完是「前往结算」(画面分类认成 other)
 NAVIGATION = r"点击「(前往结算|下一步|继续挑战|返回|关闭)」"   # 没见过的界面上只是翻页的点击,不算选择
@@ -231,13 +232,16 @@ def render(run: Path) -> str:
     calls = sum(1 for r in steps if r.get("decision"))
     tokens = sum(_int(((r.get("decision") or {}).get("usage") or {}).get("input_tokens")) or 0 for r in steps)
     fights = [r for r in rows if r.result]
+    # 外部 agent 用的是它自己工具里的模型,请求次数和 token 程序看不到;「调用」只是交上来的回答次数
+    external = (meta.get("profile") or meta.get("model")) == EXTERNAL
+    usage = f"交来回答 {calls} 次,token 用量程序看不到" if external else f"模型调用 {calls} 次,输入 {tokens} token"
     ended = outcome(steps)
     result = f"{ended}({meta['result']})" if ended and meta.get("result") else ended or meta.get("result") or "?"
     lines = [f"# 对局报表 {run.name}", "",
              f"- 模型 {meta.get('profile') or meta.get('model') or '?'},难度 {meta.get('difficulty') or '?'},"
              f"结果 {result}",
              f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
-             f"模型调用 {calls} 次,输入 {tokens} token", "",
+             f"{usage}", "",
              "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡横幅 | 胜负 | 战后血量 | 调用 | 输入token |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
@@ -245,7 +249,7 @@ def render(run: Path) -> str:
         stars = f"{r.stars2}/{r.on_field}" if r.on_field else ""
         lines.append(f"| {r.node} | {_cell(r.hp_in)} | {_cell(r.gold_in)} | {level} | {_cell(r.deployed)} | "
                      f"{_cell(r.front)} | {stars} | {_cell(r.gold_out)} | {r.progress} | {_cell(r.deaths)} | {r.result} | "
-                     f"{_cell(r.hp_after)} | {r.calls} | {r.tokens} |")
+                     f"{_cell(r.hp_after)} | {r.calls} | {'-' if external else r.tokens} |")
     picks = [(r.node, c) for r in rows for c in r.choices]
     if picks:
         lines += ["", "## 选择", ""] + [f"- {n} {c}" for n, c in picks]
