@@ -43,12 +43,16 @@ class ImageInput(BaseModel):
     label: str = ""
 
     @classmethod
-    def from_pil(cls, image, *, label: str = "", max_size: tuple[int, int] | None = (1280, 720)):
+    def from_pil(cls, image, *, label: str = "", max_size: tuple[int, int] | None = (1280, 720), quality: int = 70):
+        """quality 只影响文件大小,不影响 token(按像素算)。外部 agent 的对话里截图一直累积,Claude Code 在请求体
+        超过 32MB 前按先后删最旧的图,之后每轮前缀都变、缓存每轮重写(anthropics/claude-code#89418)。
+        2026-11-19 那局质量 88 时一张约 180KB,累计到约 127 张就开始删;质量 70 约 107KB,能放约 214 张,
+        小字和标号看不出差别。"""
         img = image.convert("RGB").copy()
         if max_size:
             img.thumbnail(max_size)
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=88)
+        img.save(buf, format="JPEG", quality=quality)
         return cls(data=base64.b64encode(buf.getvalue()).decode("ascii"), width=img.width, height=img.height, label=label)
 
     def block(self) -> dict[str, Any]:

@@ -1455,7 +1455,7 @@ class Runner:
             x, y, w, h = self._zoom_region
             crop = image.crop((round(x * image.width), round(y * image.height),
                                round((x + w) * image.width), round((y + h) * image.height)))
-            zoom = ImageInput.from_pil(crop, label=f"原分辨率局部图:{self._zoom_region}", max_size=None)
+            zoom = ImageInput.from_pil(crop, label=f"原分辨率局部图:{self._zoom_region}", max_size=None, quality=88)
             ep.images.append(zoom)
             record["vision"].append(save_image(self.trace.root, f"{step:04d}-zoom.jpg", zoom))
             ep.annotation += f"\n另附原分辨率局部图,区域(x,y,宽,高)={self._zoom_region};点击坐标仍相对完整客户区。"
