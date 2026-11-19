@@ -96,3 +96,23 @@ def test_observation_pushes_lesson_for_new_entry():
     assert book.active == ["M1"]
     again, recalled = brain.observation(ep, ["买下"], boxes("托帕&账账"), screen="prepare")
     assert "永动机" not in again and recalled == []
+
+
+def test_observation_sends_only_changed_lines():
+    """回合内后续轮的局面块只发和上一轮不同的行,相同的只报名字;snapshot 留完整的(2026-11-19 报告 P1-7)。"""
+    from cwagent.brain.screen_agent import view_delta
+
+    brain = ScreenAgent(ModelEndpoint(name="m", format="openai"), Index(), [], "")
+    book = RunLedger()
+    ep = episode(1, "prepare")
+    ep.annotation = "## 截图标号\n1=出战"
+    state = ("## 程序识别的局面\n节点 2-6,小队生命 100,金币 {gold}\n阵容(格子编号从左到右):\n- 前台:1号 银狼\n"
+             "- 备战席:1号 {bench}\n装备栏(右上角):(空)")
+    brain.opening(ep, boxes(), ledger=book, hints=state.format(gold=34, bench="火花"))
+    text, _ = brain.observation(ep, ["买商店第 1 格(真珠)"], boxes(), screen="prepare",
+                                hints=state.format(gold=33, bench="真珠"))
+    assert "节点 2-6,小队生命 100,金币 33" in text and "阵容(格子编号从左到右):\n- 备战席:1号 真珠" in text
+    assert "1号 银狼" not in text and "装备栏(右上角):(空)" not in text and "1=出战" not in text
+    assert "(和上一轮相同,没再列出:前台、装备栏、截图标号)" in text
+    assert "1号 银狼" in ep.snapshot and "1=出战" in ep.snapshot                # 压缩后恢复要完整的
+    assert view_delta("", "a\nb") == "a\nb"                                    # 回合第一轮原样

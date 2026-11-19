@@ -204,6 +204,45 @@ def load_rules(path: Path) -> str:
     return "\n".join(lines).strip()
 
 
+def _label(line: str, section: str) -> str:
+    """一行的名字:「- 前台:1号 ……」→ 前台,「道具栏(右上角……):……」→ 道具栏;说不出名字的用所在小标题。"""
+    if line.startswith("节点 "):
+        return "节点、生命、金币、等级"
+    head = re.split(r"[:(]", line.removeprefix("- "), maxsplit=1)[0].strip()
+    return head if head and len(head) <= 12 and head != line.removeprefix("- ").strip() else section
+
+
+def view_delta(prev: str, now: str) -> str:
+    """回合内后续轮的局面块:只留和上一轮不同的行,变了的行带上所属的小标题;相同的只报名字。上一轮没有时原样返回。"""
+    if not prev:
+        return now
+    old = set(prev.splitlines())
+    lines = now.splitlines()
+    out: list[str] = []
+    same: list[str] = []
+    section, header = "", None
+    for i, line in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if line.startswith("## ") or (line.endswith(":") and nxt.startswith("- ")):
+            section = re.split(r"[(:]", line.removeprefix("## "), maxsplit=1)[0].strip()
+            header = line
+            continue
+        if not line.strip():
+            continue
+        if line in old:
+            name = _label(line, section)
+            if name and name not in same:
+                same.append(name)
+            continue
+        if header is not None:
+            out.append(header)
+            header = None
+        out.append(line)
+    if same:
+        out.append("(和上一轮相同,没再列出:" + "、".join(same) + ")")
+    return "\n".join(out)
+
+
 @dataclass
 class Episode:
     """一个回合的对话。key 用来判断下一步是不是还在同一个回合里。"""
@@ -228,6 +267,7 @@ class Episode:
     images: list[ImageInput] = field(default_factory=list)
     snapshot: str = ""
     annotation: str = ""
+    view: str = ""                                     # 上一轮发出去的完整局面块(界面提示、识别的局面、标号表)
     request_messages: list[Message] = field(default_factory=list)
     chosen: dict[str, tuple[str, str]] = field(default_factory=dict)
     spotlight_role: str = ""
@@ -390,9 +430,11 @@ class ScreenAgent:
         else:
             episode.lessons = {code for code, _ in hits}
             head = [ledger]
+        view = episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)
+        episode.view = (hints + "\n" + view) if hints else view
         parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
-            episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
+            view,
         ]
         if book is None:
             if described:
@@ -410,9 +452,15 @@ class ScreenAgent:
         """回合内后续每轮:上一组操作的执行结果 + 现在的界面。新出现的条目(刷新商店后的角色、合成出的装备等)
         对上了经验的触发条件、这段对话里还没给过的,把经验原文一起附上。返回(文字, 附上的经验「编号 标题」)。"""
         described, new = self._entities(boxes, names, episode)
+        view = episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)
+        full = (hints + "\n" + view) if hints else view
+        # 回合内后续轮只发和上一轮不同的行(设计文档第 20.4 节;2026-11-19 报告 P1-7:阵容、羁绊、同名张数、
+        # 标号表每操作一次就整段重发,占返回文字的 44%)。上一轮的完整局面在同一段对话里,API 模式和外部 agent 都看得到;截图照旧每轮都给
+        changed = view_delta(episode.view, full)
+        episode.view = full
         parts = ["## 执行结果\n" + ("\n".join(f"- {r}" for r in results) or "(没有执行任何操作)"),
-                 f"## 现在的界面\n程序判断的界面类型:{screen}" + (f"\n{hints}" if hints else ""),
-                 episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)]
+                 f"## 现在的界面\n程序判断的界面类型:{screen}" + (f"\n{changed}" if changed else "")]
+        whole = parts[:1] + [f"## 现在的界面\n程序判断的界面类型:{screen}\n{full}"]
         if described:
             parts.append("## 新出现的条目\n" + described)
         hits = [(c, m) for c, m in self.recall(Cues(entities=new, layer=LAYERS.get(episode.role)))
@@ -428,8 +476,8 @@ class ScreenAgent:
                         episode.book.active.append(code)
         parts.append(self._ask(episode))
         text = "\n\n".join(parts)
-        if episode.book is not None:
-            episode.snapshot = episode.book.render() + "\n\n" + text
+        if episode.book is not None:   # 压缩上下文后靠 snapshot 恢复,要完整的局面
+            episode.snapshot = episode.book.render() + "\n\n" + "\n\n".join(whole + parts[2:])
         return text, [f"{code} {m.title}" for code, m in hits]
 
     @staticmethod
