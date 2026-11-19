@@ -395,6 +395,37 @@ def test_crystal_timing(tmp_path, monkeypatch):
     assert runner._crystal_full is None
 
 
+def test_open_crystals_action_retries_after_automatic_limit(tmp_path, monkeypatch):
+    from cwagent.brain.screen_agent import ACT_TOOL, ActInput
+    from cwagent.orchestrator import loop
+    from cwagent.orchestrator.macros import Crystals
+
+    base = [("备战阶段", 0.12, 0.04), ("1-8", 0.12, 0.07)]
+    pages = {"shop": base + [("收起", 0.845, 0.909)], "closed": base + [("商店", 0.845, 0.909)]}
+    sim = Sim(pages, "shop", lambda _, a: "closed" if a == ("click", 0.845, 0.909) else None)
+    ocr = FakeOcr(sim)
+    runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=ocr, log=lambda _: None, settle=False)
+    runner._node = "1-8"
+    runner._crystal_fails["1-8"] = loop.CRYSTAL_TRIES
+    runner._ready_checked = "1-8"
+
+    def collect(device, image, *_args, **_kwargs):
+        assert device is sim and sim.state == "closed"
+        assert image.getpixel((0, 0))[0] == sim.names.index("closed")
+        return Crystals(3, 0, "鼠标")
+
+    monkeypatch.setattr(loop, "open_crystals", collect)
+    assert runner._open_crystals(sim.grab().image) is None
+    schema = ACT_TOOL.parameters["properties"]["actions"]["items"]["properties"]["type"]
+    assert "open_crystals" in schema["enum"]
+    act = ActInput.model_validate({"analysis": "还有晶矿", "actions": [{"type": "open_crystals"}, {"type": "ready"}]})
+    result = runner.prepare.run(act.actions, ocr(sim.grab().image), None, final=True)
+    assert result.results == ["划开晶矿(3 个)"]
+    assert result.observe and not result.ready
+    assert sim.actions == [("click", 0.845, 0.909)]
+    assert "1-8" not in runner._crystal_fails
+
+
 def test_environment_refresh_is_counted_by_card_names(tmp_path):
     """投资环境开局固定 1 次刷新,由程序记(维护者 2026-11-18):三张里至少两张换了名字才算刷新过,读错一张不算。"""
     sim = Sim({"prepare": []}, "prepare", lambda *_: None)

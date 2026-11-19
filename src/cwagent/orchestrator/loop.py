@@ -251,7 +251,8 @@ class Runner:
         self.equipment = equipment
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
-                                       before_ready=self._crystals_before_ready, capture=self.settle)
+                                       before_ready=self._crystals_before_ready, capture=self.settle,
+                                       open_crystals=self._open_crystals_on_request)
         self.prepare.roster = self._role_costs
         self.guides = guides
         self._guide: Guide | None = None                       # 模型挂上的攻略(guide 字段)
@@ -924,11 +925,10 @@ class Runner:
             self._macro_detail["companions"] = found
             self._refresh_knowledge()
 
-    def _open_crystals(self, image) -> str | None:
-        """开晶矿,返回结果说明;没有晶矿返回 None。没开成只记在当前节点上,下个节点照常再开
-        (原来累计失败 3 次就整局不开,一局里大半晶矿都没开)。"""
+    def _open_crystals(self, image, *, requested: bool = False) -> str | None:
+        """开晶矿,返回结果说明;没有晶矿返回 None。自动开启每个节点有失败次数上限,模型主动要求(requested)时不受限。"""
         node = self._node or ""
-        if self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES:
+        if not requested and self._crystal_fails.get(node, 0) >= CRYSTAL_TRIES:
             return None
         result = open_crystals(self.device, image, self.log, ocr=self.ocr, debug=self.trace.root / "debug")
         if result is None:
@@ -940,6 +940,12 @@ class Runner:
             self._crystal_fails[node] = self._crystal_fails.get(node, 0) + 1
         self._crystal_full = (node, result.after) if result.full else None
         return result.text()
+
+    def _open_crystals_on_request(self) -> str:
+        ready = self.ready_prepare()
+        if ready is None:
+            return "开启晶矿需等待备战界面就绪"
+        return self._open_crystals(ready[0].image, requested=True) or "未识别到可开启的晶矿"
 
     def _crystals_before_ready(self) -> str | None:
         """点出战前(商店已收起)再看一次晶矿:回合中途拿到的、开头因为备战席满了没开成的。
@@ -1225,8 +1231,8 @@ class Runner:
                           "(M7A 资料,跳过的结果待实测)。")
             full = self._crystal_full
             if full and full[0] == self._node:
-                hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席,"
-                          "出战前程序会再开一次。")
+                hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席后,"
+                          "可以用 open_crystals 再开;出战前程序也会再开一次。")
             if find(boxes, SPOTLIGHT_BUTTON):
                 hints += ("\n- 右下角有「选择主角」:这个首领节点的主角光环还没选,选完才能出战。"
                           "要选时 click_text「选择主角」进入(会先收起商店)。")

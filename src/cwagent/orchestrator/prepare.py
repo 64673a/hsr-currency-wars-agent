@@ -88,12 +88,14 @@ def raise_cap(deployed: str, delta: int) -> str:
 class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
                  sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None,
-                 before_ready: Callable[[], str | None] | None = None, capture: Callable | None = None):
+                 before_ready: Callable[[], str | None] | None = None, capture: Callable | None = None,
+                 open_crystals: Callable[[], str] | None = None):
         self.device = device
         self.ocr = ocr
         self.equipment = equipment
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
         self.before_ready = before_ready   # 点出战前(商店已收起)先做的事;返回说明时不出战,让模型先看新局面
+        self.open_crystals = open_crystals
         self.sleep = sleep or (lambda s: time.sleep(s))
         self.capture = capture or (lambda: self.device.grab())
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
@@ -488,6 +490,10 @@ class PrepareExecutor:
                     result, boxes = self._roll(out, a, boxes, board)
                     out.results.append(result)
                     out.observe = True      # 买进来的牌和新商店交给模型看,这一轮后面的操作不做
+                    break
+                elif a.type == "open_crystals":
+                    out.results.append(self.open_crystals() if self.open_crystals else "现在开不了晶矿")
+                    out.observe = True
                     break
                 elif a.type == "buy_exp":
                     before = self._level()

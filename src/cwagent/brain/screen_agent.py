@@ -25,7 +25,8 @@ PROMPTS = Path(__file__).parent / "prompts"
 MAX_ACTIONS = 12
 ZONES = ("front", "back", "bench")
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
-PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "compose", "equip", "open", "take"}
+PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "compose", "equip", "open", "take",
+                "open_crystals"}
 ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
 ROLL_MAX = 30
 LOOKS = ("zoom", "inspect", "recheck")   # 只看不操作:单独提交,不占决策次数(有上限)
@@ -45,7 +46,7 @@ class RollTarget(BaseModel):
 class Action(BaseModel):
     type: str = Field(
         pattern="^(click_text|click|drag|scroll|key|wait|pause|buy|sell|move|refresh|roll|buy_exp|ready|compose|equip|open"
-                "|take|zoom|inspect|recheck)$")
+                "|take|open_crystals|zoom|inspect|recheck)$")
     mark: int | None = Field(default=None, ge=1, le=100)
     region: tuple[float, float, float, float] | None = None
     mode: str = Field(default="hover", pattern="^(hover|click)$")
@@ -131,7 +132,8 @@ ACT_TOOL = ToolSpec(
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "enum": ["buy", "sell", "move", "refresh", "roll", "buy_exp", "ready",
-                                                            "compose", "equip", "open", "take", "click_text", "click", "drag",
+                                                            "compose", "equip", "open", "take", "open_crystals",
+                                                            "click_text", "click", "drag",
                                                             "scroll", "key", "wait", "pause", "zoom", "inspect",
                                                             "recheck"]},
                         "mark": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -556,6 +558,8 @@ def action_text(a: Action) -> str:
             return f"看{slot_text(a.zone, a.index)}道具里的选项"
         case "take":
             return f"从{slot_text(a.zone, a.index)}的道具里拿「{a.text}」"
+        case "open_crystals":
+            return "开启晶矿"
         case "click_text":
             return f"点击「{a.text}」" + (f"(第{a.nth + 1}个)" if a.nth else "")
         case "click":
