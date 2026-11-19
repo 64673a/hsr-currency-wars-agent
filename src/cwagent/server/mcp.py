@@ -10,7 +10,8 @@ import ipaddress
 import json
 import copy
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
+from contextvars import ContextVar
 from typing import Any
 
 import anyio
@@ -39,12 +40,16 @@ from .runs import PlayController
 
 DEFAULT_WAIT = 50     # 低于常见客户端 60 秒的默认工具超时;地址上带 ?wait=秒数 可以调大
 MAX_WAIT = 3600
+# 长等待时每隔这么久报一次进度(MCP progress):调用方据此知道调用还活着,Claude Code 默认 5 分钟没动静就中止 HTTP 调用
+PROGRESS_EVERY = 30.0
+_CTX: ContextVar[ServerRequestContext | None] = ContextVar("cwagent_mcp_ctx", default=None)
 
 INSTRUCTIONS = """本服务让你自主游玩《崩坏:星穹铁道》的「货币战争」。程序负责截图、识别界面和执行操作,只在需要判断时把局面交给你。
 1. 先调用 rules 读玩法和操作说明;上下文被压缩后再读一次。
 2. 调用 start_run 开始对局;对局已经在网页上开始时调用 wait。
 3. 拿到局面后自己判断,调用 act 提交分析和操作。act 执行完会返回结果和下一个局面,接着判断。
-4. 返回「还在等待」时(战斗、动画进行中),直接再调用 wait,不要停下来问用户。
+4. wait 和 act 会一直等到下一个需要判断的局面(战斗可能要几分钟)。返回「还在等待」时直接再调用 wait,不要停下来问用户;
+   调用被客户端转到后台时,不要再调用本服务的工具,结束这一轮,结果会自己送回来。
 5. 一直下到返回「对局结束」为止。新回合只追加新增事实和经历;压缩上下文或接手时调用 snapshot 恢复完整档案。
 6. 图片就是当前观察。按截图标号操作,act 的 turn 填本次局面的轮次,避免重复提交旧操作。"""
 
@@ -140,6 +145,7 @@ def _rules_text() -> str:
 class Tools:
     def __init__(self, player: PlayController):
         self.player = player
+        self.waiting = 0      # 正在等局面的 wait / act / start_run 调用数
 
     def _idle(self) -> str:
         st = self.player.status()
@@ -164,8 +170,26 @@ class Tools:
         return "现在没有对局。调用 start_run 开始。"
 
     async def _take(self, wait: float) -> str:
-        turn = await anyio.to_thread.run_sync(BRIDGE.take, wait, abandon_on_cancel=True)
-        return _turn_text(turn) if turn else self._idle()
+        """等到下一个局面,最多 wait 秒。分段等,段与段之间报进度(调用方没要进度时什么也不发)。
+        等待期间不调用模型:战斗打几分钟,原来 Claude Code 每 100 秒回一次「还在等待」,2026-11-19 那局 wait 调了 29 次,
+        每次都要重读三四十万上下文(报告 P1-5)。"""
+        ctx = _CTX.get()
+        deadline = anyio.current_time() + wait
+        self.waiting += 1
+        try:
+            while True:
+                left = deadline - anyio.current_time()
+                turn = await anyio.to_thread.run_sync(BRIDGE.take, min(left, PROGRESS_EVERY), abandon_on_cancel=True)
+                if turn:
+                    return _turn_text(turn)
+                left = deadline - anyio.current_time()
+                if left <= 0 or not BRIDGE.status()["active"]:
+                    return self._idle()
+                if ctx is not None:
+                    with suppress(Exception):   # 进度只是保活,发不出去不影响等待
+                        await ctx.session.report_progress(round(wait - left), wait, "战斗或动画进行中,等下一个局面")
+        finally:
+            self.waiting -= 1
 
     async def rules(self, args: dict[str, Any], wait: float) -> str:
         return _rules_text()
@@ -244,6 +268,10 @@ class Tools:
         session = str(args.get("session") or "")
         if args.get("event") == "tool":
             BRIDGE.claim(session)
+        elif self.waiting:
+            # 还有 wait / act 在等局面(Claude Code 把超过 2 分钟的调用转到了后台):结果会作为任务通知送回来,
+            # 这时让模型停下,不催它再调 wait,免得两个调用抢同一个局面
+            return "{}"
         elif args.get("event") == "stop" and session and BRIDGE.status()["active"] and BRIDGE.agent_session == session:
             return json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": KEEP_PLAYING}},
                               ensure_ascii=False)
@@ -270,7 +298,11 @@ def create_mcp(player: PlayController) -> tuple[ASGIApp, Callable[[], AbstractAs
         try:
             if handler is None:
                 raise ToolError(f"没有工具 {params.name}")
-            text = await handler(dict(params.arguments or {}), _wait_seconds(ctx))
+            token = _CTX.set(ctx)
+            try:
+                text = await handler(dict(params.arguments or {}), _wait_seconds(ctx))
+            finally:
+                _CTX.reset(token)
         except ToolError as e:
             return CallToolResult(content=[TextContent(type="text", text=str(e))], is_error=True)
         content = [TextContent(type="text", text=str(text))]

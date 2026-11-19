@@ -15,6 +15,21 @@ Claude Code 插件:连上货币战争 agent 的 MCP 服务,由 Claude Code 里�
 
    用仓库里的源码试用:`claude --plugin-dir integrations/claude-code`。
 
+## 省 token(建议)
+
+战斗要打几分钟,`wait` / `act` 会一直等到下一个局面。Claude Code 默认把超过 2 分钟的 MCP 调用转到后台,每场战斗会多一次模型调用(每次都要重读整段上下文)。
+在 `~/.claude/settings.json` 里加上下面这项,Claude Code 就会一直等到调用结束(需要 v2.1.212 或更新):
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS": "0"
+  }
+}
+```
+
+它对所有 MCP 服务都生效:别的服务的长调用也会等到结束,中途可以按 Esc 取消。
+
 ## 开始
 
 ```

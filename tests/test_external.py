@@ -197,3 +197,50 @@ def test_idle_after_external_run_ends_reports_the_end():
     assert Tools(ended)._idle().startswith("【对局结束】通关,打完了")
     assert "收尾" in Tools(Player())._idle()                                     # 结束标记还没到
     assert "不归你控制" in Tools(Player(profile="deepseek-flash"))._idle()       # 别的档案在下
+
+
+def test_long_wait_reports_progress_until_the_turn_arrives(monkeypatch):
+    """wait 分段等到下一个局面,段与段之间报进度;有调用在等时 Stop hook 不催模型再调 wait(报告 P1-5)。"""
+    from cwagent.server import mcp
+
+    monkeypatch.setattr(mcp, "PROGRESS_EVERY", 0.1)
+    reported: list = []
+
+    class Session:
+        async def report_progress(self, progress, total=None, message=None):
+            reported.append((progress, total))
+
+    class Ctx:
+        session = Session()
+
+    class Player:
+        def status(self):
+            return {"running": True, "profile": EXTERNAL, "agent": BRIDGE.status()}
+
+    tools = mcp.Tools(Player())
+    BRIDGE.begin(threading.Event())
+    hooks: list = []
+
+    def game():
+        time.sleep(0.2)
+        hooks.append(asyncio.run(tools.hook({"event": "stop", "session": "s"}, 1)))   # 这时 wait 还在等
+        BRIDGE.complete("s", [Message(role="user", content="新局面")], [ACT_TOOL])
+
+    async def main():
+        token = mcp._CTX.set(Ctx())
+        try:
+            return await tools._take(30)
+        finally:
+            mcp._CTX.reset(token)
+
+    BRIDGE.claim("s")
+    t = threading.Thread(target=game)
+    t.start()
+    try:
+        text = asyncio.run(main())
+        assert "新局面" in str(text) and reported and reported[0][1] == 30
+        assert hooks == ["{}"] and tools.waiting == 0
+    finally:
+        BRIDGE.answer(ACT)
+        t.join()
+        BRIDGE.end("stopped")

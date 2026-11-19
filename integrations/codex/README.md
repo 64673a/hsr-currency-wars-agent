@@ -5,10 +5,10 @@ Windows 上运行 `cwagent serve`,Codex 通过同一个 `/mcp` HTTP 端点接入
 在运行 Codex 的电脑上安装:
 
 ```bash
-uv run python integrations/codex/install.py --url 'http://127.0.0.1:8770/mcp?wait=45'
+uv run python integrations/codex/install.py --url 'http://127.0.0.1:8770/mcp?wait=1800'
 ```
 
-跨电脑时替换为 Windows 的 IP 地址,或使用 SSH 转发的本地地址。注册使用 Codex CLI 的 `codex mcp add`,保留其余服务器配置;skill 安装到 `$CODEX_HOME/skills/cwagent-play`。`config.example.toml` 给出可选的项目配置。
+跨电脑时替换为 Windows 的 IP 地址,或使用 SSH 转发的本地地址。注册使用 Codex CLI 的 `codex mcp add`,保留其余服务器配置;`codex mcp add` 设不了工具超时,脚本随后在 `config.toml` 的 `[mcp_servers.cwagent]` 里写入 `tool_timeout_sec = 1920`(战斗期间 `wait` / `act` 一直等到下一个局面,最长 30 分钟(战斗监视的上限),比默认的 60 秒超时长;每次等待超时回来都是一次模型调用);skill 安装到 `$CODEX_HOME/skills/cwagent-play`。`config.example.toml` 给出可选的项目配置。
 
 在重新加载 MCP 配置的 Codex 会话里,先调用 cwagent 的 `status`、`observe` 验证服务和图片。它们不会开始对局。要玩时明确说“用 $cwagent-play 打一局标准博弈 A8-1”。
 

@@ -965,7 +965,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 | `status` / `stop_run` | 查状态、停止对局 |
 | `hook` | 只给 Claude Code 插件的 hook 调用(见下面的 Claude Code 接入) |
 
-- **长等待**:战斗、动画期间没有需要判断的局面。`wait` / `act` 最多等 `wait` 秒后返回「还在等待」,agent 再调 `wait`。默认 50 秒,低于常见客户端 60 秒的默认工具超时;客户端能调大工具超时的,在地址上带 `?wait=540` 这样的参数减少空转(每次空转都是一次模型调用)。
+- **长等待**:战斗、动画期间没有需要判断的局面。`wait` / `act` 最多等 `wait` 秒后返回「还在等待」,agent 再调 `wait`。默认 50 秒,低于常见客户端 60 秒的默认工具超时;客户端能调大工具超时的,在地址上带 `?wait=1800` 这样的参数。每次「还在等待」都是一次模型调用,要重读整段上下文(2026-11-19 那局 Claude Code 每 100 秒回一次,`wait` 调了 29 次,占缓存读的 19%),所以三个接入都改成一次等到下一个局面(2026-11-19):`wait=1800`(30 分钟,和战斗监视的上限 `battle_watch.MAX_SECONDS` 一样;维护者定),客户端工具超时设得比它长(Claude Code 插件 `timeout: 1920000`、Codex `tool_timeout_sec = 1920`、DSH `toolCallTimeoutMs: 1920000`)。等的时候每 30 秒发一次 MCP 进度通知,调用方要进度时据此知道调用还活着。
 - **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
 - **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
 - **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
@@ -976,8 +976,8 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 
 **Claude Code 接入**(`integrations/claude-code/`,仓库根目录的 `.claude-plugin/marketplace.json` 把它发布成插件市场):做成插件,用户装一次、填一个 serve 地址(插件的 `userConfig`),不用自己写 MCP 和 hook 配置。
 
-- MCP:`.mcp.json` 连 `<地址>/mcp?wait=100`,`alwaysLoad` 让工具一开始就加载(不走工具搜索)。工具名是 `mcp__plugin_cwagent_cwagent__<工具>`。
-- `wait=100`:Claude Code 主对话里超过 2 分钟的 MCP 调用会转成后台任务、模型先结束这一轮,和「一直等到下一个局面」的流程冲突,所以一次最多等 100 秒;HTTP 服务的空闲超时是 5 分钟,也够。
+- MCP:`.mcp.json` 连 `<地址>/mcp?wait=1800`、`timeout: 1920000`(这个服务的工具调用最长 32 分钟,空闲超时也跟着抬到 32 分钟),`alwaysLoad` 让工具一开始就加载(不走工具搜索)。工具名是 `mcp__plugin_cwagent_cwagent__<工具>`。
+- 后台任务:Claude Code 主对话里超过 2 分钟的 MCP 调用会转成后台任务,模型先拿到任务号,结果作为任务通知送回来(原来因此只等 100 秒)。插件改不了环境变量,README 建议(只给建议,维护者定)用户在 `settings.json` 的 `env` 里设 `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`(Claude Code v2.1.212 起),一场战斗只调一次模型;没设时转到后台,模型结束这一轮、等通知,多一次调用。这时 `hook` 的 Stop 事件看到还有调用在等局面,就放行,不催模型再调 `wait`。【待实测:任务通知里的工具结果是否带图片】
 - `/cwagent:play [难度]`(skill):写明下棋流程;`allowed-tools` 免去 6 个工具的逐次确认(只在这一轮有效,用户插话后要重新确认,或在权限设置里永久允许)。
 - 续行:skill 的 frontmatter 里带两个 `mcp_tool` 类型的 hook,只在调用过这个 skill 的会话里注册,serve 没开时也不会在别的会话里报错。它们通过插件已经连上的 MCP 服务调用 `hook` 工具(只给 hook 用),带上会话 ID:每次调用本服务的工具后(PostToolUse)记下「这一局是哪个会话在下」(新对局清空);想停下时(Stop),对局还在进行、且就是这个会话在下,就返回 `additionalContext` 让模型接着调 `wait`,否则放行。这样换一个会话接手、或者 DSH 在下时,之前下过的 Claude Code 会话不会被拉回来抢着下。连续续行次数由 Claude Code 限制(8 次,调用过工具就重新计数)。
   - 没用 `command` hook + `curl`:skill frontmatter 里的 hook 不替换插件的 `${user_config.*}`(2026-11-16 实测,curl 拿到的是原样的 `${user_config.server_url}`),放到插件级 `hooks/hooks.json` 又会在所有会话里生效。
