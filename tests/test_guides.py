@@ -126,4 +126,5 @@ def test_report_lists_lookups(tmp_path):
             {"step": 2, "screen": "prepare", "node": "2-1", "decision": {"guide": "G11", "actions": [{"type": "ready"}]}}]
     (run / "steps.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
     text = report.render(run)
-    assert "## 查资料(1 次)" in text and "- 2-1 查攻略:克拉拉 刃" in text and "- 2-1 挂攻略:G11" in text
+    assert "## 查资料(1 次)" in text and "- 2-1 查攻略:克拉拉 刃" in text
+    assert "## 挂攻略\n\n- 2-1 G11" in text                      # 挂攻略不算查资料,单独列

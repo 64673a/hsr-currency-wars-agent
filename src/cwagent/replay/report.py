@@ -254,10 +254,11 @@ def render(run: Path) -> str:
              for x in (r.get("decision") or {}).get("lookups") or []]
     pinned = [(r.get("node") or "", (r.get("decision") or {}).get("guide")) for r in steps
               if (r.get("decision") or {}).get("guide")]
-    if looks or pinned:
+    if looks:
         names = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "常配装备"}
         lines += ["", f"## 查资料({len(looks)} 次)", ""] + [f"- {n} 查{names.get(w, w)}:{q}" for n, w, q in looks]
-        lines += [f"- {n} 挂攻略:{g}" for n, g in pinned]
+    if pinned:
+        lines += ["", "## 挂攻略", ""] + [f"- {n} {g}" for n, g in pinned]
     return "\n".join(lines) + "\n"
 
 
