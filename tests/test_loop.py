@@ -220,23 +220,35 @@ def test_prepare_semantic_actions(tmp_path):
         return None
 
     sim = Sim(pages, "closed", rules)
-    # 出战要单独一轮:和别的操作一起发时先不出战,让模型看过操作后的局面再单独发 ready(维护者要求)
+    # 买、上场都核对通过,和 ready 一起发就接着出战,不再单独一轮(报告 P1-6,维护者 2026-11-19 同意)
     brain = FakeBrain({"prepare": [[Action(type="buy", slot=2), Action(type="move", zone="bench", index=1,
                                                                       to_zone="front", to_index=1),
-                                    Action(type="ready")],
-                                   [Action(type="ready")]]})
+                                    Action(type="ready")]]})
     runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     runner.macros = lambda *a: None     # 跳过收集节点、开晶矿
     runner.watch_battle = lambda n, record, sig: "battle"    # 模拟画面上的战斗不会结束
     runner.run(RunOptions(max_steps=4))
-    assert brain.calls == [("prepare", "opening", 1), ("prepare", "observation", 1)]
-    assert brain.results[-1].startswith("出战:这一轮没有出战")
+    assert brain.calls == [("prepare", "opening", 1)]
     kinds = [a[0] for a in sim.actions]
-    assert kinds == ["click", "click", "drag", "click", "click"]      # 开商店、买、拖上场;下一轮:收起商店、出战
+    assert kinds == ["click", "click", "drag", "click", "click"]      # 开商店、买、拖上场、收起商店、出战
     assert sim.actions[1] == ("click", SHOP_X[1], 0.15)
     assert runner.episode is None
     assert any(h.startswith("[1-3 备战]") and "操作:买商店第 2 格(黄泉);备战席1号 → 前台1号;出战" in h
                for h in runner.ledger.history)
+
+
+def test_ready_waits_when_the_batch_cannot_be_checked():
+    """同一批里有点击这类程序核对不了的操作,或者有操作没成功,就先不出战,把局面交给模型。"""
+    from cwagent.orchestrator.prepare import PrepareExecutor
+
+    pages = {"prep": [("备战阶段", 0.12, 0.04), ("1-3", 0.12, 0.07), ("商店", 0.845, 0.909)]}
+    sim = Sim(pages, "prep", lambda *_: None)
+    ex = PrepareExecutor(sim, FakeOcr(sim), raw=lambda a, b: "点了", sleep=lambda s: None)
+    boxes = FakeOcr(sim)(sim.grab().image)
+    out = ex.run([Action(type="click_text", text="详情"), Action(type="ready")], boxes, [])
+    assert not out.ready and out.observe and "核对不了" in out.results[-1]
+    out = ex.run([Action(type="sell", zone="bench", index=3), Action(type="ready")], boxes, [])
+    assert not out.ready and out.results[0].endswith("是空的") and "没成功" in out.results[-1]
 
 
 def test_ready_transition_ignores_residual_prepare_screen(tmp_path, monkeypatch):

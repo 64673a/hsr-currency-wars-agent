@@ -1147,7 +1147,7 @@ class Runner:
         self._results = []
         if ep is None:
             return
-        # 「这一轮没有出战,出战要单独一轮」是当轮的执行反馈,不是失败,不进经历;其他没成功的操作照记
+        # 「这一轮没有出战」是当轮的执行反馈,不是失败,不进经历;其他没成功的操作照记
         done = ";".join(d for d in ep.done if not d.startswith(READY_DEFERRED))
         if ep.screen == "environment_choice":
             picked = ep.chosen.get("portals") or self._picked(ep.done, "portals")

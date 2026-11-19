@@ -39,6 +39,8 @@ SHOP_CARD_Y = 0.15
 GAP = 0.5
 # 出战和别的操作一起发时的提醒:只在当轮执行结果里给,不记进本局经历(下一轮单独出战后经历里有「出战」)
 READY_DEFERRED = "出战:这一轮没有出战。"
+# 程序执行后能核对结果的操作:同一批里只有这些、而且都成功了,ready 就接着出战(报告 P1-6,维护者 2026-11-19 同意)
+CHECKED = {"buy", "sell", "move", "buy_exp", "compose", "equip", "take"}
 ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(loop.perceive 标出来的),不是角色
 REFUSED = "不可调整|无法上阵|无法移动"   # 拖动被游戏拒绝时界面中间的提示(2026-11-15 实机:「当前情况下不可调整」)
 BEHIND_SHOP = {"选择主角", "出战"}   # 右下的按钮,商店展开时被挡住(2026-11-16 外部 agent 实测:点了没反应)
@@ -377,10 +379,15 @@ class PrepareExecutor:
 
     def run(self, actions: list[Action], boxes: list[TextBox], board: list[Slot] | None, *,
             final: bool = False) -> PrepareResult:
-        """final:本备战阶段最后一次决策。出战要单独一轮(维护者要求:模型以为操作都成功了就出战,实际上场情况常常
-        和它想的不一样);只有最后一次决策里,前面的操作都成功时才接着出战。"""
+        """final:本备战阶段最后一次决策。
+
+        ready 和别的操作一起发时:前面全是程序能核对的操作(CHECKED)而且都成功了,就接着出战;有操作没成功,
+        或者有点击、拖拽这类程序核对不了的操作,就先不出战,把实际局面交给模型(最后一次决策例外,前面都成功就出战)。
+        原来一律「出战单独一轮」(2026-11-16 起:上场被游戏拒绝时程序照样报成功,模型按想象中的阵容出战),
+        现在上场、买卖、装备都有核对,2026-11-19 那局单独出战的 21 轮大多可以省掉。"""
         out = PrepareResult()
         others = any(x.type not in ("wait", "ready") for x in actions)
+        unchecked = any(x.type not in CHECKED | {"wait", "ready"} for x in actions)
         failed = False
         # 各格子里有没有角色,随移动、买卖更新;认不出阵容时为 None,不做检查
         occupied: dict[tuple[str, int], str] | None = None
@@ -405,9 +412,11 @@ class PrepareExecutor:
                     why, boxes = self._buy_slot(out, a.slot, boxes)
                     if why:
                         out.results.append(f"{text}" + (f"({name})" if name else "") + f":{why}")
+                        failed = True
                         continue
                     if name is None:
                         out.results.append(f"{text}:这一格没认出角色(可能已经买走了)")
+                        failed = True
                         continue
                     if occupied is not None:
                         free = [i for i in range(9) if ("bench", i) not in occupied]
@@ -418,20 +427,25 @@ class PrepareExecutor:
                     src = (a.zone, a.index - 1)
                     if occupied is not None and src not in occupied:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是空的")
+                        failed = True
                         continue
                     if occupied is not None and occupied[src] in FIXED_UNITS and a.type in ("move", "sell"):
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是{occupied[src]},固定在后台,不能拖动、不能出售")
+                        failed = True
                         continue
                     is_item = occupied is not None and occupied[src].startswith(ITEM_PREFIX)
                     if a.type in ("move", "sell") and is_item:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}是道具,不是角色,不能上场或出售")
+                        failed = True
                         continue
                     if a.type in ("open", "take") and occupied is not None and not is_item:
                         out.results.append(f"{text}:{slot_text(a.zone, a.index)}不是可开启的道具")
+                        failed = True
                         continue
                     layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
                     if src not in layout:
                         out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
+                        failed = True
                         continue
                     if a.type == "open":
                         seen = self.peek(out, layout[src].x, layout[src].y, a.index)
@@ -453,14 +467,17 @@ class PrepareExecutor:
                         dst = (a.to_zone, a.to_index - 1)
                         if dst not in layout:
                             out.results.append(f"{text}:没有{slot_text(a.to_zone, a.to_index)}这个格子")
+                            failed = True
                             continue
                         if occupied is not None and occupied.get(dst) in FIXED_UNITS:
                             out.results.append(f"{text}:{slot_text(a.to_zone, a.to_index)}是{occupied[dst]},不能换位,换一个格子")
+                            failed = True
                             continue
                         up = a.zone == "bench" and a.to_zone != "bench"
                         if up and occupied is not None and dst not in occupied and full(self.deployed):
                             out.results.append(f"{text}:上场已满({self.deployed}),先把场上的角色移回备战席或卖掉,"
                                                "或者升级")
+                            failed = True
                             continue
                         problem, boxes = self._drag_slot(out, src, dst, boxes)
                         if problem:
@@ -542,9 +559,11 @@ class PrepareExecutor:
                         break
                     _shift(pending, done)
                 elif a.type == "ready":
-                    if others and (not final or failed):
-                        out.results.append(READY_DEFERRED + "出战要单独一轮:先看上面这些操作之后的实际局面(上场人数、"
-                                           "站位、装备),确认无误再只发 ready")
+                    if others and (failed or (unchecked and not final)):
+                        why = ("前面有操作没成功" if failed else
+                               "这一批里有程序核对不了的操作(点击、拖拽等)")
+                        out.results.append(READY_DEFERRED + f"{why}:先看操作之后的实际局面(上场人数、站位、装备),"
+                                           "确认无误再发 ready")
                         out.observe = True
                         break
                     boxes = self.set_shop(out, boxes, False)
