@@ -112,6 +112,19 @@ def test_providers_and_models(env, monkeypatch):
     assert client.get("/api/providers").json() == []
 
 
+def test_provider_opencode_option_roundtrip(env):
+    client, store, _ = env
+    body = {"name": "gateway", "format": "openai", "base_url": "https://gateway.example.com/v1",
+            "api_key": "sk-test-key-12345", "opencode_go": True}
+    saved = client.post("/api/providers", json=body)
+    assert saved.status_code == 201 and saved.json()["opencode_go"] is True
+    assert client.get("/api/providers").json()[0]["opencode_go"] is True
+    assert store.load().provider("gateway").opencode_go is True
+    updated = client.put("/api/providers/gateway", json={**body, "api_key": "", "opencode_go": False})
+    assert updated.status_code == 200 and updated.json()["opencode_go"] is False
+    assert store.load().provider("gateway").api_key == body["api_key"]
+
+
 def test_memories(env):
     client, _, _ = env
     body = {"kind": "打法", "title": "绯英叠层", "content": "奖励节点单挂", "status": "approved",

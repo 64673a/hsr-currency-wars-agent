@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Iterator
 from email.utils import parsedate_to_datetime
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -16,6 +17,7 @@ from ..config import ModelEndpoint
 from . import anthropic_format, json_mode, openai_format
 from .base import ImageInput, LLMError, LLMResponse, Message, ToolSpec
 from .external import BRIDGE
+from .opencode import request_headers
 
 _ADAPTERS = {"openai": openai_format, "anthropic": anthropic_format}
 MAX_ERROR_BODY = 2000
@@ -114,6 +116,7 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
     if tools and not native:
         messages = _json_mode_messages(messages, tools)
     url, headers, body = adapter.build_request(profile, system, messages, tools if native else None)
+    headers = request_headers(profile.base_url, headers, profile.session_id, enabled=profile.opencode_go)
     key = (url, profile.model)
     stream = on_delta is not None and key not in _NO_STREAM
     fell_back = False
@@ -212,6 +215,7 @@ def check_profile(profile: ModelEndpoint, *, http: httpx.Client | None = None) -
     """检查文字、工具调用和实际读图能力。"""
     from PIL import Image, ImageDraw, ImageFont
 
+    profile = profile.model_copy(update={"session_id": str(uuid4())})
     digits = "".join(secrets.choice("0123456789") for _ in range(6))
     image = Image.new("RGB", (420, 100), "white")
     draw = ImageDraw.Draw(image)

@@ -52,7 +52,7 @@ def endpoints(cfg: AppConfig, model: str | None, effort: Effort | None = None) -
         out = {k: v.model_copy(update={"reasoning_effort": effort}) for k, v in out.items()}
     if cfg.roles.navigator:
         out["navigator"] = cfg.endpoint(cfg.roles.navigator)
-    return out
+    return {role: endpoint.model_copy(update={"session_id": main.session_id}) for role, endpoint in out.items()}
 
 
 def load_equipment() -> EquipmentBook | None:
@@ -87,6 +87,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
                     guides=guides, trailblazer=cfg.agent.trailblazer_name)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
+               session_id=endpoint.session_id,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                # 跑这局的进程:网页据此判断对局还在不在跑(崩溃、被结束时写不进结束时间)

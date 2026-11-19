@@ -16,6 +16,7 @@ providers:
     format: openai
     base_url: https://api.example.com/v1
     api_key: ""
+    # opencode_go: true              # 为 OpenCode Go 补会话头;不填按官方 URL 识别,false 关闭
     extra_headers: {}
 
   - name: my-anthropic-compatible

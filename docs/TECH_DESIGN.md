@@ -815,6 +815,14 @@ Detect(截图 + 分类)
 - 不锁定厂商和模型:厂商只描述"接口格式 + 地址 + key",可用模型从厂商接口拉取后由用户选择;
 - 代码里不出现任何具体厂商名、模型名或按模型名分支的逻辑,换模型只改配置。
 
+**OpenCode Go 接入例外(2026-11-19,维护者要求)**:厂商表单在额外请求头上方提供「OpenCode Go 适配」复选框,
+作为 URL 的可选附加配置(`opencode_go`),可用于中转地址;不改变接口格式、名称或地址。未设置时自动识别
+`opencode.ai/zen/go` 和 `opencode.ai/inference/go`,显式开关优先。仍使用两种通用格式,仅在 HTTP 请求处
+补 `User-Agent: cwagent/<版本>` 和 `x-opencode-session`。每局开局生成一个会话 ID,所有决策层、回合、重试和
+流式回退共用,下局重新生成,不把 ID 存进配置或沿用手填的固定值;对局记录的 `meta.json` 留下 ID 便于排查。
+连通性测试和每次模型列表拉取各用独立会话,分页共用该次拉取的 ID。
+官方接入要求见 [OpenCode 文档](https://opencode.ai/docs/console/harnesses/)。
+
 ### 11.2 厂商与模型档案
 
 配置分两层:

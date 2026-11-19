@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from ..config import ProviderConfig
 from .base import LLMError
 from .client import _error_message
+from .opencode import request_headers
 
 
 class ModelInfo(BaseModel):
@@ -43,7 +44,7 @@ def _headers(provider: ProviderConfig) -> dict[str, str]:
         if provider.api_key:
             headers["x-api-key"] = provider.api_key
     headers.update(provider.extra_headers)
-    return headers
+    return request_headers(provider.base_url, headers, enabled=provider.opencode_go)
 
 
 def _parse(item: dict[str, Any]) -> ModelInfo:

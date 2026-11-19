@@ -12,6 +12,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -42,6 +43,7 @@ class ProviderConfig(BaseModel):
     format: ApiFormat
     base_url: str = Field(min_length=1)
     api_key: str = ""
+    opencode_go: bool | None = None   # 未设置时按官方 URL 识别
     extra_headers: dict[str, str] = Field(default_factory=dict)
     anthropic_version: str = DEFAULT_ANTHROPIC_VERSION   # 仅 anthropic 格式使用
 
@@ -106,6 +108,7 @@ class ModelEndpoint(BaseModel):
     format: ApiFormat | Literal["external"]   # external:交给通过 MCP 连上来的 agent(11.9)
     base_url: str = ""
     api_key: str = ""
+    opencode_go: bool | None = None
     model: str = ""
     max_tokens: int | None = None
     extra_body: dict[str, Any] = Field(default_factory=dict)
@@ -114,12 +117,14 @@ class ModelEndpoint(BaseModel):
     tool_mode: Literal["native", "json"] = "native"
     timeout_seconds: float = 300
     anthropic_version: str = DEFAULT_ANTHROPIC_VERSION
+    session_id: str = Field(default_factory=lambda: str(uuid4()), exclude=True)
 
     @classmethod
     def of(cls, provider: ProviderConfig, profile: ModelProfile) -> "ModelEndpoint":
         return cls(
             name=profile.name, format=provider.format, base_url=provider.base_url,
             api_key=provider.api_key, model=profile.model, max_tokens=profile.max_tokens,
+            opencode_go=provider.opencode_go,
             extra_body=profile.extra_body,
             extra_headers={**provider.extra_headers, **profile.extra_headers},
             reasoning_effort=profile.reasoning_effort,

@@ -59,6 +59,7 @@ export interface Provider {
   format: 'openai' | 'anthropic';
   base_url: string;
   api_key: string;
+  opencode_go: boolean | null;
   has_key?: boolean;
   extra_headers: Record<string, string>;
   anthropic_version: string;

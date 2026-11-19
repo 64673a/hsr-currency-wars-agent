@@ -13,6 +13,7 @@ import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import { Textarea } from '@/components/arc/textarea/textarea';
 import { api, EFFORTS, enc, errorText, parseJsonObject, pretty, type Effort, type ModelInfo, type ModelProfile, type Provider } from '@/lib/api';
 import page from '@/lib/page.module.css';
+import { isOpenCodeGo } from '@/lib/providers';
 
 import styles from './dialogs.module.css';
 
@@ -41,6 +42,7 @@ export function ProviderDialog({ provider, onClose, onSaved }: { provider: Provi
   const [apiKey, setApiKey] = useState('');
   const [version, setVersion] = useState(provider?.anthropic_version ?? '2026-10-21');
   const [headers, setHeaders] = useState(pretty(provider?.extra_headers));
+  const [openCodeGo, setOpenCodeGo] = useState<boolean | null>(provider?.opencode_go ?? null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -53,6 +55,7 @@ export function ProviderDialog({ provider, onClose, onSaved }: { provider: Provi
         format,
         base_url: baseUrl.trim(),
         api_key: apiKey,
+        opencode_go: openCodeGo ?? isOpenCodeGo(baseUrl),
         extra_headers: parseJsonObject(headers, '额外请求头'),
         anthropic_version: version.trim() || '2026-10-21',
       };
@@ -90,6 +93,7 @@ export function ProviderDialog({ provider, onClose, onSaved }: { provider: Provi
           {format === 'anthropic' && (
             <Input label="anthropic-version" value={version} onChange={(e) => setVersion(e.target.value)} />
           )}
+          <Checkbox label="OpenCode Go 适配" checked={openCodeGo ?? isOpenCodeGo(baseUrl)} onCheckedChange={(checked) => setOpenCodeGo(checked === true)} />
           <Textarea label="额外请求头" placeholder='{"X-Header": "value"}' rows={2} value={headers} onChange={(e) => setHeaders(e.target.value)} />
           {error && <Alert tone="danger" title="没有保存">{error}</Alert>}
           <Footer onClose={onClose} saving={saving} disabled={!name.trim() || !baseUrl.trim()} label={provider ? '保存修改' : '添加厂商'} onSave={save} />

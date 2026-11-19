@@ -46,6 +46,7 @@ class ProviderOut(BaseModel):
     format: str
     base_url: str
     api_key: str           # 掩码
+    opencode_go: bool | None
     has_key: bool
     extra_headers: dict[str, str]
     anthropic_version: str
@@ -280,6 +281,7 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
 
     def provider_out(p: ProviderConfig, cfg) -> ProviderOut:
         return ProviderOut(name=p.name, format=p.format, base_url=p.base_url, api_key=mask_key(p.api_key),
+                           opencode_go=p.opencode_go,
                            has_key=bool(p.api_key), extra_headers=p.extra_headers,
                            anthropic_version=p.anthropic_version,
                            models=[m.name for m in cfg.models if m.provider == p.name])
