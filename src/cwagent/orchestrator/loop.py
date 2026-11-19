@@ -361,6 +361,14 @@ class Runner:
                 time.sleep(1.0)
                 return f"{action_text(a)}:{mark.label},说明见新截图和识别结果"
             a = a.model_copy(update={"x": mark.x, "y": mark.y})
+        if a.type == "inspect":
+            # 没有标号的地方(角色、阿哈面板、羁绊图标)按坐标查看(2026-11-19 报告 C1:原来只认标号)
+            if a.mode == "click":
+                self.device.click(a.x, a.y)
+            else:
+                self.device.move(a.x, a.y)
+            time.sleep(1.0)
+            return f"{action_text(a)}:说明见新截图和识别结果"
         if a.type == "zoom":
             self._zoom_region = a.region
             return action_text(a)

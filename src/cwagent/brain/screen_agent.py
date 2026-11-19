@@ -76,7 +76,7 @@ class Action(BaseModel):
     @model_validator(mode="after")
     def _required(self) -> "Action":
         need = {"click_text": ["text"], "click": [] if self.mark else ["x", "y"], "drag": ["x", "y", "x2", "y2"], "key": ["key"],
-                "zoom": ["region"], "inspect": ["mark"],
+                "zoom": ["region"], "inspect": [] if self.mark else ["x", "y"],
                 "buy": ["slot"], "sell": ["zone", "index"], "move": ["zone", "index", "to_zone", "to_index"],
                 "compose": ["item", "onto"], "equip": ["item", "zone", "index"], "open": ["zone", "index"],
                 "take": ["zone", "index", "text"], "roll": ["targets"]}
@@ -567,7 +567,7 @@ def action_text(a: Action) -> str:
         case "zoom":
             return f"放大区域 {a.region}"
         case "inspect":
-            return f"查看标号 {a.mark}({a.mode})"
+            return f"查看标号 {a.mark}({a.mode})" if a.mark else f"查看 ({_f(a.x)},{_f(a.y)})({a.mode})"
         case "recheck":
             return "复查(重新截图识别)"
         case "drag":

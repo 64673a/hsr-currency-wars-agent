@@ -77,3 +77,24 @@ def test_legend_compresses_runs_of_slots():
                              "25=道具1 拆装扳手;26=道具2 冶金炉;27=刷新;28=出战;29=收起")
     assert legend([Mark(1, .5, .5, "确认"), Mark(2, .5, .5, "装备1"), Mark(3, .5, .5, "后台3")]) == \
         "## 截图标号\n1=确认;2=装备1;3=后台3"
+
+
+def test_inspect_accepts_coordinates(tmp_path, monkeypatch):
+    """没有标号的地方(角色、阿哈面板、羁绊图标)按坐标查看(2026-11-19 报告 C1:原来只认标号)。"""
+    import pytest
+    from pydantic import ValidationError
+
+    from cwagent.brain.screen_agent import Action, action_text
+    from cwagent.orchestrator import loop
+    from cwagent.orchestrator.loop import Runner, Trace
+    from tests.test_loop import FakeBrain, FakeOcr, Sim
+
+    with pytest.raises(ValidationError):
+        Action(type="inspect", mode="click")
+    a = Action(type="inspect", x=0.389, y=0.372, mode="click")
+    assert action_text(a) == "查看 (0.389,0.372)(click)"
+    sim = Sim({"prep": [("备战阶段", 0.12, 0.04)]}, "prep", lambda *_: None)
+    runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda _: None, settle=False)
+    monkeypatch.setattr(loop.time, "sleep", lambda s: None)
+    assert runner._raw(a, []).endswith("说明见新截图和识别结果")
+    assert sim.actions == [("click", 0.389, 0.372)]
