@@ -27,6 +27,12 @@ def endpoint(base_url: str) -> str:
     return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
 
 
+# 缓存标记用 1 小时有效期(默认 5 分钟):每个回合是新对话,靠系统提示词和本局经历的缓存跨回合命中,
+# 而一场战斗常打 5 分钟以上,5 分钟的缓存在战斗期间就过期了,下一回合要把系统提示词和经历按 1.25 倍重写一遍。
+# 1 小时的写入是 2 倍,但能撑过整场战斗(维护者 2026-11-19 定)
+CACHE = {"type": "ephemeral", "ttl": "1h"}
+
+
 def _messages(messages: list[Message]) -> list[dict[str, Any]]:
     """转成 Anthropic 的消息列表:工具结果是 user 消息里的 tool_result 块,相邻的 user / tool 合并成一条。"""
     out: list[dict[str, Any]] = []
@@ -43,7 +49,7 @@ def _messages(messages: list[Message]) -> list[dict[str, Any]]:
             content = ([{"type": "text", "text": m.content}] if m.content else []) + [i.block() for i in m.images]
             blocks = [{"type": "tool_result", "tool_use_id": m.tool_call_id, "content": content if m.images else m.content}]
         elif 0 < m.cache_at < len(m.content):
-            blocks = [{"type": "text", "text": m.content[:m.cache_at], "cache_control": {"type": "ephemeral"}},
+            blocks = [{"type": "text", "text": m.content[:m.cache_at], "cache_control": CACHE},
                       {"type": "text", "text": m.content[m.cache_at:]}]
         else:
             blocks = [{"type": "text", "text": m.content}]
@@ -55,7 +61,7 @@ def _messages(messages: list[Message]) -> list[dict[str, Any]]:
             out.append({"role": "user", "content": blocks})
     # 对话只往后追加:在最后一块打缓存标记,下一轮请求能命中到这里为止的前缀
     if out and out[-1]["content"]:
-        out[-1]["content"][-1] = {**out[-1]["content"][-1], "cache_control": {"type": "ephemeral"}}
+        out[-1]["content"][-1] = {**out[-1]["content"][-1], "cache_control": CACHE}
     return out
 
 
@@ -69,7 +75,7 @@ def build_request(profile: ModelEndpoint, system: str, messages: list[Message],
         "model": profile.model,
         "max_tokens": profile.max_tokens or DEFAULT_MAX_TOKENS,
         # 系统提示词稳定不变,打上缓存标记
-        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "system": [{"type": "text", "text": system, "cache_control": CACHE}],
         "messages": _messages(messages),
     }
     if tools:

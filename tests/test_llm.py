@@ -107,7 +107,7 @@ def test_anthropic_request_and_parse():
     assert req.headers["x-api-key"] == "sk-test-123456"
     assert req.headers["anthropic-version"] == "2026-10-21"
     body = json.loads(req.content)
-    assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert body["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert body["max_tokens"] == 16000
     assert body["tools"][0]["input_schema"]["required"] == ["actions"]
     assert "tool_choice" not in body and "temperature" not in body

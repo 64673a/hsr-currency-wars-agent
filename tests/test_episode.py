@@ -129,7 +129,7 @@ def test_anthropic_messages_merge_tool_results_and_cache():
     assert [x["role"] for x in m] == ["user", "assistant", "user"]
     assert m[1]["content"][0]["signature"] == "s"                                 # thinking 块原样传回
     assert m[2]["content"][0]["type"] == "tool_result" and m[2]["content"][0]["tool_use_id"] == "t1"
-    assert m[2]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert m[2]["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     assert "cache_control" not in m[0]["content"][0]
 
 
@@ -168,8 +168,8 @@ def test_anthropic_cache_breakpoint_after_history():
 
     out = _messages([Message(role="user", content="经历\n\n当前界面", cache_at=2)])
     blocks = out[0]["content"]
-    assert blocks[0] == {"type": "text", "text": "经历", "cache_control": {"type": "ephemeral"}}
-    assert blocks[1]["text"] == "\n\n当前界面" and blocks[1]["cache_control"] == {"type": "ephemeral"}
+    assert blocks[0] == {"type": "text", "text": "经历", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    assert blocks[1]["text"] == "\n\n当前界面" and blocks[1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_read_shop():
