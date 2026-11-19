@@ -1,4 +1,5 @@
-"""开场只发当前相关的条目说明和当前适用的经验,档案里留全(2026-11-18,设计文档第 20.4 节)。"""
+"""开场只发当前相关的条目说明和当前适用的经验,档案里留全(2026-11-18,设计文档第 20.4 节);
+经验按触发条件由程序附上(2026-11-19)。"""
 
 from cwagent.brain.ledger import RunLedger
 from cwagent.brain.screen_agent import Episode, ScreenAgent
@@ -51,13 +52,14 @@ def test_stale_entries_leave_the_input_but_stay_in_the_ledger():
     first, recalled = brain.opening(episode(1, "environment_choice"),
                                     boxes("能量概念股", "经济严重过热", "持续伤害概念股"), ledger=book)
     assert "奖励节点换成超级次元扑满" in first
-    assert "抓猪要带基础伤害" not in first and not recalled          # 经验由模型自己查(2026-11-18),开场不附
+    assert "抓猪要带基础伤害" in first and recalled == ["M1 抓猪要带基础伤害"]   # 界面上出现了触发条目
     book.environment = "持续伤害概念股"                 # 选完环境
 
     # 商店里有托帕,卡面上带着「千星商会」标签
     second, recalled = brain.opening(episode(2, "prepare"), boxes("托帕&账账", "千星商会"), ledger=book, names=["桂乃芬"])
     assert "开局获得持续伤害角色" in second                                  # 选的环境一直在
     assert "开局获得能量角色" not in second and "超级次元扑满" not in second    # 没选的环境退出
+    assert "抓猪要带基础伤害" not in second and not recalled                  # 不再适用的经验也退出
     assert "深红荆棘" in second and "星槎" in second                          # 场上角色带羁绊
     assert "1费 前后台" in second and "KO 值" not in second and "开启宝库" not in second   # 商店角色在,羁绊不带
 
@@ -66,6 +68,7 @@ def test_stale_entries_leave_the_input_but_stay_in_the_ledger():
     assert "托帕&账账" not in third                                           # 商店里没买的不再带着
     assert "后期主 C" in third                                               # 笔记里的计划涉及的条目
     assert {"经济严重过热", "能量概念股", "托帕&账账"} <= set(book.entries)       # 档案里都还在
+    assert "M1" in book.lessons and book.active == []
 
 
 def test_api_observation_redescribes_entry_that_left_the_current_set():
@@ -75,5 +78,21 @@ def test_api_observation_redescribes_entry_that_left_the_current_set():
     brain.opening(episode(1, "prepare"), boxes("托帕&账账"), ledger=book)
     ep = episode(2, "prepare")
     brain.opening(ep, boxes(), ledger=book)
-    text = brain.observation(ep, ["刷新商店"], boxes("托帕&账账"), screen="prepare")
-    assert "## 新出现的条目" in text and "托帕&账账" in text
+    text, recalled = brain.observation(ep, ["刷新商店"], boxes("托帕&账账"), screen="prepare")
+    assert "## 新出现的条目" in text and "托帕&账账" in text and recalled == []
+
+
+def test_observation_pushes_lesson_for_new_entry():
+    """回合中途新出现的条目对上经验时附上原文(2026-11-18 那局 2-1 刷新商店后才出现试用昔涟),同一回合只给一次。"""
+    cyrene = Memory(kind="机制", title="试用昔涟要戴永动机", content="不戴放不出终结技", status="approved",
+                    confidence="medium", triggers=Triggers(entities=["托帕&账账"]), scope=["战术"])
+    brain = ScreenAgent(ModelEndpoint(name="m", format="openai"), Index(), [cyrene], "")
+    book = RunLedger()
+    ep = episode(1, "prepare")
+    first, recalled = brain.opening(ep, boxes(), ledger=book)
+    assert "永动机" not in first and recalled == []
+    text, recalled = brain.observation(ep, ["D 牌"], boxes("托帕&账账"), screen="prepare")
+    assert "## 新对上的经验" in text and "不戴放不出终结技" in text and recalled == ["M1 试用昔涟要戴永动机"]
+    assert book.active == ["M1"]
+    again, recalled = brain.observation(ep, ["买下"], boxes("托帕&账账"), screen="prepare")
+    assert "永动机" not in again and recalled == []

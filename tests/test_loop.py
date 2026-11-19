@@ -110,7 +110,7 @@ class FakeBrain:
     def observation(self, ep, results, boxes, *, screen, hints="", names=None):
         self.calls.append((screen, "observation", ep.id))
         self.results = results
-        return "obs"
+        return "obs", []
 
     def decide(self, ep, text, recalled=None, on_delta=None):
         ep.turns += 1

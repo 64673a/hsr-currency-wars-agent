@@ -125,7 +125,8 @@ class RunOptions:
     on_step: Callable[[dict], None] | None = None       # 每一步的记录,给网页实时推送
 
 
-ITEM_BAR = (0.87, 0.08, 0.22)   # 右上角道具栏:x 下限、y 范围(实机 960 宽截图里两个道具在 x≈0.905、0.95;商店第 5 张卡到 x≈0.885)
+ITEM_BAR = (0.87, 0.08, 0.19)   # 右上角道具栏:x 下限、y 范围(实机 960 宽截图里两个道具在 x≈0.905、0.95;商店第 5 张卡到 x≈0.885)
+# y 上限原来是 0.22,盖住了装备栏第 1 格(格子上沿 y≈0.197):从第 1 件装备拖动被当成拖道具(2026-11-18 那局)
 
 
 GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、冶金炉:用了会取下或重掷角色身上的装备
@@ -1352,8 +1353,7 @@ class Runner:
                                                 nodes=self.ledger.kinds_near(self._node))
         else:
             self._set_vision(ep, n, screen, frame.image, boxes, record)
-            text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints,
-                                                    names=names), []
+            text, recalled = self.brain.observation(ep, self._results, boxes, screen=screen, hints=hints, names=names)
         endpoint = getattr(self.brain, "endpoint", None)
         profile = endpoint(ep.role) if endpoint else None
         pending = self.trace.pending(n, ts=record.get("ts"), screen=screen, node=self._node, role=ep.role,

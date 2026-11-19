@@ -657,13 +657,15 @@ class PrepareExecutor:
                 return None
             after = self.equipment.read(self.capture().image)
             if len(after) != len(before) - 1:
-                out.results.append(f"{text}:点了确认,但装备数没有变化,可能没合成成功")
+                out.results.append(f"{text}:点了确认,但装备栏从 {len(before)} 件变成 {len(after)} 件(合成应该少 1 件),"
+                                   f"可能没合成成功,以截图为准;装备栏现在是 {format_items(after, coords=True)}")
                 out.observe = True
                 return None
             rest = Counter(i.name for i in before if i.index not in (a.item, a.onto))
             new = [i for i in after if (Counter(x.name for x in after) - rest)[i.name] > 0]
             product = f"{new[0].name or '认不出的装备'}(现在是 {new[0].index} 号)" if len(new) == 1 else "认不出的装备"
-            out.results.append(f"{text}({item.name}+{target.name}):合成了 {product};装备栏现在是 {format_items(after)}")
+            out.results.append(f"{text}({item.name or '认不出'}+{target.name or '认不出'}):合成了 {product};"
+                               f"装备栏现在是 {format_items(after)}")
             return max(a.item, a.onto)
         # 装备给角色
         src = (a.zone, a.index - 1)

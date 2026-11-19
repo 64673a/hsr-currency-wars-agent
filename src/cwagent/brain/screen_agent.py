@@ -17,8 +17,9 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from ..config import ModelEndpoint
 from ..knowledge.index import NameIndex, format_entities
 from ..llm import ImageInput, LLMError, LLMResponse, Message, ToolSpec, complete
-from ..memory import Memory
+from ..memory import Cues, Memory, recall
 from ..vision.ocr import TextBox
+from .ledger import LESSONS_TITLE
 
 PROMPTS = Path(__file__).parent / "prompts"
 MAX_ACTIONS = 12
@@ -30,6 +31,7 @@ ROLL_MAX = 30
 LOOKS = ("zoom", "inspect", "recheck")   # 只看不操作:单独提交,不占决策次数(有上限)
 LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备"}
 LOOKUPS = 8      # 一轮决策里最多查几次资料(lookup 工具),查完接着判断,不碰游戏(维护者 2026-11-18:3 次可能不够)
+LAYERS = {"tactical": "战术", "strategic": "战略", "chooser": "选择"}   # 决策角色 → 经验的 scope
 
 
 class RollTarget(BaseModel):
@@ -215,6 +217,7 @@ class Episode:
     pending: list[str] = field(default_factory=list)   # 等待执行结果的工具调用 id
     done: list[str] = field(default_factory=list)      # 本回合执行过的操作(给回合摘要)
     seen: set[str] = field(default_factory=set)        # 这段对话里已经给过描述的条目(外部 agent 整局共用一份)
+    lessons: set[str] = field(default_factory=set)     # 这段对话里已经给过原文的经验编号(外部 agent 整局共用一份)
     book: Any = None                                   # 本局档案(RunLedger):新出现的条目也追加进去
     waiting: bool = False                              # 上一轮模型只让等待
     cache_at: int = 0                                  # 第一条消息里本局经历的长度(在这里断开打缓存标记)
@@ -254,8 +257,8 @@ class Decision:
 
 
 def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str, dict[str, Memory]]:
-    """系统提示词和经验编号。经验和攻略由模型自己查(2026-11-18 维护者定):这里只放目录(编号 + 标题),全文用 lookup 取。
-    目录是全量的、整局不变,不是程序按局面挑的。"""
+    """系统提示词和经验编号。这里只放目录(编号 + 标题),全量、整局不变;攻略全文由模型用 lookup 取(2026-11-18),
+    经验原文在触发条件对上时由程序附上(2026-11-19 维护者:经验可以主动推),其余也能用 lookup 查。"""
     codes = {f"M{i}": m for i, m in enumerate((m for m in memories if m.status == "approved"), start=1)}
     catalog = "\n".join(f"- {code} [{m.kind}] {m.title}" for code, m in codes.items()) or "(暂无)"
     guide_list = "\n".join(f"- {g.code} {g.title[:30]} 主 C {'、'.join(g.carries) or '?'}" for g in guides.guides) \
@@ -272,6 +275,7 @@ class ScreenAgent:
         self.index = index
         self.memories = memories
         self.system, self.memory_codes = system_prompt(rules, memories, guides)
+        self.memory_by_id = {m.id: code for code, m in self.memory_codes.items()}
         # 查资料:Runner 接上(what, query) -> 结果文字;没接时 lookup 工具返回「没有可查的资料」
         self.lookup_handler: Callable[[str, str], str] | None = None
 
@@ -292,6 +296,16 @@ class ScreenAgent:
         if not found:
             return f"没有找到和「{query}」相关的经验"
         return "\n".join(f"{code} [{m.label()}] {m.title}\n{m.content.strip()}" for code, m in found)
+
+    def recall(self, cues: Cues) -> list[tuple[str, Memory]]:
+        """按触发条件挑当前适用的经验(已采纳的),返回(编号, 经验)。"""
+        hits = recall(list(self.memory_codes.values()), cues)
+        return [(self.memory_by_id[r.memory.id], r.memory) for r in hits]
+
+    @staticmethod
+    def lesson_text(code: str, m: Memory) -> str:
+        body = "\n  ".join(line.strip() for line in m.content.strip().splitlines())
+        return f"- {code} [{m.label()}] {m.title}\n  {body}"
 
     def endpoint(self, role: str) -> ModelEndpoint:
         return self.endpoints.get(role) or self.endpoints["default"]
@@ -339,13 +353,15 @@ class ScreenAgent:
 
     def opening(self, episode: Episode, boxes: list[TextBox], *, ledger, hints: str = "",
                 names: list[str] | None = None, nodes: set[str] | None = None) -> tuple[str, list[str]]:
-        """回合的第一条消息:本局档案 + 当前界面。返回(文字, 想起的经验 id);经验 2026-11-18 起由模型用 lookup 自己查,
-        这里不再自动附上,第二项总是空的(nodes 也不再用,留着兼容调用方)。
+        """回合的第一条消息:本局档案 + 当前界面。nodes 是当前和下一个节点的类型(经验按它触发)。
+        返回(文字, 附上的经验「编号 标题」)。
 
-        ledger 是本局档案(RunLedger)时(设计文档第 20.4 节):新出现的条目说明追加进档案里只追加的块,
-        档案渲染出来就带着它们,之后的回合不再当作新信息重发。ledger 是字符串时照旧把条目放在当前界面后面。"""
+        ledger 是本局档案(RunLedger)时(设计文档第 20.4 节):新出现的条目说明、第一次想起的经验追加进档案,
+        档案渲染出来就带着当前相关、当前适用的那部分。ledger 是字符串时把条目和经验放在当前界面后面。"""
         book = ledger if hasattr(ledger, "render") else None
         external = self.endpoint(episode.role).format == "external"
+        texts = [b.text for b in boxes]
+        present = {e.name for e in self.index.link(texts + (names or []))}
         if book is not None:
             episode.book = book
             book.relevant = self._relevant(book, boxes, names)
@@ -353,39 +369,66 @@ class ScreenAgent:
             # 外部 agent 保留整局对话,收到过的都算(和档案共用一份,回合中途新给的也记进去)
             episode.seen = book.delivered_entries if external else set(book.relevant)
             described = ""
+            present |= set(book.relevant) | {n for n in (book.environment, book.companion) if n}
+            texts += [book.intro, *book.facts]      # 开局界面、位面词条等原文里出现的名字(怪物词条「能量逃逸」等)
+        else:
+            described, _ = self._entities(boxes, names, episode)
+        hits = self.recall(Cues(entities=present, texts=[t for t in texts if t], nodes=set(nodes or ()),
+                                screen=episode.screen, layer=LAYERS.get(episode.role)))
+        if book is not None:
+            # 每个回合开场都按这一刻的局面重新判断适用的经验,不再适用的退出当前输入(档案里留着)
+            for code, m in hits:
+                book.add_lesson(code, self.lesson_text(code, m))
+            book.active = [code for code, _ in hits]
+            episode.lessons = book.lessons_sent if external else set(book.active)
             episode.cache_at = book.stable_len()
             full = book.render()
             head = [book.render_delta() if external else full]
             episode.snapshot = full
         else:
-            described, _ = self._entities(boxes, names, episode)
+            episode.lessons = {code for code, _ in hits}
             head = [ledger]
         parts = head + [
             f"## 当前界面\n程序判断的界面类型:{episode.screen}" + (f"\n{hints}" if hints else ""),
             episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes),
         ]
-        if book is None and described:
-            parts.append("## 界面上出现的条目\n" + described)
+        if book is None:
+            if described:
+                parts.append("## 界面上出现的条目\n" + described)
+            if hits:
+                parts.append(LESSONS_TITLE + "\n" + "\n".join(self.lesson_text(c, m) for c, m in hits))
         parts.append(self._ask(episode))
         text = "\n\n".join(p for p in parts if p)
         if book is not None:
             episode.snapshot += "\n\n" + "\n\n".join(parts[len(head):])
-        return text, []
+        return text, [f"{code} {m.title}" for code, m in hits]
 
     def observation(self, episode: Episode, results: list[str], boxes: list[TextBox], *, screen: str,
-                    hints: str = "", names: list[str] | None = None) -> str:
-        """回合内后续每轮:上一组操作的执行结果 + 现在的界面。"""
-        described, _ = self._entities(boxes, names, episode)
+                    hints: str = "", names: list[str] | None = None) -> tuple[str, list[str]]:
+        """回合内后续每轮:上一组操作的执行结果 + 现在的界面。新出现的条目(刷新商店后的角色、合成出的装备等)
+        对上了经验的触发条件、这段对话里还没给过的,把经验原文一起附上。返回(文字, 附上的经验「编号 标题」)。"""
+        described, new = self._entities(boxes, names, episode)
         parts = ["## 执行结果\n" + ("\n".join(f"- {r}" for r in results) or "(没有执行任何操作)"),
                  f"## 现在的界面\n程序判断的界面类型:{screen}" + (f"\n{hints}" if hints else ""),
                  episode.annotation or "## 界面文字(坐标, 文字)\n" + "\n".join(str(b) for b in boxes)]
         if described:
             parts.append("## 新出现的条目\n" + described)
+        hits = [(c, m) for c, m in self.recall(Cues(entities=new, layer=LAYERS.get(episode.role)))
+                if c not in episode.lessons] if new else []
+        if hits:
+            parts.append(LESSONS_TITLE.replace("## 相关经验", "## 新对上的经验") + "\n"
+                         + "\n".join(self.lesson_text(c, m) for c, m in hits))
+            episode.lessons.update(c for c, _ in hits)
+            if episode.book is not None:
+                for code, m in hits:
+                    episode.book.add_lesson(code, self.lesson_text(code, m))
+                    if code not in episode.book.active:
+                        episode.book.active.append(code)
         parts.append(self._ask(episode))
         text = "\n\n".join(parts)
         if episode.book is not None:
             episode.snapshot = episode.book.render() + "\n\n" + text
-        return text
+        return text, [f"{code} {m.title}" for code, m in hits]
 
     @staticmethod
     def _ask(episode: Episode) -> str:

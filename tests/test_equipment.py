@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -32,10 +33,16 @@ def templates(tmp_path):
 
 
 def screen(*seeds: int) -> Image.Image:
+    """假装备栏:每件装备和游戏里一样套一个 70x70 的方框(有没有东西靠方框判断)。"""
+    from PIL import ImageDraw
+
     img = Image.new("RGB", (1920, 1080), (60, 20, 40))
+    draw = ImageDraw.Draw(img)
     for n, seed in enumerate(seeds, start=1):
         x, y = cell_center(n)
-        img.paste(icon(seed).resize((58, 58)), (round(x * 1920) - 29, round(y * 1080) - 29))
+        cx, cy = round(x * 1920), round(y * 1080)
+        draw.rectangle((cx - 35, cy - 35, cx + 34, cy + 34), fill=(20, 20, 30), outline=(170, 170, 190), width=2)
+        img.paste(icon(seed).resize((58, 58)), (cx - 29, cy - 29))
     return img
 
 
@@ -287,7 +294,36 @@ def test_role_description_has_position_and_carry_stats(tmp_path):
     con.commit()
     con.close()
     text = NameIndex(path).link(["开拓者"])[0].text
-    assert "定位 辅助" in text and "「人气主播」〔辅助〕" in text and "出现在 1 篇的最终阵容,其中 0 篇是主 C" in text
+    assert "定位 辅助" in text and "「人气主播」〔辅助〕" in text and "最终阵容 1 篇有这个角色,其中 0 篇当主 C" in text
+    assert "攻略统计" not in NameIndex(path, guide_stats=False).link(["开拓者"])[0].text   # 关掉攻略时不带
+
+
+def test_role_stats_strength_position_and_partners():
+    """攻略统计(维护者 2026-11-19):使用占比和排名、前后台、主 C 配的辅助、辅助跟的主 C;身份不常见时不列搭配。"""
+    from cwagent.knowledge.index import role_stats
+
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE guides (data TEXT)")
+
+    def guide(use, front, back, carries, early=()):
+        board = {"front": [{"name": n} for n in front], "back": [{"name": n} for n in back]}
+        con.execute("INSERT INTO guides VALUES (?)", (json.dumps({
+            "use_count": use, "carries": carries, "final_board": board,
+            "example_boards": {"early": {"front": list(early), "back": []}}}),))
+
+    guide(900, ["那刻夏", "花火"], ["星期日"], ["那刻夏"])
+    guide(100, ["那刻夏", "花火"], ["刻律德菈"], ["那刻夏"])
+    guide(0, ["黄泉", "花火"], ["星期日"], ["黄泉"], early=["桂乃芬"])
+    stats = role_stats(con)
+    assert stats["那刻夏"].startswith("攻略统计:最终阵容 2 篇有这个角色,其中 2 篇当主 C;这些攻略的使用次数占全部的 100%,"
+                                      "在 4 个角色里排第 1")
+    assert "当主 C 时常配的辅助 花火、星期日、刻律德菈" in stats["那刻夏"] and "当辅助时" not in stats["那刻夏"]
+    assert "放前台 3 篇、后台 0 篇" in stats["花火"] and "当辅助时常配的主 C 那刻夏、黄泉" in stats["花火"]
+    assert "排第 1" in stats["花火"] and "排第 3" in stats["星期日"]               # 使用次数一样的并列
+    assert "当主 C" not in stats["花火"].split(";", 1)[1]
+    assert stats["黄泉"].startswith("攻略统计:最终阵容 1 篇有这个角色,其中 1 篇当主 C;最终阵容里")   # 使用次数 0 不算占比
+    assert "当主 C 时常配" not in stats["黄泉"]                         # 只有 1 篇,不够列搭配
+    assert stats["桂乃芬"] == "前中期阵容 1 篇(只在前中期出现,多是过渡)"
 
 
 def test_privilege_detected_by_v_shape_not_bright_pixels():
@@ -336,3 +372,33 @@ def test_two_simple_items_on_a_role_merge(db):
     assert ledger.equipped["景元"] == ["反重力皮靴", "轮滑鞋"]          # 进阶 + 简易不合成
     ledger.equip("景元", "轮滑鞋", book.merge)
     assert ledger.equipped["景元"] == ["反重力皮靴", "反重力皮靴"]      # 第二件简易装备和身上那件合成
+
+
+# ---------------------------------------------------------------- 实机装备栏(右侧 1720~1920、170~700 像素的截取)
+REAL = Path(__file__).parent / "fixtures" / "equipment"
+REAL_NAMES = {"350208": "光能电池", "350203": "和平手枪", "350202": "折叠小刀", "47030205": "杀红眼", "35030203": "武器大师",
+              "47030307": "斩首行动", "355200202": "持续伤害星徽", "35030506": "痛觉阻断芯片", "35030608": "光能盾牌",
+              "350201": "轮滑鞋", "350207": "以太钻头", "350602": "蓝钻", "35030808": "永动机", "355200802": "反击星徽"}
+
+
+def real_bar(name: str) -> Image.Image:
+    img = Image.new("RGB", (1920, 1080), (0, 0, 0))
+    img.paste(Image.open(REAL / name).convert("RGB"), (1720, 170))
+    return img
+
+
+@pytest.mark.parametrize("name, count", [("scripted-5.jpg", 5), ("scripted-first.jpg", 3), ("emblem-1.jpg", 1),
+                                         ("empty-curtain.jpg", 0), ("empty-stars.jpg", 0)])
+def test_real_bar_occupancy(tmp_path, name, count):
+    """有没有东西看方框,和认不认得出无关:没有模板时照样数对件数,空格(幕布、星空背景)不算。"""
+    items = EquipmentReader(tmp_path, {}).read(real_bar(name))
+    assert [i.index for i in items] == list(range(1, count + 1)) and all(i.name is None for i in items)
+
+
+def test_scripted_equipment_in_first_slot():
+    """2026-11-18 那局 1-9:开出星核猎手发的剧本装备(武器大师,右下角带羁绊角标)排到第 1 格,
+    原来读到它就停,整个装备栏成了「空」、合成被误报没成功。第 3 格是知识库里没有的东西,报认不出。"""
+    r = EquipmentReader(REAL / "templates", REAL_NAMES)
+    assert [i.name for i in r.read(real_bar("scripted-first.jpg"))] == ["武器大师", "斩首行动", None]
+    assert [i.name for i in r.read(real_bar("scripted-5.jpg"))] == ["光能电池", "和平手枪", "折叠小刀", "杀红眼", None]
+    assert [i.name for i in r.read(real_bar("emblem-1.jpg"))] == ["持续伤害星徽"]    # 星徽图标铺满整格

@@ -7,7 +7,11 @@
 实测:轮滑鞋 0.88、红钻 0.68(第二名 0.43),空格最高 0.28;4 格约 0.3 秒。
 特权版效果翻倍,官方图标和普通版完全一样,游戏里图标右下角多一个 V(维护者告知)。比法:格子右下角减去
 匹配上的官方图标同一位置,多出来的亮色像素够多就算有 V。【待核实】门槛按 V 的大小估的,还没用实机特权装备校准。
-合成:把一件拖到另一件上,弹出「A + B = C」确认框,点 ✓ 后成品放在两者中编号小的那格。
+合成:把一件拖到另一件上,弹出「A + B = C」确认框,点 ✓ 后装备栏会重新排序(成品不一定在原来的编号上)。
+
+格子里有没有东西和认出是什么分开判断(2026-11-19):原来认不出就当空格、读到这里为止,开出星核猎手后
+发放的剧本装备(右下角带羁绊角标)排到第 1 格时,整个装备栏被读成「空」,合成也被误报成没成功(2026-11-18 那局)。
+现在有没有东西看格子的方框边线,认不出的照样占一格、报「认不出」;比图标时右下角的角标不参与比较。
 """
 
 from __future__ import annotations
@@ -18,7 +22,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
-from PIL import Image
 
 COL_X = 1845          # 第一列格子中心(像素)
 COL_STEP = 79.75      # 往左一列
@@ -27,7 +30,12 @@ ROW_STEP = 76.5
 ROWS = 6
 COLS = 4
 HALF = 35             # 格子 70x70
-SIZES = (52, 58, 64)  # 官方图标(128x128)在格子里显示的大小
+SIZES = (52, 58, 64, 70)  # 官方图标(128x128)在格子里显示的大小;进阶装备、星徽的图标铺满整格(70)
+BADGE = 0.32          # 比图标时右下角这么大比例不参与:剧本装备右下角有羁绊角标(带角标的武器大师 0.27→0.60)
+FRAME_R = 40          # 判断有没有东西:看格子中心 ±40 像素里方框的四条边
+FRAME_BAND = (30, 40)  # 边线离中心的距离范围(格子 70x70,边线在 ±35 附近)
+FRAME_EDGE = 40       # 算作边线的亮度梯度
+FRAME_HIT = 0.6       # 四条边都要有这么大比例的像素是边线(实测有装备的 0.96~1.0,空格最高 0.16)
 MIN_SCORE = 0.5
 MIN_GAP = 0.1         # 第一名要比第二名(不同装备)高出这么多,才算认得出
 CONFIRM = Path(__file__).resolve().parents[1] / "assets" / "equipment" / "compose-confirm.png"
@@ -85,15 +93,29 @@ class EquipmentReader:
                 a = t[:, :, 3:4] / 255.0
                 t = (t[:, :, :3] * a + np.array([30, 24, 28]) * (1 - a)).astype(np.uint8)
             self.templates[p.stem] = [cv2.resize(t, (s, s), interpolation=cv2.INTER_AREA) for s in SIZES]
+        self.masks = {s: _badge_mask(s) for s in SIZES}
 
     def identify(self, cell: np.ndarray) -> tuple[str | None, float, tuple | None]:
         """返回(装备 id, 分数, 匹配位置)。特权版和普通版的官方图标完全一样,按「家族」(去掉「·特权」)比,
-        认出时报普通版;是不是特权版另看右下角的 V。"""
+        认出时报普通版;是不是特权版另看右下角的 V。
+
+        先整张图标比;认不出再遮掉右下角(角标)比一次。带遮罩的比法慢 3 倍多(每格约 0.27 秒),
+        只给认不出的格子用。"""
+        found = self._rank(cell, masked=False)
+        return found if found[0] is not None else self._rank(cell, masked=True)
+
+    def _rank(self, cell: np.ndarray, masked: bool) -> tuple[str | None, float, tuple | None]:
         best: dict[str, tuple[float, str, tuple]] = {}
         for k, ts in self.templates.items():
             score, where = -1.0, None
             for t in ts:
-                r = cv2.matchTemplate(cell, t, cv2.TM_CCOEFF_NORMED)
+                if t.shape[0] > cell.shape[0] or t.shape[1] > cell.shape[1]:
+                    continue
+                if masked:
+                    r = cv2.matchTemplate(cell, t, cv2.TM_CCOEFF_NORMED, mask=self.masks[t.shape[0]])
+                    r = np.nan_to_num(r, nan=-1.0, posinf=-1.0, neginf=-1.0)   # 遮罩下的平坦区域会算出 inf
+                else:
+                    r = cv2.matchTemplate(cell, t, cv2.TM_CCOEFF_NORMED)
                 _, mx, _, loc = cv2.minMaxLoc(r)
                 if mx > score:
                     score, where = float(mx), (t, loc)
@@ -138,27 +160,49 @@ class EquipmentReader:
         return np.asarray(mask) > 0
 
     def read(self, image: Image.Image) -> list[Item]:
-        """从第 1 格往后读,连续两格认不出(空格)就停。"""
+        """从第 1 格往后读到第一个空格为止(装备从第 1 格起连续排)。有东西但认不出的格子报 name=None,照样占一格。"""
         img = _bgr(image)
         items: list[Item] = []
-        misses = 0
         for index in range(1, ROWS * COLS + 1):
             x, y = cell_center(index)
             cx, cy = round(x * 1920), round(y * 1080)
+            if not occupied(img, cx, cy):
+                break
             cell = img[cy - HALF:cy + HALF, cx - HALF:cx + HALF]
             key, score, where = self.identify(cell)
             if key is None:
-                misses += 1
-                if misses >= 2 or score < 0.35:   # 很低的分数就是空格,不再往后找
-                    break
                 items.append(Item(index, x, y, None, None, score=score))
                 continue
-            misses = 0
             items.append(Item(index, x, y, key, self.names[key], self.categories.get(key, ""), score,
                               privileged=self.has_v(cell, where)))
-        while items and items[-1].name is None:
-            items.pop()
         return items
+
+
+def _badge_mask(size: int) -> np.ndarray:
+    mask = np.full((size, size), 255, np.uint8)
+    cut = round(size * BADGE)
+    mask[size - cut:, size - cut:] = 0
+    return mask
+
+
+def occupied(img: np.ndarray, cx: int, cy: int) -> bool:
+    """(cx, cy) 这一格有没有东西:装备格子有一圈方框(不管什么品质、认不认得出),四条边都是贴着格子的直线;
+    空格只有背景(幕布、星空),找不出四条直边。img 是 1920x1080 的 BGR。"""
+    r = FRAME_R
+    patch = img[cy - r:cy + r, cx - r:cx + r]
+    if patch.shape[:2] != (2 * r, 2 * r):
+        return False
+    g = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gx = np.abs(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)) > FRAME_EDGE
+    gy = np.abs(cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)) > FRAME_EDGE
+    span = slice(r - 25, r + 25)
+    for sign in (-1, 1):
+        offsets = [r + sign * o for o in range(*FRAME_BAND)]
+        if max(float(gy[o, span].mean()) for o in offsets) < FRAME_HIT:      # 上 / 下边
+            return False
+        if max(float(gx[span, o].mean()) for o in offsets) < FRAME_HIT:      # 左 / 右边
+            return False
+    return True
 
 
 CONFIRM_MIN = 0.7          # 模板匹配的门槛(原来 0.8;界面稍微变一点就匹配不上,合成会误报「不能合成」)

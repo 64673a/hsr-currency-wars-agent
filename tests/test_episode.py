@@ -25,8 +25,8 @@ def agent():
     return ScreenAgent(endpoint(), FakeIndex(), [], "规则")
 
 
-def test_memories_are_a_catalog_and_looked_up(tmp_path):
-    """经验由模型自己查(维护者 2026-11-18):系统提示词里只有目录(编号 + 标题),开场不再自动附上原文,
+def test_memories_catalog_pushed_and_looked_up(tmp_path):
+    """系统提示词里是经验目录(编号 + 标题);触发条件对上的经验程序在开场附上原文(维护者 2026-11-19),
     lookup memory 按编号或关键词取原文(标题里对上的排前面)。"""
     from cwagent.memory import MemoryStore
 
@@ -37,7 +37,8 @@ def test_memories_are_a_catalog_and_looked_up(tmp_path):
     book = RunLedger(environment="经济严重过热")
     ep = Episode(id=1, key=("prepare", "1-1"), screen="prepare", node="1-1", role="tactical", max_turns=4)
     text, recalled = a.opening(ep, [], ledger=book, nodes={"reward"})
-    assert recalled == [] and "经验" not in text
+    assert any(r.startswith(f"{piggy} 次元扑满主题") for r in recalled)          # 选的投资环境触发
+    assert "## 相关经验" in text and "掉落超多战利品" in text
     assert a.lookup_memory(piggy.lower()).startswith(f"{piggy} [打法|已采纳")
     found = a.lookup_memory("扑满")
     assert found.splitlines()[0].endswith("抓次元扑满要带「基础伤害」的羁绊或击破角色,破韧能防止扑满逃跑") or \

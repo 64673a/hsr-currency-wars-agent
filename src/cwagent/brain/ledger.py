@@ -4,9 +4,9 @@
   战斗结果、开局信息、本局学到的教训也记在这里。保留整局所有回合(维护者要求),一局大约 60~90 个回合、
   两三万字。它放在回合第一条消息的最前面,只增不改,有利于前缀稳定(能不能命中缓存还看厂商)。
 - 整局已知事实:程序从界面读到的,出现新事实时追加,放在经历后面(追加时不打断经历这段前缀)。
-- 条目说明:档案里留全(整局见过的都在),每个回合开场只发当前相关的那部分
-  (2026-11-18:原来只加不删,没选的投资环境、商店里没买的角色一直带到局末)。经验和攻略 2026-11-18 起由模型用
-  lookup 自己查,不再由档案附上。
+- 条目说明、相关经验:档案里留全(整局见过、想起过的都在),每个回合开场只发当前相关、当前适用的那部分
+  (2026-11-18:原来只加不删,没选的投资环境、商店里没买的角色一直带到局末)。经验 2026-11-19 起又由程序按触发条件
+  主动附上(维护者:2026-11-18 那局上了试用昔涟,模型没去查「要戴永动机」那条);攻略仍由模型用 lookup 自己查。
 - 当前状态:模型挂上的攻略、角色身上的装备、没开的道具、模型的笔记,随时会变,放在最后。
 
 设计见 docs/TECH_DESIGN.md 第 8.5、20.4 节。
@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 MAX_LINE = 600       # 本局经历每条最长
 MAX_DIRECTION = 800
+LESSONS_TITLE = "## 相关经验(程序按经验的触发条件和当前局面挑的原文;可能不完整或有错,结合局面判断)"
 
 # 位面详情里节点说明开头的名字 → 节点类型(记忆的 triggers.nodes 用这些英文名)。
 # 只看节点号后面紧跟的名字:「1-8 幕后茶歇 特殊的奖励节点……」后文里也有「奖励节点」,不能按全文匹配
@@ -75,14 +76,18 @@ class RunLedger:
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)         # 本局经历,只追加
     facts: list[str] = field(default_factory=list)           # 整局已知事实:程序从界面读到的(开局、位面节点与词条、拿到的投资)
-    # 条目说明:档案里留全,开场只发当前那部分(设计文档第 20.4 节)
+    # 条目说明和经验:档案里留全,开场只发当前那部分(设计文档第 20.4 节)
     entries: dict[str, str] = field(default_factory=dict)    # 条目名 → 官方描述(整局见过的都留着)
     relevant: list[str] = field(default_factory=list)        # 当前相关的条目名(回合开场时重算)
+    lessons: dict[str, str] = field(default_factory=dict)    # 经验编号 → 原文(整局想起过的都留着)
+    active: list[str] = field(default_factory=list)          # 当前适用的经验编号(回合开场时重新判断)
     strategies: list[str] = field(default_factory=list)      # 拿到的投资策略
     spotlights: list[str] = field(default_factory=list)      # 选过的主角光环
     held: list[str] = field(default_factory=list)            # 道具栏里的道具(最近一次读到的)
     delivered: dict[str, int] = field(default_factory=dict)  # 外部 agent 已接收的经历、事实条数
     delivered_entries: set[str] = field(default_factory=set)        # 外部 agent 收到过说明的条目
+    delivered_lessons: tuple[str, ...] = ()                  # 外部 agent 上次收到的当前适用经验
+    lessons_sent: set[str] = field(default_factory=set)      # 外部 agent 收到过原文的经验
     delivered_state: dict[str, str] = field(default_factory=dict)   # 外部 agent 上次收到的当前状态各小节
 
     def node(self, name: str) -> NodeRecord:
@@ -109,6 +114,12 @@ class RunLedger:
         if not name or name in self.entries:
             return False
         self.entries[name] = text.strip()
+        return True
+
+    def add_lesson(self, code: str, text: str) -> bool:
+        if not code or code in self.lessons:
+            return False
+        self.lessons[code] = text.strip()
         return True
 
     def kept(self) -> list[str]:
@@ -182,14 +193,19 @@ class RunLedger:
         current = [self.entries[n] for n in self.relevant if n in self.entries]
         return "## 条目说明(和当前局面相关的官方描述)\n" + "\n".join(current) if current else ""
 
+    def render_lessons(self) -> str:
+        current = [self.lessons[c] for c in self.active if c in self.lessons]
+        return (LESSONS_TITLE + "\n" + "\n".join(current)) if current else ""
+
     def render(self) -> str:
-        """从稳定到易变:本局经历(只追加)、整局已知事实(偶尔追加)、当前相关的条目说明、当前状态。"""
-        parts = [self.render_history(), self.render_facts(), self.render_entries(), self.render_state()]
+        """从稳定到易变:本局经历(只追加)、整局已知事实(偶尔追加)、当前相关的条目说明和经验、当前状态。"""
+        parts = [self.render_history(), self.render_facts(), self.render_entries(), self.render_lessons(),
+                 self.render_state()]
         return "\n\n".join(p for p in parts if p)
 
     def render_delta(self) -> str:
-        """外部 agent 保留历史对话,这里只交付上次之后的变化:新增的经历和事实、还没收到过的当前相关条目;
-        当前状态只发变了的小节。"""
+        """外部 agent 保留历史对话,这里只交付上次之后的变化:新增的经历和事实、还没收到过的当前相关条目、
+        变了的适用经验(明确说哪些不再适用:它已经收到的旧经验不会因为这边换了列表就消失);当前状态只发变了的小节。"""
         parts = []
         if not self.delivered:
             parts.append("## 本局\n难度 " + (self.difficulty or "?"))
@@ -203,6 +219,16 @@ class RunLedger:
         if new:
             parts.append("## 新条目说明\n" + "\n".join(self.entries[n] for n in new))
             self.delivered_entries.update(new)
+        active = tuple(c for c in self.active if c in self.lessons)
+        if active != self.delivered_lessons:
+            if active:
+                lines = [self.lessons[c] if c not in self.lessons_sent
+                         else self.lessons[c].splitlines()[0] + "(原文之前给过)" for c in active]
+                parts.append("## 当前适用的经验(已更新;之前给过、这里没列出的不再适用)\n" + "\n".join(lines))
+            else:
+                parts.append("## 当前适用的经验\n(之前给过的经验都不再适用)")
+            self.lessons_sent.update(active)
+            self.delivered_lessons = active
         sections = self.state_sections()
         changed = [(t, c) for t, c in sections if self.delivered_state.get(t) != c]
         gone = [t for t in self.delivered_state if t not in {t for t, _ in sections}]
