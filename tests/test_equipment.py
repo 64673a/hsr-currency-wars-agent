@@ -424,3 +424,17 @@ def test_scripted_boots():
     items = r.read(img)
     assert [(i.name, i.scripted, i.privileged) for i in items] == [("反重力皮靴", True, False)]
     assert format_items(items) == "1号 反重力皮靴(星核猎手剧本装备)"
+
+
+def test_aha_equipment_is_not_privileged():
+    """欢愉的阿哈装备右下角是粉色面具角标,原来被当成特权的 V(2026-11-19 那局 2-5 以太钻头、3-2 轮滑鞋)。"""
+    r = EquipmentReader(REAL / "templates", REAL_NAMES, {"350207": "简易装备", "350201": "简易装备"})
+    for fixture, name in (("aha-drill.png", "以太钻头"), ("aha-skates.png", "轮滑鞋")):
+        img = Image.new("RGB", (960, 540))
+        img.paste(Image.open(REAL / fixture), (860, 85))
+        items = r.read(img)
+        assert [(i.name, i.aha, i.scripted, i.privileged) for i in items] == [(name, True, False, False)]
+        assert format_items(items) == f"1号 {name}(阿哈装备)"
+    img = Image.new("RGB", (960, 540))
+    img.paste(Image.open(REAL / "scripted-boots.png"), (860, 85))
+    assert [(i.aha, i.scripted) for i in r.read(img)] == [(False, True)]       # 剧本装备的角标不算阿哈

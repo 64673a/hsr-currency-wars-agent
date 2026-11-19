@@ -40,6 +40,9 @@ MIN_GAP = 0.1         # 第一名要比第二名(不同装备)高出这么多,�
 CONFIRM = Path(__file__).resolve().parents[1] / "assets" / "equipment" / "compose-confirm.png"
 SCRIPT_BADGE = CONFIRM.with_name("script-badge.png")
 SCRIPT_BADGE_SCORE = 0.75
+# 欢愉的【阿哈装备】右下角是粉色面具角标(2026-11-19 那局 2-5、3-2 的以太钻头、轮滑鞋,原来被当成特权的 V)。
+# 样本只有两张:两张互相 0.89~1.00,剧本装备和普通装备最高 0.59
+AHA_BADGE = CONFIRM.with_name("aha-badge.png")
 PRIVILEGE = "·特权"
 # 特权版和普通版的官方图标是同一张图,区别只在格子外面套的那层边框(维护者 2026-11-16 从活动页的
 # card-border-*.svg 看出来):特权边框的右下角多一个白色 V,普通边框没有。样张存在 assets/borders/,
@@ -67,6 +70,7 @@ class Item:
     score: float = 0.0
     privileged: bool = False   # 右下角有 V:特权版,效果翻倍
     scripted: bool = False    # 右下角有星核猎手角标
+    aha: bool = False         # 右下角有欢愉的面具角标:阿哈装备
 
 
 def cell_center(index: int) -> tuple[float, float]:
@@ -87,6 +91,7 @@ class EquipmentReader:
         self.names = names
         self.categories = categories or {}
         self.script_badge = cv2.imread(str(SCRIPT_BADGE), cv2.IMREAD_GRAYSCALE)
+        self.aha_badge = cv2.imread(str(AHA_BADGE), cv2.IMREAD_GRAYSCALE)
         self.templates: dict[str, list[np.ndarray]] = {}
         for p in sorted(Path(templates_dir).glob("*.png")):
             t = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
@@ -136,10 +141,18 @@ class EquipmentReader:
 
     def has_script_badge(self, cell: np.ndarray) -> bool:
         """在格子右下角匹配星核猎手角标。"""
-        if self.script_badge is None:
+        return self._badge(cell, self.script_badge)
+
+    def has_aha_badge(self, cell: np.ndarray) -> bool:
+        """在格子右下角匹配阿哈装备的面具角标。"""
+        return self._badge(cell, self.aha_badge)
+
+    @staticmethod
+    def _badge(cell: np.ndarray, template: np.ndarray | None) -> bool:
+        if template is None:
             return False
         corner = cv2.cvtColor(cell[42:, 45:], cv2.COLOR_BGR2GRAY)
-        matches = cv2.matchTemplate(corner, self.script_badge, cv2.TM_CCOEFF_NORMED)
+        matches = cv2.matchTemplate(corner, template, cv2.TM_CCOEFF_NORMED)
         return float(matches.max()) >= SCRIPT_BADGE_SCORE
 
     @staticmethod
@@ -182,11 +195,13 @@ class EquipmentReader:
             cell = img[cy - HALF:cy + HALF, cx - HALF:cx + HALF]
             key, score, _ = self.identify(cell)
             scripted = self.has_script_badge(cell)
+            aha = not scripted and self.has_aha_badge(cell)
             if key is None:
-                items.append(Item(index, x, y, None, None, score=score, scripted=scripted))
+                items.append(Item(index, x, y, None, None, score=score, scripted=scripted, aha=aha))
                 continue
+            # 羁绊角标盖在右下角,和特权的 V 在同一个位置,有角标就不看 V
             items.append(Item(index, x, y, key, self.names[key], self.categories.get(key, ""), score,
-                              privileged=not scripted and self.has_v(cell), scripted=scripted))
+                              privileged=not (scripted or aha) and self.has_v(cell), scripted=scripted, aha=aha))
         return items
 
 
@@ -258,7 +273,7 @@ def format_items(items: list[Item], coords: bool = False) -> str:
         text = f"{i.index}号 {i.name or '认不出'}"
         if i.privileged:
             text += "·特权(效果翻倍)"
-        category = "星核猎手剧本装备" if i.scripted else i.category
+        category = "星核猎手剧本装备" if i.scripted else "阿哈装备" if i.aha else i.category
         if category:
             text += f"({category})"
         return text + (f" ({i.x:.3f},{i.y:.3f})" if coords else "")
