@@ -111,3 +111,35 @@ def test_summary_and_statistics_have_separate_retry_budgets(tmp_path):
         for _ in range(4):
             assert r.reflex("previous_run", None, boxes, {}, set())[0].type == "click_text"
     assert r.reflex("previous_run", None, boxes, {}, set())[0].type == "pause"
+
+
+def _page(*texts):
+    return [TextBox(t, .5, .1 + .05 * i, .08, .03, .9) for i, t in enumerate(texts)]
+
+
+# 实机记录里的结算页(OCR 原文,坐标从略)
+FINAL_WIN = _page("10", "挑战成功", "3-7", "首领", "火热连胜", "×15", "挑战进度", "100", "前往结算")   # 20261119-102131 第 238 步
+FINAL_LOSS = _page("33", "挑战结束", "3-7", "首领", "挑战进度", "-24①", "前往结算")                 # 20261118-094054 第 192 步
+HP_OUT = _page("12", "挑战结束", "2-1 战斗", "挑战进度", "-22①", "前往结算")                         # 20261114-092016 第 42 步
+EVAL_WIN = _page("挑战成功", "小队生命值❤100", "对局评价", "SSS", "下一步")                           # 20261119-102131 第 240 步
+
+
+def test_result_pages_follow_m7a():
+    """M7A:带「继续挑战」或「前往结算」的是节点结算,程序点按钮;对局在带「对局评价」的整局结算页才结束。
+    原来最终首领打赢的那页被认成 other 交给模型,打输的那页直接当成整局结束、没等到整局结算页。"""
+    from cwagent.orchestrator.screens import match_outcome
+
+    for boxes in (FINAL_WIN, FINAL_LOSS, HP_OUT):
+        assert classify(boxes) == "node_result"
+    assert classify(EVAL_WIN) == "settlement" and match_outcome(EVAL_WIN) == "通关"
+    assert classify(old_result()) == "settlement" and match_outcome(old_result()) == "失败"
+
+
+def test_final_result_page_leads_to_settlement_and_outcome(tmp_path):
+    r = Runner(None, None, Trace(tmp_path / "run"), ocr=object(), settle=False)
+    [action] = r.reflex("node_result", None, FINAL_WIN, {}, set())
+    assert (action.type, action.text) == ("click_text", "前往结算")
+    r.in_run = True
+    record = {}
+    r.reflex("settlement", None, EVAL_WIN, record, set())
+    assert r.outcome == "通关" and record["note"] == "对局结束:通关"

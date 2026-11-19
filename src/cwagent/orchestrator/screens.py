@@ -7,6 +7,21 @@ import re
 from ..vision.ocr import TextBox, find, has
 
 
+RESULT_TITLE = (0.21, 0.12, 0.49, 0.26)    # 结算页标题一带(M7A 的 RESULT_TITLE,1920x1080 下 410,135~1350,410)
+MATCH_WINS = ("挑战成功", "对局胜利", "晋升成功")             # 整局结算页的标题(M7A)
+MATCH_LOSSES = ("挑战失败", "对局失败", "晋升失败")
+MATCH_TITLES = MATCH_WINS[1:] + MATCH_LOSSES[1:]             # 只有整局结算才有的标题
+
+
+def match_outcome(boxes: list[TextBox]) -> str | None:
+    """整局结算页上的胜负:通关 / 失败,认不出返回 None。"""
+    if find(boxes, f"^({'|'.join(MATCH_LOSSES)})$") is not None:
+        return "失败"
+    if find(boxes, f"^({'|'.join(MATCH_WINS)})$") is not None:
+        return "通关"
+    return None
+
+
 def _top(boxes: list[TextBox], pattern: str, y1: float = 0.12) -> bool:
     """界面标题一带(顶部居中)有没有这段文字。左侧羁绊列表里也有「奇兽花园」「开拓银轨」这类名字,要排除。"""
     return find(boxes, pattern, region=(0.28, 0.0, 0.48, y1)) is not None
@@ -65,16 +80,16 @@ def classify(boxes: list[TextBox]) -> str:
         return "empty_front"
     if page is not None:
         return "previous_run"
-    if find(boxes, "^前往结算$") and find(boxes, "挑战结束"):   # 小队生命耗尽,整局失败(M7A)
+    # 整局结算:「挑战成功 / 挑战失败」带「对局评价」那一页,对局到这里才算结束;晋升赛等的标题是「对局胜利」等(M7A)
+    if find(boxes, "对局评价|对局总结") or find(boxes, f"^({'|'.join(MATCH_TITLES)})$", region=RESULT_TITLE):
         return "settlement"
-    if find(boxes, "^继续挑战$") and find(boxes, "挑战成功|挑战结束|获得金币总览"):
+    # 每场战斗的结算:最终首领打完、小队生命耗尽时按钮是「前往结算」,其他是「继续挑战」(M7A 都算节点结算)
+    if find(boxes, "^继续挑战$|^前往结算$") and find(boxes, "挑战成功|挑战失败|挑战结束|获得金币总览"):
         return "node_result"
     if has(boxes, "本场对局首领") and find(boxes, "^下一步$"):
         return "run_intro"
     if has(boxes, "是否中断挑战"):
         return "quit_dialog"
-    if find(boxes, "对局评价|对局总结"):
-        return "settlement"
     # 进度文字前面常带一个被认成字母的图标,如「X1-3 0%」
     if find(boxes, "^战斗阶段$|^战斗开始$|特殊机制生效中|^(我方|敌方)行动中$|^总伤害$") or find(
             boxes, r"^\D?[1-3]-\d{1,2}\s*\d{1,3}%$"):

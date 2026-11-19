@@ -100,7 +100,7 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
     try:
         result = runner.run(opts)
     finally:
-        runner.trace.meta(result=result, ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        runner.trace.meta(result=result, outcome=runner.outcome, ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         runner.trace.close()
         try:
             from ..replay import report

@@ -62,6 +62,7 @@ from .screens import (
     SPOTLIGHT_LAYOUT,
     TEA_BREAK_HINT,
     classify,
+    match_outcome,
     companion_banner,
     companion_name,
     ENV_REFRESHES,
@@ -275,6 +276,7 @@ class Runner:
         self.in_run = False  # 本次运行是否已经开局(用来区分上一局遗留的结算界面)
         self.entry = EntryNavigator()
         self._settlement_tries = 0
+        self.outcome: str | None = None    # 整局结算页上认出的胜负:通关 / 失败
         self._result_page: str | None = None
         self._result_tries = 0
         self._same = 0       # 连续几步在同一界面、画面几乎没变且做的不是等待
@@ -1028,17 +1030,19 @@ class Runner:
                     return [Action(type="click_text", text="继续进度", reason="接回已保存的标准博弈")]
                 return [Action(type="pause", reason="已有对局的模式未确认为标准博弈,保留进度")]
             case "settlement":
-                record["note"] = "对局结束" if self.in_run else "处理启动前的旧局结算"
+                if self.in_run:
+                    self.outcome = match_outcome(boxes) or self.outcome
+                record["note"] = f"对局结束:{self.outcome or '胜负没认出'}" if self.in_run else "处理启动前的旧局结算"
                 if not self.in_run:
                     self._settlement_tries += 1
                     if self._settlement_tries > 4:
                         return [Action(type="pause", reason="旧局结算多次尝试仍未推进,保留当前页面")]
-                if find(boxes, "^前往结算$"):
-                    return [Action(type="click_text", text="前往结算", reason="整局失败")]
                 if not self.in_run and find(boxes, "对局评价|对局总结") and find(boxes, "^下一步$") is None:
                     return [Action(type="click", x=0.5, y=0.832, reason="离开启动前的旧局结算页")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
+                if find(boxes, "^前往结算$"):
+                    return [Action(type="click_text", text="前往结算", reason="最后一场打完或小队生命耗尽,去整局结算")]
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
             case "deploy_confirm":
                 # 出战时「可出战角色人数未达上限」(设计文档第 9 节):这个节点第一次弹就取消、告诉模型;模型看过以后
