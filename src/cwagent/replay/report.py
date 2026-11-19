@@ -14,8 +14,12 @@ from pathlib import Path
 from ..brain.ledger import node_types
 
 RESULT_BUTTONS = ("继续挑战", "前往结算")   # 每场战斗的结算画面;最终首领打完是「前往结算」(画面分类认成 other)
+NAVIGATION = r"点击「(前往结算|下一步|继续挑战|返回|关闭)」"   # 没见过的界面上只是翻页的点击,不算选择
 CHOICE_NAMES = {"environment_choice": "投资环境", "strategy_choice": "投资策略", "supply": "补给",
-                "encounter_choice": "遭遇", "spotlight_choice": "主角光环", "tea_break": "幕后茶歇"}
+                "encounter_choice": "遭遇", "spotlight_choice": "主角光环", "tea_break": "幕后茶歇",
+                "spotlight_replace": "替换主角光环", "hack": "骇入效果", "dance": "梦境交织共舞", "ranger": "巡海游侠任命",
+                "garden": "奇兽花园", "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备",
+                "other": "其他界面"}
 
 
 @dataclass
@@ -124,9 +128,19 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
             rw = row(current)
             rw.calls += 1
             rw.tokens += _int((decision.get("usage") or {}).get("input_tokens")) or 0
+        actions = [str(a) for a in (r.get("actions") or [])]
+        picks: list[str] = []
         if screen in CHOICE_NAMES and decision:
-            picked = "、".join(str(a) for a in (r.get("actions") or []) if "点击" in str(a))[:80]
-            text = f"{CHOICE_NAMES[screen]}:{picked or decision.get('summary') or ''}".rstrip(":")
+            # 没见过的界面(茶歇之后的选项等)只记点了哪段文字,按坐标点的看不出选了什么
+            clicked = [a for a in actions if ("点击「" if screen == "other" else "点击") in a]
+            if screen == "other" and all(re.search(NAVIGATION, a) for a in clicked):
+                clicked = []
+            picked = "、".join(clicked)[:80]
+            if picked or screen != "other":
+                picks.append(f"{CHOICE_NAMES[screen]}:{picked or decision.get('summary') or ''}".rstrip(":"))
+        # 备战里从武装箱、聘用书等道具里拿的东西也会改变阵容
+        picks += [f"道具:{a.split(':', 1)[1]}" for a in actions if "的道具里拿" in a and ":" in a]
+        for text in picks:
             if r.get("node"):
                 row(r["node"]).choices.append(text)
             else:

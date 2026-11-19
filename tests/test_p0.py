@@ -388,3 +388,20 @@ def test_aha_banner_is_waited_out(tmp_path):
     r = runner_for(sim, tmp_path)
     acts = r.reflex("other", None, FakeOcr(sim)(sim.grab().image), {}, set())
     assert [a.type for a in acts] == ["wait"]
+
+
+def test_node_report_lists_more_choices(tmp_path):
+    """骇入、巡海游侠任命、道具里拿的东西、没见过的界面上点的文字也记进「选择」;只是翻页的点击不记(2026-11-19 报告 R6)。"""
+    steps = [
+        {"step": 1, "screen": "hack", "node": "1-1", "decision": {"turn": 1}, "actions": ["点击「数据拷贝仪LV.1」", "点击「确认选择」"]},
+        {"step": 2, "screen": "prepare", "node": "1-1", "decision": {"turn": 1},
+         "actions": ["从备战席6号的道具里拿「量产型装甲」:拿到 量产型装甲(来自简易武装箱)", "出战"]},
+        {"step": 3, "screen": "ranger", "node": "1-1", "decision": {"turn": 1}, "actions": ["点击「银狼LV.999」", "点击「确认选择」"]},
+        {"step": 4, "screen": "other", "node": "1-1", "decision": {"turn": 1}, "actions": ["点击「精雕细琢慢慢画。」"]},
+        {"step": 5, "screen": "other", "node": "1-1", "decision": {"turn": 1}, "actions": ["点击 (0.600,0.850)"]},
+        {"step": 6, "screen": "other", "node": None, "decision": {"turn": 1}, "actions": ["点击「前往结算」"]},
+    ]
+    (tmp_path / "steps.jsonl").write_text("\n".join(json.dumps(s, ensure_ascii=False) for s in steps), encoding="utf-8")
+    [row] = report.node_rows(report._steps(tmp_path))
+    assert row.choices == ["骇入效果:点击「数据拷贝仪LV.1」、点击「确认选择」", "道具:拿到 量产型装甲(来自简易武装箱)",
+                           "巡海游侠任命:点击「银狼LV.999」、点击「确认选择」", "其他界面:点击「精雕细琢慢慢画。」"]
