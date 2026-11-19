@@ -53,6 +53,10 @@ class EquipmentBook:
     def category(self, name: str) -> str:
         return self.categories.get(self.by_name.get(family(name), ""), "")
 
+    def recipe(self, name: str) -> list[tuple[str, str]]:
+        """按成品名查组成材料。"""
+        return sorted(pair for pair, product in self.recipes.items() if product == name)
+
     def merge(self, a: str, b: str) -> str | None:
         """两件简易装备在角色身上合成的进阶装备(角色身上已有一件简易装备,再装一件就会合成);不是两件简易装备返回 None。"""
         if self.category(a) != "简易装备" or self.category(b) != "简易装备":

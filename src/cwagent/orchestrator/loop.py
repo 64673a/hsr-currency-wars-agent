@@ -679,7 +679,7 @@ class Runner:
             self._set_guide(g)
 
     def lookup(self, what: str, query: str) -> str:
-        """lookup 工具:查攻略、攻略全文、经验、攻略常配装备。只查资料,不操作游戏。接口模型在一轮决策里调用
+        """lookup 工具查攻略、经验和装备资料。接口模型在一轮决策里调用
         (ScreenAgent.lookup_handler),外部 agent 通过 MCP 调用;查过的都记下来,写进下一条决策记录。"""
         out = self._lookup(what, (query or "").strip())
         self._lookups.append({"what": what, "query": query, "result": out})
@@ -701,6 +701,18 @@ class Runner:
             names = [w for w in re.split(r"[\s,,、;;]+", query) if w]
             lines = self.equipment.advice(names, top=5) if self.equipment else []
             return f"{head}\n" + "\n".join(lines) if lines else f"{head}:攻略的最终阵容里没有这些角色"
+        if what == "recipe":
+            if self.equipment is None:
+                return f"{head}:装备知识库未同步"
+            names = list(dict.fromkeys(w for w in re.split(r"[\s,，、;；]+", query) if w))
+            if not names:
+                return f"{head}:请填写装备成品名"
+            lines = []
+            for name in names:
+                recipes = self.equipment.recipe(name)
+                materials = " 或 ".join(f"{a} + {b}" for a, b in recipes)
+                lines.append(f"- {name} = {materials}" if recipes else f"- {name}:知识库未收录合成配方")
+            return f"{head}\n" + "\n".join(lines)
         if what == "memory":
             find = getattr(self.brain, "lookup_memory", None)
             return f"{head}\n{find(query)}" if find else f"{head}:没有经验库"

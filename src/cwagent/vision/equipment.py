@@ -5,8 +5,7 @@
 格子里的装备被用掉后,后面的往前顺移。
 
 实测:轮滑鞋 0.88、红钻 0.68(第二名 0.43),空格最高 0.28;4 格约 0.3 秒。
-特权版效果翻倍,官方图标和普通版完全一样,游戏里图标右下角多一个 V(维护者告知)。比法:格子右下角减去
-匹配上的官方图标同一位置,多出来的亮色像素够多就算有 V。【待核实】门槛按 V 的大小估的,还没用实机特权装备校准。
+格子右下角的星核猎手角标和特权 V 分开识别,装备名仍按图标本体匹配。
 合成:把一件拖到另一件上,弹出「A + B = C」确认框,点 ✓ 后装备栏会重新排序(成品不一定在原来的编号上)。
 
 格子里有没有东西和认出是什么分开判断(2026-11-19):原来认不出就当空格、读到这里为止,开出星核猎手后
@@ -39,6 +38,8 @@ FRAME_HIT = 0.6       # 四条边都要有这么大比例的像素是边线(实�
 MIN_SCORE = 0.5
 MIN_GAP = 0.1         # 第一名要比第二名(不同装备)高出这么多,才算认得出
 CONFIRM = Path(__file__).resolve().parents[1] / "assets" / "equipment" / "compose-confirm.png"
+SCRIPT_BADGE = CONFIRM.with_name("script-badge.png")
+SCRIPT_BADGE_SCORE = 0.75
 PRIVILEGE = "·特权"
 # 特权版和普通版的官方图标是同一张图,区别只在格子外面套的那层边框(维护者 2026-11-16 从活动页的
 # card-border-*.svg 看出来):特权边框的右下角多一个白色 V,普通边框没有。样张存在 assets/borders/,
@@ -65,6 +66,7 @@ class Item:
     category: str = ""
     score: float = 0.0
     privileged: bool = False   # 右下角有 V:特权版,效果翻倍
+    scripted: bool = False    # 右下角有星核猎手角标
 
 
 def cell_center(index: int) -> tuple[float, float]:
@@ -84,6 +86,7 @@ class EquipmentReader:
     def __init__(self, templates_dir: Path, names: dict[str, str], categories: dict[str, str] | None = None):
         self.names = names
         self.categories = categories or {}
+        self.script_badge = cv2.imread(str(SCRIPT_BADGE), cv2.IMREAD_GRAYSCALE)
         self.templates: dict[str, list[np.ndarray]] = {}
         for p in sorted(Path(templates_dir).glob("*.png")):
             t = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
@@ -131,8 +134,16 @@ class EquipmentReader:
             return None, ranked[0][0], None
         return ranked[0][1], ranked[0][0], ranked[0][2]
 
+    def has_script_badge(self, cell: np.ndarray) -> bool:
+        """在格子右下角匹配星核猎手角标。"""
+        if self.script_badge is None:
+            return False
+        corner = cv2.cvtColor(cell[42:, 45:], cv2.COLOR_BGR2GRAY)
+        matches = cv2.matchTemplate(corner, self.script_badge, cv2.TM_CCOEFF_NORMED)
+        return float(matches.max()) >= SCRIPT_BADGE_SCORE
+
     @staticmethod
-    def has_v(cell: np.ndarray, where: tuple = ()) -> bool:
+    def has_v(cell: np.ndarray) -> bool:
         """格子右下角有没有那个白色 V(特权版边框的标记)。
 
         按 card-border-5-b 里 V 的矢量形状生成掩码,看掩码覆盖的地方够不够白;边框本身是渐变(青蓝或金色),
@@ -169,12 +180,13 @@ class EquipmentReader:
             if not occupied(img, cx, cy):
                 break
             cell = img[cy - HALF:cy + HALF, cx - HALF:cx + HALF]
-            key, score, where = self.identify(cell)
+            key, score, _ = self.identify(cell)
+            scripted = self.has_script_badge(cell)
             if key is None:
-                items.append(Item(index, x, y, None, None, score=score))
+                items.append(Item(index, x, y, None, None, score=score, scripted=scripted))
                 continue
             items.append(Item(index, x, y, key, self.names[key], self.categories.get(key, ""), score,
-                              privileged=self.has_v(cell, where)))
+                              privileged=not scripted and self.has_v(cell), scripted=scripted))
         return items
 
 
@@ -243,7 +255,11 @@ def cancel_point(confirm: tuple[float, float]) -> tuple[float, float]:
 def format_items(items: list[Item], coords: bool = False) -> str:
     """装备栏一行。coords 时每件后面带坐标:把道具(冶金炉、特权赋予卡等)拖到某件装备上时用作 drag 的终点。"""
     def one(i: Item) -> str:
-        text = (f"{i.index}号 {i.name}" + ("·特权(效果翻倍)" if i.privileged else "")
-                + (f"({i.category})" if i.category else "") if i.name else f"{i.index}号 认不出")
+        text = f"{i.index}号 {i.name or '认不出'}"
+        if i.privileged:
+            text += "·特权(效果翻倍)"
+        category = "星核猎手剧本装备" if i.scripted else i.category
+        if category:
+            text += f"({category})"
         return text + (f" ({i.x:.3f},{i.y:.3f})" if coords else "")
     return ";".join(one(i) for i in items) or "(空)"

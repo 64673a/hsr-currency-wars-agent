@@ -29,7 +29,8 @@ PREPARE_ONLY = {"buy", "sell", "move", "refresh", "roll", "buy_exp", "ready", "c
 ROLL_REFRESHES = 10     # roll 不填 max_refresh 时最多刷新几次
 ROLL_MAX = 30
 LOOKS = ("zoom", "inspect", "recheck")   # 只看不操作:单独提交,不占决策次数(有上限)
-LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备"}
+LOOKUP_NAMES = {"guides": "攻略", "guide": "攻略全文", "memory": "经验", "equipment": "攻略常配装备",
+                "recipe": "装备配方"}
 LOOKUPS = 8      # 一轮决策里最多查几次资料(lookup 工具),查完接着判断,不碰游戏(维护者 2026-11-18:3 次可能不够)
 LAYERS = {"tactical": "战术", "strategic": "战略", "chooser": "选择"}   # 决策角色 → 经验的 scope
 
@@ -185,11 +186,12 @@ LOOKUP_TOOL = ToolSpec(
                  "guides 按角色、羁绊、投资环境的名字查玩家分享的阵容攻略(多个词用空格分开),返回最多 5 篇摘要和编号;"
                  "guide 按攻略编号看全文(作者思路、前期中期和最终阵容、装备顺序、推荐投资策略);"
                  "memory 按经验编号或关键词查经验原文;"
-                 "equipment 按角色名查他在攻略最终阵容里常配的装备。"),
+                 "equipment 按角色名查他在攻略最终阵容里常配的装备;"
+                 "recipe 按装备成品名查合成材料,多个名字用空格分开。"),
     parameters={
         "type": "object",
         "properties": {
-            "what": {"type": "string", "enum": ["guides", "guide", "memory", "equipment"]},
+            "what": {"type": "string", "enum": list(LOOKUP_NAMES)},
             "query": {"type": "string"},
         },
         "required": ["what", "query"],

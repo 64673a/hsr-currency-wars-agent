@@ -10,8 +10,9 @@ from cwagent.brain.screen_agent import Action
 from cwagent.capture import Frame
 from cwagent.knowledge.equipment import EquipmentBook
 from cwagent.orchestrator import prepare as prep
+from cwagent.orchestrator.loop import Runner, Trace
 from cwagent.orchestrator.prepare import PrepareExecutor, _shift
-from cwagent.vision.equipment import EquipmentReader, Item, cell_center
+from cwagent.vision.equipment import EquipmentReader, Item, cell_center, format_items
 from cwagent.vision.ocr import TextBox
 
 
@@ -183,6 +184,15 @@ def test_privilege_v_mark(templates):
     draw.line((cx + 17, cy + 16, cx + 23, cy + 29, cx + 30, cy + 16), fill=(235, 245, 255), width=3)   # 右下角的 V
     items = r.read(img)
     assert [(i.name, i.privileged) for i in items] == [("轮滑鞋", False), ("反重力皮靴", True)]
+    assert not any(i.scripted for i in items)
+
+
+def test_recipe_lookup_without_guides(tmp_path, db):
+    r = Runner(None, object(), Trace(tmp_path / "run"), ocr=object(), settle=False, equipment=EquipmentBook(db))
+    out = r.lookup("recipe", "反重力皮靴、奇兽花园星徽 没有这件装备")
+    assert "反重力皮靴 = 轮滑鞋 + 轮滑鞋" in out
+    assert "奇兽花园星徽 = 红钻 + 轮滑鞋" in out
+    assert "没有这件装备:知识库未收录合成配方" in out
 
 
 PANEL = [("简易武装箱", 0.535, 0.056), ("请选择1个", 0.535, 0.091), ("以太钻头", 0.308, 0.309), ("折叠小刀", 0.460, 0.310),
@@ -378,7 +388,8 @@ def test_two_simple_items_on_a_role_merge(db):
 REAL = Path(__file__).parent / "fixtures" / "equipment"
 REAL_NAMES = {"350208": "光能电池", "350203": "和平手枪", "350202": "折叠小刀", "47030205": "杀红眼", "35030203": "武器大师",
               "47030307": "斩首行动", "355200202": "持续伤害星徽", "35030506": "痛觉阻断芯片", "35030608": "光能盾牌",
-              "350201": "轮滑鞋", "350207": "以太钻头", "350602": "蓝钻", "35030808": "永动机", "355200802": "反击星徽"}
+              "350201": "轮滑鞋", "350207": "以太钻头", "350602": "蓝钻", "35030808": "永动机", "355200802": "反击星徽",
+              "47030101": "反重力皮靴"}
 
 
 def real_bar(name: str) -> Image.Image:
@@ -400,5 +411,16 @@ def test_scripted_equipment_in_first_slot():
     原来读到它就停,整个装备栏成了「空」、合成被误报没成功。第 3 格是知识库里没有的东西,报认不出。"""
     r = EquipmentReader(REAL / "templates", REAL_NAMES)
     assert [i.name for i in r.read(real_bar("scripted-first.jpg"))] == ["武器大师", "斩首行动", None]
-    assert [i.name for i in r.read(real_bar("scripted-5.jpg"))] == ["光能电池", "和平手枪", "折叠小刀", "杀红眼", None]
+    items = r.read(real_bar("scripted-5.jpg"))
+    assert [i.name for i in items] == ["光能电池", "和平手枪", "折叠小刀", "杀红眼", None]
+    assert [i.scripted for i in items] == [False, False, False, True, False]
     assert [i.name for i in r.read(real_bar("emblem-1.jpg"))] == ["持续伤害星徽"]    # 星徽图标铺满整格
+
+
+def test_scripted_boots():
+    img = Image.new("RGB", (960, 540))
+    img.paste(Image.open(REAL / "scripted-boots.png"), (860, 85))
+    r = EquipmentReader(REAL / "templates", REAL_NAMES, {"47030101": "进阶装备"})
+    items = r.read(img)
+    assert [(i.name, i.scripted, i.privileged) for i in items] == [("反重力皮靴", True, False)]
+    assert format_items(items) == "1号 反重力皮靴(星核猎手剧本装备)"
