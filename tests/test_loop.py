@@ -276,6 +276,30 @@ def test_auto_shop_checks_current_frame_before_click(tmp_path, monkeypatch):
     assert watched[0]["screen"] == "battle" and not sim.actions and not brain.calls
 
 
+def test_shop_refused_during_intro_waits_instead_of_asking(tmp_path, monkeypatch):
+    """开场动画期间点商店,游戏提示「该状态下不可使用」、商店不开:先等,不把没准备好的画面交给模型
+    (2026-11-19 那局 1-4、1-9、2-6、2-7、3-2 的第一轮模型都只能 recheck)。等满 SHOP_WAITS 轮再交给模型。"""
+    from cwagent.orchestrator import loop
+
+    pages = {"prepare": [("备战阶段", 0.24, 0.04), ("1-4", 0.24, 0.07), ("该状态下不可使用", 0.5, 0.277),
+                         ("商店", 0.845, 0.909), ("出战", 0.946, 0.694)]}
+    sim = Sim(pages, "prepare", lambda *_: None)
+    brain = FakeBrain({"prepare": [[Action(type="wait", seconds=1)]]})
+    ocr = FakeOcr(sim)
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=ocr, log=lambda _: None, settle=False)
+    runner._node = "1-4"
+    monkeypatch.setattr(loop.time, "sleep", lambda s: None)
+    runner.prepare.sleep = lambda s: None
+    monkeypatch.setattr(runner, "macros", lambda *a: None)
+    frame = sim.grab()
+    for i in range(loop.SHOP_WAITS):
+        record = {"step": i}
+        assert runner.decide(i, frame, ocr(frame.image), "prepare", record, set()) == "prepare"
+        assert record["actions"][0].startswith("开场动画还没放完") and not brain.calls
+    runner.decide(9, frame, ocr(frame.image), "prepare", {"step": 9}, set())
+    assert brain.calls and brain.calls[0][:2] == ("prepare", "opening")
+
+
 def test_action_requires_fields():
     import pytest
     from pydantic import ValidationError

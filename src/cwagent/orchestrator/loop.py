@@ -134,6 +134,9 @@ ITEM_BAR = (0.87, 0.08, 0.19)   # 右上角道具栏:x 下限、y 范围(实机 
 GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、冶金炉:用了会取下或重掷角色身上的装备
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
+SHOP_WAITS = 3     # 开场动画期间商店打不开时,每个节点最多再等几轮才交给模型
+PREP_BANNER_REGION = (0.3, 0.35, 0.4, 0.25)   # 进入备战时屏幕中央「备战阶段」横幅
+NOT_NOW = "该状态下不可使用"    # 开场动画期间点商店,游戏在上方提示这句、不打开商店
 FREE_LOOKS = 3   # 每个回合最多几轮只看不操作(zoom、inspect、recheck)不占决策次数
 GRACE_TURNS = 1  # 决策次数用完时,最后一轮被程序打断(合成后装备栏重排、操作没成功),再给几轮看结果
 
@@ -305,6 +308,7 @@ class Runner:
         self._last_hud = None                                  # 最近一次读到的备战数字
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
         self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
+        self._shop_waits: dict[str, int] = {}                  # 节点 → 开场动画期间商店打不开、等了几轮
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
         self._trial: dict[str, bool] = {}                      # 这局见过的角色 → 是不是试用(卡面标签)
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
@@ -1106,7 +1110,7 @@ class Runner:
                     x, y = cancel_point(confirm)
                     return [Action(type="click", x=x, y=y, reason="清掉残留的合成确认框")]
                 # 进入备战时屏幕中央会播「备战阶段」横幅,动画期间点击无效
-                if find(boxes, "^备战阶段$", region=(0.3, 0.35, 0.4, 0.25)):
+                if find(boxes, "^备战阶段$", region=PREP_BANNER_REGION):
                     return [Action(type="wait", seconds=1.5, reason="备战阶段开场动画")]
             case "other":
                 if find(boxes, TRANSIENT):
@@ -1346,6 +1350,17 @@ class Runner:
                     now = self.screen_of(frame.image, boxes)
                 record["shot"] = self.trace.shot(n, frame.image)
                 record["texts"] = [str(b) for b in boxes]
+                node = self._node or ""
+                if (attempted and now == "prepare" and not self.prepare.shop and self._shop_waits.get(node, 0) < SHOP_WAITS
+                        and (find(boxes, "^备战阶段$", region=PREP_BANNER_REGION) or find(boxes, NOT_NOW))):
+                    # 开场动画(横幅、金币、合成)没放完时商店点不开,游戏提示「该状态下不可使用」;原来照样交给模型,
+                    # 模型只能 recheck(2026-11-19 那局 1-4、1-9、2-6、2-7、3-2 的第一轮)。等一下,下一步重来
+                    self._shop_waits[node] = self._shop_waits.get(node, 0) + 1
+                    record["actions"] = [f"开场动画还没放完,商店打不开,等一下再开(第 {self._shop_waits[node]} 次)"]
+                    self._last_sig = sig
+                    self.trace.write(record)
+                    time.sleep(1.5)
+                    return screen
                 if now != "prepare":
                     record["screen"] = now
                     self._last_screen = now
