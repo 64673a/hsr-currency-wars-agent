@@ -217,6 +217,36 @@ class PrepareExecutor:
         return (f"刷新没有生效:金币和商店都没变(还是 {format_shop(after)})——{why}。"
                 "不要反复点刷新,先看现有卡片怎么用")
 
+    def _buy_slot(self, out: PrepareResult, slot: int, boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
+        """点商店第 slot 格买卡并核对,返回(没买成的原因或 None, 最新的界面文字)。boxes 要是眼前这一帧(金币按它读)。
+
+        商店还开着就看这一格的名字变没变;点完商店被收起时名字读不到,改看金币有没有扣——2026-11-19 那局
+        1-6、1-7、2-2 三次点卡后商店收起、金币没变,原来按「名字读不到」算成买到了,模型下一轮看金币才发现。
+        收起了又没扣钱,就重新打开商店,这一格还是同一张卡时再点一次。"""
+        name = read_shop(boxes)[slot - 1][1]
+        for attempt in range(2):
+            gold = self._gold()
+            self._click(out, SHOP_X[slot - 1], SHOP_CARD_Y)
+            self.sleep(GAP)
+            boxes = self._look()
+            now = self._gold()
+            paid = None if gold is None or now is None else now < gold
+            if shop_state(boxes) is not False:
+                if name:
+                    changed = read_shop(boxes)[slot - 1][1] != name
+                    return (None if changed else "买不进,可能金币不够或备战席满了"), boxes
+                if paid is False:
+                    return "这一格没认出角色,点了以后金币没变,没买到", boxes
+                return None, boxes                     # 认不出名字时按金币核对,金币也读不出就不下结论
+            if paid:
+                return None, boxes                     # 买到了,只是商店跟着收起了
+            if attempt:
+                break
+            boxes = self.set_shop(out, boxes, True)
+            if not self.shop or read_shop(boxes)[slot - 1][1] != name:
+                break
+        return "点卡以后商店被收起了,金币没扣,没买到", boxes
+
     # ---------------------------------------------------------------- D 牌
 
     def _gold(self) -> int | None:
@@ -276,12 +306,9 @@ class PrepareExecutor:
                 if gold is not None and price is not None and gold - price < keep:
                     reason = f"买{name}要 {price} 金,买了就低于保底 {keep} 金"
                     break
-                before = read_shop(boxes)[slot - 1][1]
-                self._click(out, SHOP_X[slot - 1], SHOP_CARD_Y)
-                self.sleep(GAP)
-                boxes = self._look()
-                if read_shop(boxes)[slot - 1][1] == before:
-                    reason = f"{name}买不进(备战席满了或金币不够)"
+                why, boxes = self._buy_slot(out, slot, boxes)
+                if why:
+                    reason = f"{name}{why}"
                     break
                 bought[name] += 1
                 have[name] += 3 if two_star(name, price, costs) else 1
@@ -360,24 +387,24 @@ class PrepareExecutor:
         if board is not None:
             occupied = {(s.zone, s.index): (s.name or "认不出的角色") for s in board if not s.empty}
         self.shop_now(boxes)
+        given = boxes             # 模型决策时的那一帧;执行中还拿着它的话,说明画面已经旧了
         pending = [a.model_copy() for a in actions]
         while pending:
             a = pending.pop(0)
             text = action_text(a)
             try:
                 if a.type == "buy":
+                    if boxes is given:
+                        boxes = self._look()   # 模型决策要十几秒,这期间商店可能已经收起,按眼前的画面买
                     boxes = self.set_shop(out, boxes, True)
                     if not self.shop:
                         out.results.append(f"{text}:商店没有打开")
                         out.observe = True
                         break
                     name = read_shop(boxes)[a.slot - 1][1]
-                    self._click(out, SHOP_X[a.slot - 1], SHOP_CARD_Y)
-                    self.sleep(GAP)
-                    boxes = self._look()
-                    still = read_shop(boxes)[a.slot - 1][1]
-                    if name and still == name:
-                        out.results.append(f"{text}({name}):没买成,可能金币不够或备战席满了")
+                    why, boxes = self._buy_slot(out, a.slot, boxes)
+                    if why:
+                        out.results.append(f"{text}" + (f"({name})" if name else "") + f":{why}")
                         continue
                     if name is None:
                         out.results.append(f"{text}:这一格没认出角色(可能已经买走了)")
