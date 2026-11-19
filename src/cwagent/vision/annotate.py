@@ -1,4 +1,10 @@
-"""给决策截图标号;标号坐标始终相对于原始客户区。"""
+"""给决策截图标号;标号坐标始终相对于原始客户区。
+
+2026-11-19 改(维护者):原来标号框画在落点正上方、落点再画黄点,落点就是文字中心,选项名、说明、按钮字都被压住
+(「军火[6]易+」);备战界面每个格子都打标号,可语义操作按格子编号、根本不用它们,模型真要点的阿哈面板、羁绊图标
+又没有标号。现在:标号贴在文字左侧(或右侧)、格子和图标的左上角,不压字;只标能点的东西,说明文字不标;
+备战界面不标格子和商店卡,改标羁绊和阿哈面板。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,6 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from ..llm.base import ImageInput
-from .board import SHOP_X, slots
 from .equipment import cell_center
 from .ocr import TextBox
 
@@ -18,9 +23,44 @@ from .ocr import TextBox
 @dataclass(frozen=True)
 class Mark:
     id: int
-    x: float
+    x: float              # 落点(目标中心)
     y: float
     label: str
+    w: float = 0.0        # 目标的宽高(归一化),用来把标号贴在目标外面
+    h: float = 0.0
+    side: str = "above"   # 标号放哪:left / right(目标左右两侧)、corner(目标左上角里面)、above(落点上方,画黄点)
+
+
+SENTENCE = re.compile(r"[，,；;！？【】（）]")   # 带这些标点的多半是说明文字,不是能点的东西
+PREP_BUTTONS = {"出战", "选择主角", "商店", "收起", "刷新", "免费刷新", "开启"}
+CELL = (35 / 1920, 35 / 1080)     # 装备栏、道具栏格子的半宽、半高(1920x1080 下 70x70)
+BOND_AREA = (0.0, 0.15, 0.14, 0.65)   # 左侧羁绊列表
+BOND_ICON_X, BOND_ICON_W = 0.04, 0.036   # 羁绊图标的中心 x 和宽;图标在名字和档位两行中间
+# 阿哈面板(欢愉召唤阿哈后出现在棋盘左上方的深红横条,阿哈装备拖到这里):随商店开合移动。
+# 2026-11-19 那局 126 张备战截图:有面板时这块区域红色占 0.26~0.5,没有时 0~0.03
+AHA_PANEL = {False: (0.17, 0.25, 0.31, 0.305), True: (0.235, 0.348, 0.36, 0.393)}
+AHA_RED = 0.15
+
+
+def clickable(text: str) -> bool:
+    """能点的东西多半是短词(按钮、选项名);长句和带句中标点的是说明文字。"""
+    return len(text) <= 12 and not SENTENCE.search(text)
+
+
+def aha_panel(image: Image.Image, shop_open: bool) -> tuple[float, float, float, float] | None:
+    """阿哈面板的中心和宽高(归一化),没有面板返回 None。"""
+    import numpy as np
+
+    x0, y0, x1, y1 = AHA_PANEL[bool(shop_open)]
+    rgb = np.asarray(image.convert("RGB")).astype(int)
+    h, w = rgb.shape[:2]
+    area = rgb[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
+    if area.size == 0:
+        return None
+    r, g, b = area[..., 0], area[..., 1], area[..., 2]
+    if float(((r > 110) & (r > g + 45) & (r > b + 25)).mean()) < AHA_RED:
+        return None
+    return (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0
 
 
 def crosses(image: Image.Image) -> list[tuple[float, float]]:
@@ -51,32 +91,40 @@ def crosses(image: Image.Image) -> list[tuple[float, float]]:
 
 
 def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open: bool = False,
-             counts: dict | None = None, equipment: list | None = None,
+             equipment: list | None = None,
              items: list | None = None) -> tuple[ImageInput, list[Mark]]:
     marks: list[Mark] = []
 
-    def add(x, y, label):
-        marks.append(Mark(len(marks) + 1, float(x), float(y), label))
+    def add(x, y, label, w=0.0, h=0.0, side="above"):
+        marks.append(Mark(len(marks) + 1, float(x), float(y), label, float(w), float(h), side))
 
     if screen == "prepare":
-        for s in slots(shop_open, counts):
-            add(s.x, s.y, f"{ {'front': '前台', 'back': '后台', 'bench': '备战席'}[s.zone]}{s.index + 1}")
-        if shop_open:
-            for i, x in enumerate(SHOP_X, 1):
-                add(x, 0.15, f"商店{i}")
+        # 格子和商店卡不标:buy、move 等语义操作按格子编号,看角色说明用 inspect 坐标(阵容里列着坐标)
         for item in equipment or []:
             i = item["index"] if isinstance(item, dict) else item.index
-            add(*cell_center(i), f"装备{i}")
+            add(*cell_center(i), f"装备{i}", CELL[0] * 2, CELL[1] * 2, "corner")
         for it in items or []:   # 右上角道具栏(vision.items.Item)
-            add(it.x, it.y, f"道具{it.slot} {it.name}")
+            add(it.x, it.y, f"道具{it.slot} {it.name}", CELL[0] * 2, CELL[1] * 2, "corner")
+        panel = aha_panel(image, shop_open)
+        if panel is not None:
+            x, y, w, h = panel
+            add(x, y, "阿哈面板(阿哈装备拖到这里)", w, h, "right")
+        bx, by, bw, bh = BOND_AREA
+        for b in sorted(boxes, key=lambda b: b.y):   # 左侧羁绊:落点是图标,点开看羁绊说明(巡海游侠在这里任命)
+            if (bx <= b.x <= bx + bw and by <= b.y <= by + bh and len(re.findall(r"[\u4e00-\u9fff]", b.text)) >= 2
+                    and b.score >= 0.55):
+                # 标号贴在图标左边(屏幕边缘那一小条是空的);贴在名字右边会压到下一行的档位
+                add(BOND_ICON_X, b.y + 0.016, f"羁绊 {b.text}", BOND_ICON_W, 0.0, "left")
     for b in boxes:
         if not b.text.strip() or b.y > 0.95 or b.score < 0.55:
             continue
-        if screen == "prepare" and b.text not in {"出战", "选择主角", "商店", "收起", "刷新", "免费刷新", "开启"}:
+        if screen == "prepare" and b.text not in PREP_BUTTONS:
+            continue
+        if screen != "prepare" and not clickable(b.text):
             continue
         if any(abs(b.x - m.x) < 0.012 and abs(b.y - m.y) < 0.012 for m in marks):
             continue
-        add(b.x, b.y, b.text)
+        add(b.x, b.y, b.text, b.w, b.h, "left")
         if len(marks) >= 100:
             break
     if screen == "spotlight_choice":
@@ -87,20 +135,41 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
         add(0.5, 0.407, "主角空位")
     for x, y in crosses(image):
         if len(marks) < 100:
-            add(x, y, "关闭图标")
+            add(x, y, "关闭图标", 0.02, 0.035, "left")
     img = image.convert("RGB").copy()
     img.thumbnail((1280, 720))
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default(size=15)
     for m in marks:
-        x, y = round(m.x * img.width), round(m.y * img.height)
         text = str(m.id)
         w = int(draw.textlength(text, font=font)) + 8
-        left, top = max(0, min(img.width - w, x - w // 2)), max(0, y - 22)
-        draw.rectangle((left, top, left + w, top + 19), fill="#15151D", outline="#FFFFFF", width=1)
+        left, top = place(m, img.width, img.height, w, LABEL_H)
+        draw.rectangle((left, top, left + w, top + LABEL_H), fill="#15151D", outline="#FFFFFF", width=1)
         draw.text((left + 4, top + 1), text, fill="#FFFFFF", font=font)
-        draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill="#FFFF00")
+        if m.side == "above":   # 落点上没有文字、格子可参照时才画黄点
+            x, y = round(m.x * img.width), round(m.y * img.height)
+            draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill="#FFFF00")
     return ImageInput.from_pil(img, label="当前界面(标号)", max_size=None), marks
+
+
+LABEL_H = 19
+
+
+def place(m: Mark, width: int, height: int, label_w: int, label_h: int) -> tuple[int, int]:
+    """标号框左上角的像素位置:贴在目标外侧(left / right)、目标左上角里(corner)或落点上方(above),不出画面。"""
+    cx, cy = m.x * width, m.y * height
+    hw, hh = m.w * width / 2, m.h * height / 2
+    if m.side in ("left", "right"):
+        before, after = cx - hw - 3 - label_w, cx + hw + 3
+        left = before if m.side == "left" else after
+        if left < 0 or left + label_w > width:       # 这一侧放不下就放另一侧
+            left = after if m.side == "left" else before
+        top = cy - label_h / 2
+    elif m.side == "corner":
+        left, top = cx - hw, cy - hh
+    else:
+        left, top = cx - label_w / 2, cy - label_h - 6
+    return round(max(0, min(width - label_w, left))), round(max(0, min(height - label_h, top)))
 
 
 def legend(marks: list[Mark]) -> str:

@@ -1451,7 +1451,7 @@ class Runner:
 
     def _set_vision(self, ep: Episode, step: int, screen: str, image: Image.Image, boxes, record) -> None:
         picture, marks = annotate(image, boxes, screen=screen, shop_open=self.prepare.shop_now(boxes),
-                                  counts=self.prepare.counts, equipment=(record.get("state") or {}).get("equipment"),
+                                  equipment=(record.get("state") or {}).get("equipment"),
                                   items=self._items if screen == "prepare" else None)
         self._vision_marks = {m.id: m for m in marks}
         ep.images = [picture]

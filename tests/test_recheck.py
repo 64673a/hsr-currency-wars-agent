@@ -98,3 +98,38 @@ def test_inspect_accepts_coordinates(tmp_path, monkeypatch):
     monkeypatch.setattr(loop.time, "sleep", lambda s: None)
     assert runner._raw(a, []).endswith("说明见新截图和识别结果")
     assert sim.actions == [("click", 0.389, 0.372)]
+
+
+def test_marks_sit_beside_text_and_skip_descriptions():
+    """标号贴在文字左侧、不压字;说明文字不标(2026-11-19 那局投资策略界面「军火[6]易+」)。"""
+    from PIL import Image
+
+    from cwagent.vision.annotate import annotate, place
+    from cwagent.vision.ocr import TextBox
+
+    boxes = [TextBox("军火贸易+", 0.240, 0.452, 0.06, 0.03, 0.95),
+             TextBox("获得1个【简易武装箱】,获得", 0.240, 0.494, 0.17, 0.03, 0.95),
+             TextBox("刷新次数1", 0.250, 0.791, 0.05, 0.03, 0.95), TextBox("确认", 0.509, 0.910, 0.03, 0.03, 0.95)]
+    _, marks = annotate(Image.new("RGB", (1920, 1080)), boxes, screen="strategy_choice")
+    assert [m.label for m in marks] == ["军火贸易+", "刷新次数1", "确认"]
+    for m in marks:
+        left, top = place(m, 1280, 720, 20, 19)
+        assert left + 20 <= (m.x - m.w / 2) * 1280      # 整个标号框在文字左边
+
+
+def test_prepare_marks_bonds_and_aha_panel_not_slots():
+    """备战界面不标格子和商店卡,标左侧羁绊和阿哈面板(按颜色认,随商店开合换位置)。"""
+    from PIL import Image, ImageDraw
+
+    from cwagent.vision.annotate import AHA_PANEL, annotate
+    from cwagent.vision.ocr import TextBox
+
+    img = Image.new("RGB", (1920, 1080), (40, 30, 90))
+    x0, y0, x1, y1 = AHA_PANEL[False]
+    ImageDraw.Draw(img).rectangle((x0 * 1920, y0 * 1080, x1 * 1920, y1 * 1080), fill=(170, 30, 50))
+    boxes = [TextBox("幻月游戏·唱名", 0.092, 0.230, 0.07, 0.03, 0.95), TextBox("3/5/7/10", 0.083, 0.261, 0.05, 0.03, 0.95),
+             TextBox("出战", 0.947, 0.694, 0.03, 0.03, 0.95), TextBox("商店", 0.845, 0.909, 0.03, 0.03, 0.95)]
+    _, marks = annotate(img, boxes, screen="prepare", shop_open=False)
+    assert [m.label for m in marks] == ["阿哈面板(阿哈装备拖到这里)", "羁绊 幻月游戏·唱名", "出战", "商店"]
+    _, marks = annotate(img, boxes, screen="prepare", shop_open=True)   # 商店开着时面板在别处,这里没有
+    assert "阿哈面板(阿哈装备拖到这里)" not in [m.label for m in marks]
