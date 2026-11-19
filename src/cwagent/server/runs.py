@@ -184,7 +184,7 @@ class PlayController:
         self._runner = None   # 正在跑的那一局(Runner)
         self._stop = threading.Event()
         self._state: dict[str, Any] = {"run_id": None, "profile": None, "difficulty": None, "round": 0,
-                                       "rounds": 0, "result": None, "error": None, "log": []}
+                                       "rounds": 0, "result": None, "outcome": None, "error": None, "log": []}
 
     def _log(self, message: str) -> None:
         with self._lock:
@@ -237,7 +237,7 @@ class PlayController:
             device.stop = stop   # 快捷键 / 停止按钮在下一个键鼠操作前就生效
         with self._lock:
             self._state.update(run_id=None, profile=None, difficulty=cfg.agent.difficulty, round=0, rounds=rounds,
-                               result=None, error=None, log=[])
+                               result=None, outcome=None, error=None, log=[])
 
         def work() -> None:
             try:
@@ -265,9 +265,9 @@ class PlayController:
                         result = run_session(runner, opts, log=self._log)
                     finally:
                         self._runner = None
-                    runner = None
+                    outcome, runner = runner.outcome, None
                     with self._lock:
-                        self._state["result"] = result
+                        self._state.update(result=result, outcome=outcome)
                     if result not in ("settlement",):   # 停止、超时、暂停、步数用完都不再开下一局
                         break
                 except Exception as e:  # noqa: BLE001 - 错误给网页看

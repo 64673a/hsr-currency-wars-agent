@@ -146,17 +146,21 @@ class Tools:
         agent = st["agent"]
         if agent["active"]:
             return "【还在等待】游戏正在进行(战斗、动画或程序在处理),还没有需要你判断的局面。调用 wait 继续等。"
-        if st["running"]:
+        if st["running"] and st["profile"] != EXTERNAL:
             return f"当前对局用的是模型档案「{st['profile'] or '?'}」,不归你控制。"
+        # 对局结束后线程还要写记录、生成报表,这段时间 running 还是真;原来这时回「不归你控制」(2026-11-19 那局结尾)
         if agent["ended"]:
             result = agent["ended"]
-            lines = [f"【对局结束】{RESULTS.get(result, result)}。"]
+            outcome = f"{st['outcome']}," if st.get("outcome") else ""
+            lines = [f"【对局结束】{outcome}{RESULTS.get(result, result)}。"]
             if st["error"]:
                 lines.append(f"错误:{st['error']}")
             if st["log"]:
                 lines.append("最后的记录:\n" + "\n".join(st["log"][-3:]))
             lines.append("这一局已经结束,停下来向用户汇报;用户要求再打时才调用 start_run。")
             return "\n".join(lines)
+        if st["running"]:
+            return "【还在等待】对局在收尾,调用 wait 等结果。"
         return "现在没有对局。调用 start_run 开始。"
 
     async def _take(self, wait: float) -> str:

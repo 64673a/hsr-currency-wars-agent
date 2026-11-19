@@ -179,3 +179,21 @@ def test_mcp_hook(server):
                 BRIDGE.end("stopped")
 
     asyncio.run(main())
+
+
+def test_idle_after_external_run_ends_reports_the_end():
+    """外部 agent 的对局结束后,线程还在写记录(running 仍为真):要报对局结束,不能说「不归你控制」(2026-11-19 那局结尾)。"""
+    from cwagent.server.mcp import Tools
+
+    class Player:
+        def __init__(self, **st):
+            self.st = {"running": True, "profile": EXTERNAL, "outcome": None, "error": None, "log": [],
+                       "agent": {"active": False, "ended": None}} | st
+
+        def status(self):
+            return self.st
+
+    ended = Player(outcome="通关", agent={"active": False, "ended": "settlement"})
+    assert Tools(ended)._idle().startswith("【对局结束】通关,打完了")
+    assert "收尾" in Tools(Player())._idle()                                     # 结束标记还没到
+    assert "不归你控制" in Tools(Player(profile="deepseek-flash"))._idle()       # 别的档案在下
