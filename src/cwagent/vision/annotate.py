@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,7 +104,25 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
 
 
 def legend(marks: list[Mark]) -> str:
-    return "## 截图标号\n" + ";".join(f"{m.id}={m.label}" for m in marks)
+    """标号对照。编号和格子号一起连续的(1=前台1;2=前台2……)压成「1~4=前台1~4」:备战界面的对照表每轮都发,
+    原来逐格写约 300 字(2026-11-19 报告 P1-8)。"""
+    runs: list[list[tuple[int, str, int]]] = []   # (编号, 格子名, 格子号)
+    parts = []
+    for m in marks:
+        slot = re.fullmatch(r"(\D+?)(\d+)", m.label)
+        if slot is None:
+            runs.append([])
+            parts.append(f"{m.id}={m.label}")
+            continue
+        here = (m.id, slot.group(1), int(slot.group(2)))
+        last = runs[-1][-1] if runs and runs[-1] else None
+        if last and here[0] == last[0] + 1 and here[1] == last[1] and here[2] == last[2] + 1:
+            runs[-1].append(here)
+            parts[-1] = f"{runs[-1][0][0]}~{here[0]}={here[1]}{runs[-1][0][2]}~{here[2]}"
+        else:
+            runs.append([here])
+            parts.append(f"{m.id}={m.label}")
+    return "## 截图标号\n" + ";".join(parts)
 
 
 def save_image(root: Path, name: str, image: ImageInput) -> str:

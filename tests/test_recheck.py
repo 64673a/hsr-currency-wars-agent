@@ -64,3 +64,16 @@ def test_recheck_is_a_lone_free_look(tmp_path, monkeypatch):
     r = loop.Runner(None, FakeBrain({}), loop.Trace(tmp_path / "run"), ocr=object(), log=lambda _: None, settle=False)
     assert "重新截图识别" in r._raw(Action(type="recheck"), [])
     assert r._recheck and slept == [loop.RECHECK_WAIT]
+
+
+def test_legend_compresses_runs_of_slots():
+    """备战界面的对照表把连号的格子压成区间,带名字的标号和文字标号照原样(2026-11-19 报告 P1-8)。"""
+    from cwagent.vision.annotate import Mark, legend
+
+    labels = [f"前台{i}" for i in range(1, 5)] + [f"后台{i}" for i in range(1, 7)] + [f"备战席{i}" for i in range(1, 10)] \
+        + [f"商店{i}" for i in range(1, 6)] + ["道具1 拆装扳手", "道具2 冶金炉", "刷新", "出战", "收起"]
+    marks = [Mark(i, 0.5, 0.5, label) for i, label in enumerate(labels, start=1)]
+    assert legend(marks) == ("## 截图标号\n1~4=前台1~4;5~10=后台1~6;11~19=备战席1~9;20~24=商店1~5;"
+                             "25=道具1 拆装扳手;26=道具2 冶金炉;27=刷新;28=出战;29=收起")
+    assert legend([Mark(1, .5, .5, "确认"), Mark(2, .5, .5, "装备1"), Mark(3, .5, .5, "后台3")]) == \
+        "## 截图标号\n1=确认;2=装备1;3=后台3"
