@@ -49,6 +49,12 @@ def test_node_types_from_plane_detail():
     assert ledger.kinds_near(None) == set()
 
 
+def test_node_types_skip_leading_marker():
+    """2026-11-19 那局位面 3 的详情在 3-7 前面多读出一个「■」,3-7 没被认成首领节点。"""
+    kinds = node_types(["■ 3-7 首领节点 当前位面的首领挑战，请小心应对。", "3-6 幕后茶歇 特殊的奖励节点"])
+    assert kinds == {"3-7": {"boss"}, "3-6": {"tea_break"}}
+
+
 def test_public_memories_are_in_the_catalog(tmp_path):
     """经验 2026-11-18 起由模型自己查:公共经验(已采纳的)都在系统提示词的目录里,原文要 lookup 才给。"""
     memories = MemoryStore(ROOT / "knowledge" / "memories.yaml", tmp_path / "m.sqlite").public()

@@ -32,10 +32,11 @@ def node_types(lines: list[str]) -> dict[str, set[str]]:
 
     实机的说明行如「1-1 奖励节点 难度较低的节点……」「1-3 投资策略 ……选择完毕后将继续备战【战斗节点】。」;
     投资策略选完还要打一场战斗,所以同时算 battle。认不出名字的节点不收。
+    行首可能多读出图标符号(2026-11-19 实机位面 3:「■ 3-7 首领节点 ……」),跳过行首的符号。
     """
     out: dict[str, set[str]] = {}
     for line in lines:
-        m = re.match(r"\s*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
+        m = re.match(r"\W*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
         if not m:
             continue
         node, label, rest = m.groups()
