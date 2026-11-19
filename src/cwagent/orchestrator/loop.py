@@ -41,7 +41,7 @@ from ..vision.cards import FIXED_UNITS
 from ..vision.supply import describe as describe_supply
 from ..vision.supply import read_supply
 from ..vision.supply import required as supply_required
-from ..vision.shop import format_shop, read_prices, read_shop, reread_names, trial_slots, two_star
+from ..vision.shop import format_shop, read_prices, read_shop, reread_names, shop_state, trial_slots, two_star
 from ..vision.annotate import annotate, legend, save_image
 from ..llm.base import ImageInput
 from . import difficulty as difficulty_select
@@ -1098,6 +1098,8 @@ class Runner:
                         return [Action(type="click", x=float(launch.x), y=float(launch.y),
                                        reason="免费启动星穹列车")]
             case "prepare":
+                if self._ready_at and time.monotonic() - self._ready_at < READY_SECONDS:
+                    return [Action(type="wait", seconds=1.5, reason="等待出战过场结束")]
                 # 残留的合成确认框会挡住所有操作(实机:确认没点下去,之后开商店、装备、出战全都无效)
                 confirm = find_compose_confirm(image)
                 if confirm is not None:
@@ -1331,18 +1333,28 @@ class Runner:
             # 原来是在每轮开头就打开、紧接着固定流程又要求收起来,一开一收来回点,画面一直在闪
             # (维护者 2026-11-16 看到的「一直点商店」);现在只有真的要做固定流程时才收一次。
             if not self.prepare.shop_now(boxes):
-                self._remember_hud(frame.image, boxes)
-                opened = PrepareResult()
-                boxes = self.prepare.set_shop(opened, boxes, True)
-                frame = self.prepare.frame or frame
+                frame = self.device.grab()
+                boxes = self.ocr(frame.image)
+                now = self.screen_of(frame.image, boxes)
+                attempted = now == "prepare" and shop_state(boxes) is False
+                if attempted:
+                    self._remember_hud(frame.image, boxes)
+                    boxes = self.prepare.set_shop(PrepareResult(), boxes, True)
+                    frame = self.prepare.frame or frame
+                    if not self.prepare.shop:
+                        self.log(f"[{n}] 没能打开商店")
+                    now = self.screen_of(frame.image, boxes)
                 record["shot"] = self.trace.shot(n, frame.image)
                 record["texts"] = [str(b) for b in boxes]
-                if not self.prepare.shop:
-                    self.log(f"[{n}] 没能打开商店")
-                now = self.screen_of(frame.image, boxes)
-                if now != "prepare":      # 开商店时游戏可能弹出别的界面(投资策略、补给……)
+                if now != "prepare":
                     record["screen"] = now
-                    record["actions"] = [f"打开商店后界面变成了{SCREEN_NAMES.get(now, now)}"]
+                    self._last_screen = now
+                    sig = text_signature(boxes)
+                    if attempted:
+                        record["actions"] = [f"尝试打开商店后进入{SCREEN_NAMES.get(now, now)}"]
+                    if now == "battle":
+                        self._ready_at = 0.0
+                        return self.watch_battle(n, record, sig)
                     self._last_sig = sig
                     self.trace.write(record)
                     return now
@@ -1564,6 +1576,8 @@ class Runner:
         if screen == "environment_choice":
             self._track_env_refresh(boxes, n)
         node = node_of(boxes)
+        if (node and node != self._node) or screen in CLOSES | {"tea_break", "equipment_reward", "spotlight_choice"}:
+            self._ready_at = 0.0
         if node:
             self._node = node
             self.prepare.node = node
@@ -1574,7 +1588,6 @@ class Runner:
             self.in_run = True
         self._last_screen = screen
         if screen == "battle":
-            self._ready_at = 0.0          # 进了战斗,出战后的过场就过去了
             return self.watch_battle(n, record, sig)
 
         actions = self._mentor_transition(screen)

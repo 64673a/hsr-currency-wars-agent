@@ -239,6 +239,43 @@ def test_prepare_semantic_actions(tmp_path):
                for h in runner.ledger.history)
 
 
+def test_ready_transition_ignores_residual_prepare_screen(tmp_path, monkeypatch):
+    pages = {
+        "prepare": [("备战阶段", 0.24, 0.04), ("2-7", 0.24, 0.07),
+                    ("商店", 0.845, 0.909), ("出战", 0.946, 0.694)],
+        "battle": [("总伤害", 0.96, 0.09), ("2-7 0%", 0.38, 0.025)],
+    }
+    sim = Sim(pages, "prepare", lambda *_: None)
+    brain = FakeBrain({})
+    ocr = FakeOcr(sim)
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=ocr, log=lambda _: None, settle=False)
+    runner._node = "2-7"
+    runner._finish_prepare({"step": 1}, [Action(type="ready")], ocr(sim.grab().image), set(), "prepare")
+    assert sim.actions == [("click", 0.946, 0.694)]
+    assert runner.step(2) == "prepare"
+    assert sim.actions == [("click", 0.946, 0.694)] and not brain.calls
+    monkeypatch.setattr(runner, "watch_battle", lambda *_: "battle")
+    sim.state = "battle"
+    assert runner.step(3) == "battle" and not runner._ready_at
+
+
+def test_auto_shop_checks_current_frame_before_click(tmp_path, monkeypatch):
+    pages = {
+        "prepare": [("备战阶段", 0.24, 0.04), ("商店", 0.845, 0.909)],
+        "battle": [("总伤害", 0.96, 0.09)],
+    }
+    sim = Sim(pages, "prepare", lambda *_: None)
+    brain = FakeBrain({})
+    ocr = FakeOcr(sim)
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=ocr, log=lambda _: None, settle=False)
+    frame = sim.grab()
+    sim.state = "battle"
+    watched = []
+    monkeypatch.setattr(runner, "watch_battle", lambda n, record, sig: watched.append(record) or "battle")
+    assert runner.decide(1, frame, ocr(frame.image), "prepare", {"step": 1}, set()) == "battle"
+    assert watched[0]["screen"] == "battle" and not sim.actions and not brain.calls
+
+
 def test_action_requires_fields():
     import pytest
     from pydantic import ValidationError

@@ -100,11 +100,11 @@ def test_transition_after_ready_does_not_call_the_model(tmp_path):
 def test_shop_is_opened_after_the_steps_that_need_it_closed(tmp_path):
     """看道具、认卡都要商店收着(里面会收商店):放在开商店之前,模型第一轮拿到的就是开着商店的画面
     (2026-11-18 那局 9 次第一轮只能先点「商店」)。"""
-    from cwagent.capture import Frame
     from cwagent.orchestrator.loop import Runner, Trace
-    from tests.test_loop import FakeBrain
+    from tests.test_loop import FakeBrain, FakeOcr, Sim
 
-    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    sim = Sim({"prepare": [("备战阶段", 0.24, 0.04), ("商店", 0.845, 0.909)]}, "prepare", lambda *_: None)
+    r = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
     calls = []
 
     class Opened(Exception):
@@ -119,7 +119,7 @@ def test_shop_is_opened_after_the_steps_that_need_it_closed(tmp_path):
     r._identify_unknown = lambda n, frame, boxes: calls.append("认卡")
     r.prepare.set_shop = set_shop
     r._remember_hud = lambda *a: None
-    frame = Frame(image=Image.new("RGB", (64, 36)), timestamp=0)
+    frame = sim.grab()
     with pytest.raises(Opened):
-        r.decide(1, frame, [], "prepare", {"step": 1}, set())
+        r.decide(1, frame, r.ocr(frame.image), "prepare", {"step": 1}, set())
     assert calls == ["看道具", "认卡", "开商店"]
