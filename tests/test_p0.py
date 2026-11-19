@@ -281,6 +281,34 @@ def test_node_report(tmp_path):
     assert "| 1-3 | 84 | 18 | 4 | 2/4 | 1 | 1/2 | 18 | 0%→33% | 1 | 负 | 75 | 2 | 1500 |" in text
 
 
+def test_node_report_reads_result_screens(tmp_path):
+    """2026-11-19 那局:最终首领的结算画面(「前往结算」,分类成 other)没记胜负;打赢了进度只读到 94%;
+    奖励节点十几秒打完、没看到战斗。"""
+    hud = {"hud": {"hp": 100, "gold": 30, "level": 8}}
+    steps = [
+        {"step": 1, "screen": "prepare", "node": "2-6", "state": hud,
+         "plane_nodes": "位面 2(从左到右):\n- 2-6 奖励节点 难度较低的节点\n- 2-7 首领节点 当前位面的首领挑战"},
+        {"step": 2, "screen": "node_result", "node": "2-6", "texts": ["(0.5,0.2) 挑战成功", "(0.4,0.4) 小队生命值100"]},
+        {"step": 3, "screen": "prepare", "node": "2-7", "state": hud},
+        {"step": 4, "screen": "battle", "node": "2-7", "battle_summary": "进度 0% → 最后读到 94%;没认出阵亡横幅;用时 268 秒"},
+        {"step": 5, "screen": "node_result", "node": "2-7", "texts": ["(0.5,0.2) 挑战成功", "(0.4,0.4) 小队生命值100"]},
+        {"step": 6, "screen": "prepare", "node": "3-7", "state": hud},
+        {"step": 7, "screen": "battle", "node": "3-7", "battle_summary": "进度 0% → 最后读到 61%;用时 461 秒"},
+        {"step": 8, "screen": "other", "node": None,
+         "texts": ["(0.5,0.2) 挑战成功", "(0.5,0.3) 3-7", "(0.4,0.6) 挑战进度", "(0.6,0.6) 100", "(0.5,0.8) 前往结算"]},
+        {"step": 9, "screen": "settlement", "node": None,
+         "texts": ["(0.5,0.2) 挑战成功", "(0.5,0.4) 小队生命值❤100", "(0.5,0.8) 下一步"]},
+    ]
+    (tmp_path / "steps.jsonl").write_text("\n".join(json.dumps(s, ensure_ascii=False) for s in steps), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps({"profile": "m", "result": "settlement"}), encoding="utf-8")
+    rows = {r.node: r for r in report.node_rows(report._steps(tmp_path))}
+    assert (rows["2-6"].progress, rows["2-6"].result) == ("0%→100%", "胜")     # 奖励节点不会输
+    assert (rows["2-7"].progress, rows["2-7"].result) == ("0%→100%", "胜")
+    assert (rows["3-7"].progress, rows["3-7"].result, rows["3-7"].hp_after) == ("0%→100%", "胜", 100)
+    text = report.render(tmp_path)
+    assert "结果 通关(settlement)" in text and "战斗 3 场,胜 3 场" in text
+
+
 # ---------------------------------------------------------------- 攻略卡片(作者原文不截断,前中期带前后台和羁绊人数)
 
 from cwagent.knowledge.guides import Guide, card  # noqa: E402

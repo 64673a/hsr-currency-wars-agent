@@ -11,6 +11,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..brain.ledger import node_types
+
+RESULT_BUTTONS = ("继续挑战", "前往结算")   # 每场战斗的结算画面;最终首领打完是「前往结算」(画面分类认成 other)
 CHOICE_NAMES = {"environment_choice": "投资环境", "strategy_choice": "投资策略", "supply": "补给",
                 "encounter_choice": "遭遇", "spotlight_choice": "主角光环", "tea_break": "幕后茶歇"}
 
@@ -27,7 +30,7 @@ class NodeRow:
     on_field: int | None = None         # 出战前场上一共几个
     gold_out: int | None = None         # 出战前剩的金币
     level_out: int | None = None
-    progress: str = ""                  # 战斗进度,如 0%→33%
+    progress: str = ""                  # 战斗进度,如 0%→33%;打赢了终点记 100%,结算画面有「挑战进度」时按它
     deaths: int | None = None
     result: str = ""                    # 胜 / 负
     hp_after: int | None = None
@@ -56,6 +59,33 @@ def _int(v) -> int | None:
         return None
 
 
+def _plain(texts: list[str]) -> list[str]:
+    """记录里的文字带坐标前缀「(0.499,0.212) 挑战结束」,去掉坐标。"""
+    return [re.sub(r"^\([\d.]+,[\d.]+\) ", "", t) for t in texts]
+
+
+def _result_progress(texts: list[str]) -> int | None:
+    """结算画面上「挑战进度」后面的数字(最终首领的结算画面有,普通节点的没有)。"""
+    plain = _plain(texts)
+    for i, t in enumerate(plain):
+        if t.startswith("挑战进度"):
+            m = re.search(r"(\d{1,3})", t[4:]) or (re.fullmatch(r"(\d{1,3})%?", plain[i + 1]) if i + 1 < len(plain) else None)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def outcome(steps: list[dict]) -> str | None:
+    """整局结果:开局之后的整局结算画面写「挑战成功」是通关、「挑战失败」是失败(和网页对局列表同一个判法)。"""
+    started, out = False, None
+    for r in steps:
+        started = started or r.get("screen") in ("run_intro", "environment_choice", "prepare", "battle")
+        if started and r.get("screen") == "settlement":
+            joined = " ".join(r.get("texts") or [])
+            out = "失败" if "挑战失败" in joined else "通关" if "挑战成功" in joined else out
+    return out
+
+
 def _hp_from_texts(texts: list[str]) -> int | None:
     for t in texts:
         m = re.search(r"小队生命值\D{0,3}(\d{1,3})", t)
@@ -69,6 +99,9 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
     order: list[str] = []
     current: str | None = None
     pending_choices: list[str] = []      # 还没读到节点号时做的选择(如 1-3 的投资策略在进入 1-3 备战之前)
+    battled: set[str] = set()            # 有战斗记录的节点
+    kinds: dict[str, set[str]] = {}      # 位面调查读到的节点类型
+    shown: dict[str, int] = {}           # 结算画面上读到的「挑战进度」
 
     def row(node: str) -> NodeRow:
         if node not in rows:
@@ -77,6 +110,8 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
         return rows[node]
 
     for r in steps:
+        if r.get("plane_nodes"):
+            kinds.update(node_types(str(r["plane_nodes"]).splitlines()))
         node = r.get("node")
         if node and re.fullmatch(r"[1-3]-\d{1,2}", node):
             current = node
@@ -119,24 +154,43 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
                 rw.stars2 = sum(1 for b in field_ if (b.get("stars") or 0) >= 2)
         if screen == "battle" and r.get("battle_summary"):
             summary = r["battle_summary"]
+            battled.add(current)
             m = re.search(r"进度 (\d+)% → (?:最后读到 )?(\d+)%", summary)
             if m:
                 rw.progress = f"{m.group(1)}%→{m.group(2)}%"
             deaths = re.search(r"阵亡(?:横幅)? (\d+) 次", summary)   # 只数认出的横幅;旧记录里「另有 N 次行动值骤降」不算
             rw.deaths = int(deaths.group(1)) if deaths else (0 if re.search(r"没有看到阵亡提示|没认出阵亡横幅", summary) else None)
-        if screen == "node_result":
-            texts = r.get("texts") or []
-            joined = " ".join(texts)
+        texts = r.get("texts") or []
+        joined = " ".join(texts)
+        if screen == "node_result" or (screen != "settlement" and any(b in joined for b in RESULT_BUTTONS)):
             if "挑战成功" in joined:
                 rw.result = "胜"
-            elif "挑战结束" in joined:
+            elif "挑战结束" in joined or "挑战失败" in joined:
                 rw.result = "负"
+            shown_progress = _result_progress(texts)
+            if shown_progress is not None:
+                shown[current] = shown_progress
             hp = _hp_from_texts(texts)
             if hp is not None:
                 rw.hp_after = hp
+        if screen == "settlement" and rw.hp_after is None:
+            rw.hp_after = _hp_from_texts(texts)     # 最终首领的结算画面没有血量,整局结算画面有
     if pending_choices and order:
         rows[order[-1]].choices.extend(pending_choices)
     out = [rows[n] for n in order]
+    # 战斗中最后一次读到的进度不是终点(大招特效常挡住进度条,2026-11-19 那局 2-7、3-2 打赢了只读到 94%、89%):
+    # 结算画面有「挑战进度」时按它,打赢了终点就是 100%;奖励节点不会输(不限行动值、阵亡无限复活,维护者告知),
+    # 走过去了就记 100% 胜(那局 2-6 十几秒就打完,程序没看到战斗);别的没看到战斗的标出来
+    for i, rw in enumerate(out):
+        start = rw.progress.split("→")[0] if rw.progress else "0%"
+        if "reward" in kinds.get(rw.node, ()) and (rw.result or i + 1 < len(out)):
+            rw.progress, rw.result = "0%→100%", "胜"
+        elif rw.node in shown:
+            rw.progress = f"{start}→{shown[rw.node]}%"
+        elif rw.result == "胜" and rw.node in battled:
+            rw.progress = f"{start}→100%"
+        elif rw.result and rw.node not in battled:
+            rw.progress = "没看到战斗"
     # 没截到结算界面的战斗(进度最后读到 87% 不等于输了):看下一个节点的进场血量,胜利固定回 2 点,输了扣血
     for i, rw in enumerate(out):
         if rw.result or not rw.progress or rw.hp_in is None:
@@ -163,9 +217,11 @@ def render(run: Path) -> str:
     calls = sum(1 for r in steps if r.get("decision"))
     tokens = sum(_int(((r.get("decision") or {}).get("usage") or {}).get("input_tokens")) or 0 for r in steps)
     fights = [r for r in rows if r.result]
+    ended = outcome(steps)
+    result = f"{ended}({meta['result']})" if ended and meta.get("result") else ended or meta.get("result") or "?"
     lines = [f"# 对局报表 {run.name}", "",
              f"- 模型 {meta.get('profile') or meta.get('model') or '?'},难度 {meta.get('difficulty') or '?'},"
-             f"结果 {meta.get('result') or '?'}",
+             f"结果 {result}",
              f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
              f"模型调用 {calls} 次,输入 {tokens} token", "",
              "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡横幅 | 胜负 | 战后血量 | 调用 | 输入token |",
