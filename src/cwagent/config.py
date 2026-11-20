@@ -149,7 +149,13 @@ class AgentSettings(BaseModel):
     use_guides: bool = True
     max_tactical_calls_per_stage: int = Field(default=5, ge=1, le=20)   # 不含单独那一轮出战(按 2026-11-16 实机,3 轮在高难下不够用)
     max_run_minutes: int = Field(default=120, ge=1)
-    ocr: Literal["auto", "cpu"] = "auto"   # 文字识别:auto = Windows 上能用 DirectML 就用显卡,否则 CPU
+
+
+class OcrSettings(BaseModel):
+    """文字识别用的设备(网页设置里选)。"""
+
+    device: Literal["gpu", "cpu"] = "gpu"            # gpu:用显卡(DirectML),不可用时退回 CPU
+    adapter: int | None = Field(default=None, ge=0)  # 用哪块显卡(显卡列表里的编号);不填时选专用显存最大的
 
 
 class ServerSettings(BaseModel):
@@ -178,6 +184,7 @@ class AppConfig(BaseModel):
     models: list[ModelProfile] = Field(default_factory=list)
     roles: Roles = Field(default_factory=Roles)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    ocr: OcrSettings = Field(default_factory=OcrSettings)
     server: ServerSettings = Field(default_factory=ServerSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
     stream: StreamSettings = Field(default_factory=StreamSettings)
@@ -343,13 +350,15 @@ class ConfigStore:
 
     def update_settings(self, *, roles: Roles | None = None, agent: AgentSettings | None = None,
                         server: ServerSettings | None = None,
-                        knowledge: KnowledgeSettings | None = None) -> AppConfig:
+                        knowledge: KnowledgeSettings | None = None, ocr: OcrSettings | None = None) -> AppConfig:
         with self._lock:
             cfg = self.load()
             if roles is not None:
                 cfg.roles = roles
             if agent is not None:
                 cfg.agent = agent
+            if ocr is not None:
+                cfg.ocr = ocr
             if server is not None:
                 cfg.server = server
             if knowledge is not None:

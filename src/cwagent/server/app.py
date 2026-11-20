@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ from ..config import (
     Effort,
     KnowledgeSettings,
     ModelProfile,
+    OcrSettings,
     ProviderConfig,
     Roles,
     ServerSettings,
@@ -32,6 +34,10 @@ from ..config import (
 from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
 from ..stream import LiveStream
+from ..vision.adapters import list_adapters
+from ..vision.adapters import pick as pick_adapter
+from ..vision.ocr import Ocr, directml_available, sample_frame
+from ..vision.ocr import configure as ocr_configure
 from .jobs import Job
 from .mcp import create_mcp
 from .runs import PlayController, RunStore
@@ -58,6 +64,7 @@ class SettingsIn(BaseModel):
     agent: AgentSettings | None = None
     server: ServerSettings | None = None
     knowledge: KnowledgeSettings | None = None
+    ocr: OcrSettings | None = None
 
 
 class SyncIn(BaseModel):
@@ -127,6 +134,12 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
             return store.load()
         except (ConfigError, ValueError) as e:
             raise HTTPException(500, f"config.yaml 有误:{e}") from None
+
+    try:   # 网页的只读截图等不经过对局的识别也按配置选设备
+        _cfg = store.load()
+        ocr_configure(_cfg.ocr.device, _cfg.ocr.adapter)
+    except (ConfigError, ValueError):
+        pass
 
     # ------------------------------------------------------------ 状态
 
@@ -367,19 +380,49 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
 
     # ------------------------------------------------------------ 运行参数
 
+    def settings_out(cfg) -> dict[str, Any]:
+        return {"roles": cfg.roles, "agent": cfg.agent, "server": cfg.server, "knowledge": cfg.knowledge,
+                "ocr": cfg.ocr}
+
     @app.get("/api/config")
     def config_get() -> dict[str, Any]:
-        cfg = load_config()
-        return {"roles": cfg.roles, "agent": cfg.agent, "server": cfg.server, "knowledge": cfg.knowledge}
+        return settings_out(load_config())
 
     @app.put("/api/config")
     def config_put(body: SettingsIn) -> dict[str, Any]:
         try:
             cfg = store.update_settings(roles=body.roles, agent=body.agent, server=body.server,
-                                        knowledge=body.knowledge)
+                                        knowledge=body.knowledge, ocr=body.ocr)
         except ConfigError as e:
             raise _bad(e) from None
-        return {"roles": cfg.roles, "agent": cfg.agent, "server": cfg.server, "knowledge": cfg.knowledge}
+        ocr_configure(cfg.ocr.device, cfg.ocr.adapter)
+        return settings_out(cfg)
+
+    # ------------------------------------------------------------ 文字识别
+
+    @app.get("/api/ocr")
+    def ocr_info() -> dict[str, Any]:
+        """可选的显卡(能用 DirectML 时才有)和自动会选哪块。"""
+        adapters = list_adapters() if directml_available() else []
+        auto = pick_adapter(adapters, None)
+        return {"adapters": [{"index": a.index, "name": a.name, "memory_mb": a.memory_mb} for a in adapters],
+                "auto": auto.index if auto else None}
+
+    @app.post("/api/ocr/test")
+    def ocr_test(body: OcrSettings) -> dict[str, Any]:
+        """按给的设置识别一张 1920x1080 的测试画面:实际用的设备、初始化用时、整屏一次的用时。"""
+        started = time.perf_counter()
+        ocr = Ocr(device=body.device, adapter=body.adapter)
+        backend = ocr.backend
+        init_s = time.perf_counter() - started
+        frame = sample_frame()
+        ocr(frame)
+        times = []
+        for _ in range(3):
+            t = time.perf_counter()
+            ocr(frame)
+            times.append(time.perf_counter() - t)
+        return {"backend": backend, "ms": round(sorted(times)[1] * 1000), "init_s": round(init_s, 1)}
 
     # ------------------------------------------------------------ 记忆
 

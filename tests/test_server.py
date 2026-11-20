@@ -218,3 +218,20 @@ def test_runs_and_play(tmp_path):
     assert not d0.exists() and live.exists() and runs.exists()
     assert [r["id"] for r in client.get("/api/runs").json()] == [live.name, d.name]
     assert client.post("/api/runs/delete", json={"ids": []}).status_code == 422
+
+
+def test_ocr_settings_and_speed_test(env, monkeypatch):
+    """文字识别的设置随配置一起读写,保存后新建的识别按它选设备;测速按表单里的设置跑一张测试画面(2026-11-20)。"""
+    from cwagent.vision import ocr
+
+    client, store, _ = env
+    monkeypatch.setattr(ocr, "_SETTINGS", dict(ocr._SETTINGS))
+    assert client.get("/api/config").json()["ocr"] == {"device": "gpu", "adapter": None}
+    r = client.put("/api/config", json={"ocr": {"device": "cpu", "adapter": None}})
+    assert r.status_code == 200 and r.json()["ocr"]["device"] == "cpu" and store.load().ocr.device == "cpu"
+    assert ocr._SETTINGS["device"] == "cpu"
+    assert client.put("/api/config", json={"ocr": {"device": "npu"}}).status_code == 422
+    info = client.get("/api/ocr").json()
+    assert info == {"adapters": [], "auto": None}          # 不是 Windows:没有可选的显卡
+    test = client.post("/api/ocr/test", json={"device": "cpu"}).json()
+    assert test["backend"] == "CPU" and test["ms"] > 0

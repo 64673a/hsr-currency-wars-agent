@@ -7,10 +7,24 @@ import { ConfirmMorph } from '@/components/arc/confirm-morph/confirm-morph';
 import { Dialog, DialogContent } from '@/components/arc/dialog/dialog';
 import { Input } from '@/components/arc/input/input';
 import { NumberField } from '@/components/arc/number-field/number-field';
+import SegmentedControl from '@/components/arc/segmented-control/segmented-control';
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import { Switch } from '@/components/arc/switch/switch';
-import { api, effortName, enc, errorText, type ModelProfile, type Provider, type RoleKey, type Settings, type TestResult } from '@/lib/api';
+import {
+  api,
+  effortName,
+  enc,
+  errorText,
+  type ModelProfile,
+  type OcrInfo,
+  type OcrSettings,
+  type OcrTest,
+  type Provider,
+  type RoleKey,
+  type Settings,
+  type TestResult,
+} from '@/lib/api';
 import page from '@/lib/page.module.css';
 
 import { ModelDialog, ModelPicker, ProviderDialog } from './dialogs';
@@ -352,6 +366,8 @@ function ConfigForm({ settings, models, onSaved }: { settings: Settings; models:
         </div>
       </section>
 
+      <OcrFields value={s.ocr} onChange={(ocr) => update({ ...s, ocr })} />
+
       <section className={page.section} aria-labelledby={`${id}-server`}>
         <h2 id={`${id}-server`} className={page.heading}>网页服务</h2>
         <div className={page.fields2}>
@@ -385,5 +401,87 @@ function ConfigForm({ settings, models, onSaved }: { settings: Settings; models:
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+const DEVICES = [
+  { value: 'gpu', label: '显卡' },
+  { value: 'cpu', label: 'CPU' },
+];
+
+// 文字识别用的设备:显卡(选哪块)或 CPU;测速按表单里还没保存的设置跑一张测试画面
+function OcrFields({ value, onChange }: { value: OcrSettings; onChange: (v: OcrSettings) => void }) {
+  const id = useId();
+  const [info, setInfo] = useState<OcrInfo | null>(null);
+  const [test, setTest] = useState<OcrTest | null>(null);
+  const [testError, setTestError] = useState('');
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    api<OcrInfo>('/api/ocr')
+      .then(setInfo)
+      .catch(() => setInfo({ adapters: [], auto: null }));
+  }, []);
+
+  const cards = info?.adapters ?? [];
+  const auto = cards.find((a) => a.index === info?.auto);
+  const chosen = cards.some((a) => a.index === value.adapter) ? String(value.adapter) : 'auto';
+  const gb = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
+  const change = (patch: Partial<OcrSettings>) => {
+    onChange({ ...value, ...patch });
+    setTest(null);
+    setTestError('');
+  };
+
+  async function runTest() {
+    setTesting(true);
+    setTestError('');
+    try {
+      setTest(await api<OcrTest>('/api/ocr/test', { method: 'POST', body: value }));
+    } catch (e) {
+      setTest(null);
+      setTestError(errorText(e));
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const fellBack = test && value.device === 'gpu' && cards.length > 0 && test.backend === 'CPU';
+  return (
+    <section className={page.section} aria-labelledby={`${id}-ocr`}>
+      <h2 id={`${id}-ocr`} className={page.heading}>文字识别</h2>
+      {cards.length > 0 && (
+        <div className={page.fields2}>
+          <SegmentedControl label="识别设备" options={DEVICES} value={value.device} onValueChange={(v) => change({ device: v as OcrSettings['device'] })} fullWidth />
+          {value.device === 'gpu' && (
+            <Select
+              label="显卡"
+              options={[
+                { value: 'auto', label: `自动(${auto?.name ?? '专用显存最大的'})` },
+                ...cards.map((a) => ({ value: String(a.index), label: `${a.name} · ${gb(a.memory_mb)}` })),
+              ]}
+              value={chosen}
+              onValueChange={(v) => change({ adapter: v === 'auto' ? null : Number(v) })}
+            />
+          )}
+        </div>
+      )}
+      <div className={page.actions}>
+        {test && (
+          <span className={page.rowTitle}>
+            <Badge size="sm" tone={fellBack ? 'warning' : 'success'} dot>
+              {fellBack ? '没用上显卡' : '可用'}
+            </Badge>
+            <span className={page.rowHint}>
+              {test.backend} · 整屏 {test.ms} 毫秒 · 初始化 {test.init_s} 秒
+            </span>
+          </span>
+        )}
+        {testError && <span className={page.rowHint}>{testError}</span>}
+        <Button size="sm" variant="secondary" loading={testing} onClick={runTest}>
+          测速
+        </Button>
+      </div>
+    </section>
   );
 }

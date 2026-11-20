@@ -1,8 +1,8 @@
 """文字识别(RapidOCR)。坐标全部归一化到 0~1,与截图分辨率无关。
 
-Windows 上能用 DirectML 就用显卡跑(M7A 的默认做法):整屏一次约 0.18 秒,CPU 约 0.5 秒;同一套检测参数下两者
-读出的文字逐框一致(2026-11-20 Windows 实测)。显卡初始化失败时退回 CPU。整个进程共用一个引擎:加载模型、
-初始化显卡都要时间,网页的只读截图不必每次重来。
+Windows 上默认用显卡(DirectML,M7A 的默认做法)跑,用哪块显卡在网页设置里选(配置的 ocr 段):整屏一次约 0.18 秒,
+CPU 约 0.5 秒;同一套检测参数下两者读出的文字逐框一致(2026-11-20 Windows 实测)。显卡初始化失败时退回 CPU。
+同样的设置在进程里共用一个引擎:加载模型、初始化显卡都要时间,网页的只读截图不必每次重来。
 """
 
 from __future__ import annotations
@@ -30,9 +30,15 @@ class TextBox:
         return f"({self.x:.3f},{self.y:.3f}) {self.text}"
 
 
-_ENGINES: dict[str, tuple[object, str]] = {}   # 设置(auto / cpu)→(引擎, 实际用的:DirectML / CPU)
+_ENGINES: dict[tuple[str, int | None], tuple[object, str]] = {}   # (设备, 显卡编号) →(引擎, 实际用的设备)
 _BUILD = threading.Lock()
 _RUN = threading.Lock()     # 同一个引擎不并发调用(DirectML 不支持同一会话并发推理)
+_SETTINGS: dict = {"device": "gpu", "adapter": None}   # 配置里的 ocr 段(serve 启动、保存设置时更新)
+
+
+def configure(device: str, adapter: int | None) -> None:
+    """设置之后新建的 Ocr 用哪种设备、哪块显卡(已经建好的引擎不变,下一局开始时生效)。"""
+    _SETTINGS.update(device=device, adapter=adapter)
 
 
 def directml_available() -> bool:
@@ -53,41 +59,97 @@ def _warmup_image() -> Image.Image:
     return img.resize((640, 192))
 
 
-def engine(device: str = "auto") -> tuple[object, str]:
-    """进程里共用的识别引擎和它实际用的设备。device=auto 时能用 DirectML 就用显卡,否则 CPU;cpu 只用 CPU。"""
+def sample_frame() -> Image.Image:
+    """测速用的 1920x1080 画面:四十来行字,识别量和备战界面差不多。"""
+    from PIL import ImageFont
+
+    img = Image.new("RGB", (1920, 1080), (30, 24, 48))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.load_default(size=28)
+    except TypeError:   # 没有 FreeType 时只有固定大小的点阵字
+        font = ImageFont.load_default()
+    for i in range(44):
+        draw.text((60 + (i % 4) * 460, 40 + (i // 4) * 92), f"Lv.{i % 9 + 1}  {i * 7}/{i + 30}  G{i * 13}",
+                  fill="white", font=font)
+    return img
+
+
+def _plain_dml_options() -> None:
+    """rapidocr 把配置里的 dml_ep_cfg 原样(OmegaConf 的 DictConfig)交给 onnxruntime,onnxruntime 只认 dict,
+    报错后悄悄退回 CPU(2026-11-20 Windows 实测,指定显卡编号时):转成普通 dict 再交。"""
+    from rapidocr.inference_engine.onnxruntime import provider_config
+
+    original = provider_config.ProviderConfig.dml_ep_cfg
+    if getattr(original, "plain", False):
+        return
+
+    def dml_ep_cfg(self):
+        return dict(original(self))
+
+    dml_ep_cfg.plain = True
+    provider_config.ProviderConfig.dml_ep_cfg = dml_ep_cfg
+
+
+def _on_gpu(ocr) -> bool | None:
+    """检测和识别两个模型实际是不是在 DirectML 上跑(onnxruntime 建不了时会退回 CPU 而不报错);看不出来时返回 None。"""
+    try:
+        return all(getattr(ocr, part).session.session.get_providers()[0] == "DmlExecutionProvider"
+                   for part in ("text_det", "text_rec"))
+    except Exception:  # noqa: BLE001 - rapidocr 内部结构变了就看不出来
+        return None
+
+
+def engine(device: str = "gpu", adapter: int | None = None) -> tuple[object, str]:
+    """进程里共用的识别引擎和它实际用的设备(「显卡:<名字>」或「CPU」)。
+
+    device=gpu:用 DirectML 跑在 adapter 号显卡上(没指定或没有这块时选专用显存最大的);DirectML 不可用、
+    初始化或预热失败时退回 CPU。device=cpu:只用 CPU。"""
+    key = (device, adapter)
     with _BUILD:
-        if device not in _ENGINES:
+        if key not in _ENGINES:
             logging.getLogger("RapidOCR").setLevel(logging.WARNING)
             from rapidocr import RapidOCR
 
+            from .adapters import list_adapters, pick
+
             built = None
-            if device == "auto" and directml_available():
+            if device == "gpu" and directml_available():
+                chosen = pick(list_adapters(), adapter)
+                params: dict = {"EngineConfig.onnxruntime.use_dml": True}
+                if chosen is not None:
+                    _plain_dml_options()
+                    params["EngineConfig.onnxruntime.dml_ep_cfg"] = {"device_id": chosen.index}
                 try:
-                    gpu = RapidOCR(params={"EngineConfig.onnxruntime.use_dml": True})
+                    gpu = RapidOCR(params=params)
                     gpu(_warmup_image(), use_det=True, use_cls=False, use_rec=True)
-                    built = (gpu, "DirectML")
+                    if _on_gpu(gpu) is False:
+                        raise RuntimeError("onnxruntime 没能把模型放到显卡上")
+                    built = (gpu, f"显卡:{chosen.name}" if chosen is not None else "显卡")
                 except Exception as e:  # noqa: BLE001 - 显卡用不了就用 CPU,不影响对局
                     logging.getLogger(__name__).warning("文字识别用显卡(DirectML)初始化失败,改用 CPU:%s", e)
-            _ENGINES[device] = built or (RapidOCR(), "CPU")
-        return _ENGINES[device]
+            _ENGINES[key] = built or (RapidOCR(), "CPU")
+        return _ENGINES[key]
 
 
 class Ocr:
-    def __init__(self, min_score: float = 0.55, device: str = "auto"):
+    def __init__(self, min_score: float = 0.55, device: str | None = None, adapter: int | None = None):
+        """device / adapter 不给时按 configure() 设的(配置里的 ocr 段)。"""
         self.min_score = min_score
-        self.device = device       # auto / cpu
+        self.device = device or _SETTINGS["device"]
+        self.adapter = adapter if device else _SETTINGS["adapter"]
         self._engine = None
 
     def _get(self):
         if self._engine is None:
-            self._engine = engine(self.device)[0]
+            self._engine = engine(self.device, self.adapter)[0]
         return self._engine
 
     @property
     def backend(self) -> str:
-        """实际用的设备:DirectML / CPU(会先把引擎建好)。"""
+        """实际用的设备:「显卡:<名字>」或「CPU」(会先把引擎建好)。"""
         self._get()
-        return engine(self.device)[1]
+        return engine(self.device, self.adapter)[1]
 
     def __call__(self, image: Image.Image, region: tuple[float, float, float, float] | None = None) -> list[TextBox]:
         """识别整张图或其中一个区域(x, y, 宽, 高,归一化)。返回的坐标仍相对整张图。"""

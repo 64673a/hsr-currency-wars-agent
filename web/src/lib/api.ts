@@ -113,6 +113,23 @@ export interface Settings {
   agent: { use_guides: boolean; max_tactical_calls_per_stage: number; max_run_minutes: number; trailblazer_name: string };
   server: { host: string; port: number };
   knowledge: { max_lineups: number; request_interval: number };
+  ocr: OcrSettings;
+}
+
+export interface OcrSettings {
+  device: 'gpu' | 'cpu';
+  adapter: number | null;
+}
+
+export interface OcrInfo {
+  adapters: { index: number; name: string; memory_mb: number }[];
+  auto: number | null;
+}
+
+export interface OcrTest {
+  backend: string;
+  ms: number;
+  init_s: number;
 }
 
 export interface KnowledgeMeta {

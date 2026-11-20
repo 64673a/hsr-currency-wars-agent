@@ -83,7 +83,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     trace = Trace(run_dir)
     (run_dir / "system.md").write_text(brain.system, encoding="utf-8")
     book = CompanionBook()
-    ocr = Ocr(device=cfg.agent.ocr)
+    ocr = Ocr(device=cfg.ocr.device, adapter=cfg.ocr.adapter)
     runner = Runner(device, brain, trace, ocr=ocr, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),

@@ -1162,7 +1162,7 @@ hsr-currency-wars-agent/
 | ffmpeg、MediaMTX(`data/tools`)、`data/stream` | 实时画面准备时下载 | 删除 |
 | 知识库、模板、记忆、对局记录、配置、网页 | — | 只有 `--all` 才删除 |
 
-后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`mcp`(MCP 协议库,11.9)、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。文字识别:Windows 上装 `onnxruntime-directml`(其他平台 `onnxruntime`),`agent.ocr: auto` 时能用显卡就用 DirectML(整屏约 0.18 秒,CPU 约 0.5 秒;同一套检测参数下逐框一致),初始化失败退回 CPU;整个进程共用一个引擎。只缩小不放大的检测参数(小块裁图快 5~25 倍)对比过,金币、战斗横幅的读数有好有坏,没有采用(2026-11-20 Windows 实测)。
+后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`mcp`(MCP 协议库,11.9)、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。文字识别:Windows 上装 `onnxruntime-directml`(其他平台 `onnxruntime`),用哪种设备在网页「设置 → 文字识别」里选(配置的 `ocr` 段:`device: gpu | cpu`,`adapter` 是显卡编号,不填时选专用显存最大的那块,设置页列出本机显卡、可以测速)。DirectML 的 device_id 是 DXGI 枚举顺序;维护者的机器上 0、1、3 号都是 RTX 5060 Ti,2 号是核显(整屏 5060 Ti 约 0.19 秒、核显约 1.36 秒、CPU 约 0.5 秒;同一套检测参数下显卡和 CPU 逐框一致)。rapidocr 把 `dml_ep_cfg` 原样交给 onnxruntime 会被拒、悄悄退回 CPU,程序转成普通 dict 再交,并在建好引擎后核对实际用的是不是 DirectML;初始化失败或没用上显卡时退回 CPU、如实标出。同样的设置在进程里共用一个引擎。只缩小不放大的检测参数(小块裁图快 5~25 倍)对比过,金币、战斗横幅的读数有好有坏,没有采用(2026-11-20 Windows 实测)。
 
 命令:
 

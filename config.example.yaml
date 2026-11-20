@@ -50,7 +50,10 @@ agent:
   max_tactical_calls_per_stage: 5      # 不含单独那一轮出战;开晶矿、收集节点、合成装备都要占轮次
   max_run_minutes: 120
   trailblazer_name: ""               # 开拓者在游戏里显示的名字(玩家自己取的),商店、补给、角色详情里显示的是它
-  ocr: auto                          # 文字识别:auto 能用显卡(DirectML)就用,否则 CPU;显卡识别出问题时改成 cpu
+
+ocr:                                 # 文字识别(网页设置里也能改)
+  device: gpu                        # gpu 用显卡(DirectML),不可用时退回 CPU;cpu 只用 CPU
+  adapter: null                      # 用哪块显卡(网页上列出的编号);null 选专用显存最大的那块
 
 server:
   host: 127.0.0.1                    # 改成 0.0.0.0 才能从局域网其他设备打开网页
