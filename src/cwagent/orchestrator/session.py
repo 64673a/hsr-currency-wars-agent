@@ -17,6 +17,7 @@ from ..knowledge.index import NameIndex
 from ..llm.external import EXTERNAL
 from ..memory import MemoryStore
 from ..vision.board import Portraits
+from ..vision.ocr import Ocr
 from .loop import Runner, RunOptions, Trace
 
 
@@ -82,12 +83,13 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     trace = Trace(run_dir)
     (run_dir / "system.md").write_text(brain.system, encoding="utf-8")
     book = CompanionBook()
-    runner = Runner(device, brain, trace, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
+    ocr = Ocr(device=cfg.agent.ocr)
+    runner = Runner(device, brain, trace, ocr=ocr, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
                     guides=guides, trailblazer=cfg.agent.trailblazer_name)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
-               session_id=endpoint.session_id,
+               session_id=endpoint.session_id, ocr=ocr.backend,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                # 跑这局的进程:网页据此判断对局还在不在跑(崩溃、被结束时写不进结束时间)

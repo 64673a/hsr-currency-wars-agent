@@ -1,13 +1,20 @@
-"""文字识别(RapidOCR)。坐标全部归一化到 0~1,与截图分辨率无关。"""
+"""文字识别(RapidOCR)。坐标全部归一化到 0~1,与截图分辨率无关。
+
+Windows 上能用 DirectML 就用显卡跑(M7A 的默认做法):整屏一次约 0.18 秒,CPU 约 0.5 秒;同一套检测参数下两者
+读出的文字逐框一致(2026-11-20 Windows 实测)。显卡初始化失败时退回 CPU。整个进程共用一个引擎:加载模型、
+初始化显卡都要时间,网页的只读截图不必每次重来。
+"""
 
 from __future__ import annotations
 
 import logging
 import re
+import sys
+import threading
 import time
 from dataclasses import dataclass, replace
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 @dataclass(frozen=True)
@@ -23,18 +30,64 @@ class TextBox:
         return f"({self.x:.3f},{self.y:.3f}) {self.text}"
 
 
+_ENGINES: dict[str, tuple[object, str]] = {}   # 设置(auto / cpu)→(引擎, 实际用的:DirectML / CPU)
+_BUILD = threading.Lock()
+_RUN = threading.Lock()     # 同一个引擎不并发调用(DirectML 不支持同一会话并发推理)
+
+
+def directml_available() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import onnxruntime
+
+        return "DmlExecutionProvider" in onnxruntime.get_available_providers()
+    except Exception:  # noqa: BLE001 - 装的不是带 DirectML 的 onnxruntime 就当没有
+        return False
+
+
+def _warmup_image() -> Image.Image:
+    """预热用的图:第一次在显卡上跑要编译程序,带几个字才会把检测和识别都跑一遍。"""
+    img = Image.new("RGB", (320, 96), "white")
+    ImageDraw.Draw(img).text((20, 30), "0123 OCR", fill="black")
+    return img.resize((640, 192))
+
+
+def engine(device: str = "auto") -> tuple[object, str]:
+    """进程里共用的识别引擎和它实际用的设备。device=auto 时能用 DirectML 就用显卡,否则 CPU;cpu 只用 CPU。"""
+    with _BUILD:
+        if device not in _ENGINES:
+            logging.getLogger("RapidOCR").setLevel(logging.WARNING)
+            from rapidocr import RapidOCR
+
+            built = None
+            if device == "auto" and directml_available():
+                try:
+                    gpu = RapidOCR(params={"EngineConfig.onnxruntime.use_dml": True})
+                    gpu(_warmup_image(), use_det=True, use_cls=False, use_rec=True)
+                    built = (gpu, "DirectML")
+                except Exception as e:  # noqa: BLE001 - 显卡用不了就用 CPU,不影响对局
+                    logging.getLogger(__name__).warning("文字识别用显卡(DirectML)初始化失败,改用 CPU:%s", e)
+            _ENGINES[device] = built or (RapidOCR(), "CPU")
+        return _ENGINES[device]
+
+
 class Ocr:
-    def __init__(self, min_score: float = 0.55):
+    def __init__(self, min_score: float = 0.55, device: str = "auto"):
         self.min_score = min_score
+        self.device = device       # auto / cpu
         self._engine = None
 
     def _get(self):
         if self._engine is None:
-            logging.getLogger("RapidOCR").setLevel(logging.WARNING)
-            from rapidocr import RapidOCR
-
-            self._engine = RapidOCR()
+            self._engine = engine(self.device)[0]
         return self._engine
+
+    @property
+    def backend(self) -> str:
+        """实际用的设备:DirectML / CPU(会先把引擎建好)。"""
+        self._get()
+        return engine(self.device)[1]
 
     def __call__(self, image: Image.Image, region: tuple[float, float, float, float] | None = None) -> list[TextBox]:
         """识别整张图或其中一个区域(x, y, 宽, 高,归一化)。返回的坐标仍相对整张图。"""
@@ -48,7 +101,9 @@ class Ocr:
             ox, oy = box[0] / W, box[1] / H
         # 不做方向分类:游戏界面上没有倒着的字,分类器反而会把短数字判成倒置再翻过来认
         # (2026-11-18 那局「9/9」被认成「6/6」,3-4 到 3-7 上场人数一直报错)
-        res = self._get()(img, use_det=True, use_cls=False, use_rec=True)
+        run = self._get()
+        with _RUN:
+            res = run(img, use_det=True, use_cls=False, use_rec=True)
         out: list[TextBox] = []
         if res.boxes is None:
             return out
@@ -64,7 +119,9 @@ class Ocr:
 
     def line(self, image: Image.Image, *, min_score: float = 0.9) -> str:
         """已定位的单行文字直接识别,避免检测器漏掉单个数字。"""
-        res = self._get()(image.convert("RGB"), use_det=False, use_cls=False, use_rec=True)
+        run = self._get()
+        with _RUN:
+            res = run(image.convert("RGB"), use_det=False, use_cls=False, use_rec=True)
         return "".join(text for text, score in zip(res.txts or [], res.scores or [], strict=False)
                        if score >= max(self.min_score, min_score)).strip()
 

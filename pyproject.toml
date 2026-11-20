@@ -12,7 +12,8 @@ dependencies = [
     "mcp>=2.3",
     "mss>=9.0",
     "numpy>=2.4.6",
-    "onnxruntime>=1.32.0",
+    "onnxruntime>=1.32.0; sys_platform != 'win32'",
+    "onnxruntime-directml>=1.24.4; sys_platform == 'win32'",   # 文字识别用显卡(DirectML),不可用时退回 CPU
     "opencv-python-headless>=5.0",
     "pillow>=10.1",
     "pydantic>=2.7",

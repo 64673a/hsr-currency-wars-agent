@@ -1162,7 +1162,7 @@ hsr-currency-wars-agent/
 | ffmpeg、MediaMTX(`data/tools`)、`data/stream` | 实时画面准备时下载 | 删除 |
 | 知识库、模板、记忆、对局记录、配置、网页 | — | 只有 `--all` 才删除 |
 
-后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`mcp`(MCP 协议库,11.9)、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。
+后端依赖:`httpx`、`pydantic`、`pyyaml`、`fastapi`、`uvicorn`、`mcp`(MCP 协议库,11.9)、`typer`、`rapidocr-onnxruntime`、`opencv-python`、`numpy`、`pillow`、`mss`、`pyautogui`;开发依赖 `pytest`。不安装 `anthropic`、`openai`。仅 Windows 需要的依赖用环境标记限定。文字识别:Windows 上装 `onnxruntime-directml`(其他平台 `onnxruntime`),`agent.ocr: auto` 时能用显卡就用 DirectML(整屏约 0.18 秒,CPU 约 0.5 秒;同一套检测参数下逐框一致),初始化失败退回 CPU;整个进程共用一个引擎。只缩小不放大的检测参数(小块裁图快 5~25 倍)对比过,金币、战斗横幅的读数有好有坏,没有采用(2026-11-20 Windows 实测)。
 
 命令:
 

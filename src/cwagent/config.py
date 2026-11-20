@@ -149,6 +149,7 @@ class AgentSettings(BaseModel):
     use_guides: bool = True
     max_tactical_calls_per_stage: int = Field(default=5, ge=1, le=20)   # 不含单独那一轮出战(按 2026-11-16 实机,3 轮在高难下不够用)
     max_run_minutes: int = Field(default=120, ge=1)
+    ocr: Literal["auto", "cpu"] = "auto"   # 文字识别:auto = Windows 上能用 DirectML 就用显卡,否则 CPU
 
 
 class ServerSettings(BaseModel):
