@@ -78,5 +78,5 @@ def format_for_prompt(recalled: list[Recalled]) -> str:
         return ""
     lines = ["以下是过去积累的经验,按与当前局面的相关程度排列。它们可能不完整或有错,请结合当前局面判断:"]
     for i, r in enumerate(recalled, 1):
-        lines.append(f"{i}. [{r.memory.label()}] {r.memory.title}\n   {r.memory.content.strip()}")
+        lines.append(f"{i}. [{r.memory.kind}] {r.memory.title}\n   {r.memory.content.strip()}")
     return "\n".join(lines)

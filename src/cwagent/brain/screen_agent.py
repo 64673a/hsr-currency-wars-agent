@@ -299,7 +299,7 @@ class Decision:
 
 
 def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str, dict[str, Memory]]:
-    """系统提示词和经验编号。这里只放目录(编号 + 标题),全量、整局不变;攻略全文由模型用 lookup 取(2026-11-18),
+    """系统提示词和经验编号。这里只放目录(编号、类型和标题;来源、置信度留在记忆库,2026-11-20 维护者),全量、整局不变;攻略全文由模型用 lookup 取(2026-11-18),
     经验原文在触发条件对上时由程序附上(2026-11-19 维护者:经验可以主动推),其余也能用 lookup 查。"""
     codes = {f"M{i}": m for i, m in enumerate((m for m in memories if m.status == "approved"), start=1)}
     catalog = "\n".join(f"- {code} [{m.kind}] {m.title}" for code, m in codes.items()) or "(暂无)"
@@ -337,7 +337,7 @@ class ScreenAgent:
             found = [(code, m) for *_, code, m in sorted(scored)[:top]]
         if not found:
             return f"没有找到和「{query}」相关的经验"
-        return "\n".join(f"{code} [{m.label()}] {m.title}\n{m.content.strip()}" for code, m in found)
+        return "\n".join(f"{code} [{m.kind}] {m.title}\n{m.content.strip()}" for code, m in found)
 
     def recall(self, cues: Cues) -> list[tuple[str, Memory]]:
         """按触发条件挑当前适用的经验(已采纳的),返回(编号, 经验)。"""
@@ -347,7 +347,7 @@ class ScreenAgent:
     @staticmethod
     def lesson_text(code: str, m: Memory) -> str:
         body = "\n  ".join(line.strip() for line in m.content.strip().splitlines())
-        return f"- {code} [{m.label()}] {m.title}\n  {body}"
+        return f"- {code} [{m.kind}] {m.title}\n  {body}"
 
     def endpoint(self, role: str) -> ModelEndpoint:
         return self.endpoints.get(role) or self.endpoints["default"]

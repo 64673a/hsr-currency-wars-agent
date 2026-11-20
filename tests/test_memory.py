@@ -54,8 +54,9 @@ def test_recall_votes_limit_and_budget():
 
 
 def test_format_for_prompt():
-    text = format_for_prompt(recall([mem("抓猪", entities=["扑满"], source="维护者")], Cues(entities={"扑满"})))
-    assert "[打法|已采纳|有依据未核实|来源:维护者] 抓猪" in text
+    lesson = mem("抓猪", entities=["扑满"], source="维护者")
+    text = format_for_prompt(recall([lesson], Cues(entities={"扑满"})))
+    assert "[打法] 抓猪" in text and "来源" not in text and "有依据未核实" not in text
     assert format_for_prompt([]) == ""
 
 

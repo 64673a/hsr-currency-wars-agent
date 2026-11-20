@@ -26,7 +26,7 @@ def agent():
 
 
 def test_memories_catalog_pushed_and_looked_up(tmp_path):
-    """系统提示词里是经验目录(编号 + 标题);触发条件对上的经验程序在开场附上原文(维护者 2026-11-19),
+    """系统提示词里是经验目录(编号、类型和标题);触发条件对上的经验程序在开场附上原文(维护者 2026-11-19),
     lookup memory 按编号或关键词取原文(标题里对上的排前面)。"""
     from cwagent.memory import MemoryStore
 
@@ -39,7 +39,9 @@ def test_memories_catalog_pushed_and_looked_up(tmp_path):
     text, recalled = a.opening(ep, [], ledger=book, nodes={"reward"})
     assert any(r.startswith(f"{piggy} 次元扑满主题") for r in recalled)          # 选的投资环境触发
     assert "## 相关经验" in text and "掉落超多战利品" in text
-    assert a.lookup_memory(piggy.lower()).startswith(f"{piggy} [打法|已采纳")
+    found_by_id = a.lookup_memory(piggy.lower())
+    assert found_by_id.startswith(f"{piggy} [打法] 次元扑满主题")
+    assert not any(note in found_by_id + text for note in ("来源", "已采纳", "已核实", "有依据未核实"))
     found = a.lookup_memory("扑满")
     assert found.splitlines()[0].endswith("抓次元扑满要带「基础伤害」的羁绊或击破角色,破韧能防止扑满逃跑") or \
         "次元扑满主题" in found.splitlines()[0]
