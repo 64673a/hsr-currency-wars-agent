@@ -50,9 +50,9 @@ def test_auto_picks_the_card_with_most_memory_and_shares_the_engine():
     assert device_ids() == [0]
 
 
-def test_chosen_card_is_used_and_a_missing_one_falls_back_to_auto():
-    assert ocr.Ocr(device="gpu", adapter=2).backend == "显卡:AMD Radeon(TM) Graphics"
-    assert ocr.Ocr(device="gpu", adapter=7).backend == "显卡:NVIDIA GeForce RTX 5060 Ti"
+def test_chosen_card_is_found_by_name_and_a_missing_one_falls_back_to_auto():
+    assert ocr.Ocr(device="gpu", adapter="AMD Radeon(TM) Graphics").backend == "显卡:AMD Radeon(TM) Graphics"
+    assert ocr.Ocr(device="gpu", adapter="拔掉了的显卡").backend == "显卡:NVIDIA GeForce RTX 5060 Ti"
     assert device_ids() == [2, 0]
 
 
@@ -73,12 +73,13 @@ def test_cpu_setting_never_touches_the_gpu():
 
 
 def test_new_ocr_follows_the_configured_settings():
-    ocr.configure("gpu", 2)
+    ocr.configure("gpu", "AMD Radeon(TM) Graphics")
     assert ocr.Ocr().backend == "显卡:AMD Radeon(TM) Graphics"
     ocr.configure("cpu", None)
     assert ocr.Ocr().backend == "CPU"
 
 
 def test_pick_prefers_the_most_memory_then_the_lower_index():
-    assert pick(CARDS, None).index == 0 and pick(CARDS, 2).index == 2 and pick(CARDS, 9).index == 0
+    assert pick(CARDS, None).index == 0 and pick(CARDS, "AMD Radeon(TM) Graphics").index == 2
+    assert pick(CARDS, "没有这块").index == 0
     assert pick([Adapter(3, "A", 100), Adapter(1, "B", 100)], None).index == 1 and pick([], None) is None

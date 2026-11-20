@@ -1,7 +1,8 @@
 """本机的显卡(DXGI 适配器),给文字识别选用哪块显卡。编号就是 DirectML 的 device_id。
 
-2026-11-20 维护者的 Windows 上:0、1、3 号都是 RTX 5060 Ti(虚拟显示器也挂在它上面),2 号是核显,
-4 号是软件渲染。同名同显存的只列第一个;软件渲染不列。自动选择专用显存最大的那块(独立显卡)。
+编号在不同会话里不一样(2026-11-20 维护者的 Windows:SSH 会话里 0、1、3 号是 RTX 5060 Ti、2 号是核显,
+桌面会话里 0 号 5060 Ti、1 号核显),所以设置里存显卡名字,用的时候在本进程里按名字找编号。
+同名同显存的只列第一个;软件渲染不列。自动选择专用显存最大的那块(独立显卡)。
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ def list_adapters() -> list[Adapter]:
         return []
 
 
-def pick(adapters: list[Adapter], wanted: int | None) -> Adapter | None:
-    """指定了编号且有这块就用它,否则用专用显存最大的那块(独立显卡);一块都没有返回 None。"""
-    chosen = next((a for a in adapters if a.index == wanted), None) if wanted is not None else None
+def pick(adapters: list[Adapter], wanted: str | None) -> Adapter | None:
+    """指定了名字且有这块就用它,否则用专用显存最大的那块(独立显卡);一块都没有返回 None。"""
+    chosen = next((a for a in adapters if a.name == wanted), None) if wanted else None
     return chosen or max(adapters, key=lambda a: (a.memory_mb, -a.index), default=None)

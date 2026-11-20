@@ -424,8 +424,7 @@ function OcrFields({ value, onChange }: { value: OcrSettings; onChange: (v: OcrS
   }, []);
 
   const cards = info?.adapters ?? [];
-  const auto = cards.find((a) => a.index === info?.auto);
-  const chosen = cards.some((a) => a.index === value.adapter) ? String(value.adapter) : 'auto';
+  const chosen = cards.some((a) => a.name === value.adapter) ? value.adapter! : 'auto';
   const gb = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
   const change = (patch: Partial<OcrSettings>) => {
     onChange({ ...value, ...patch });
@@ -449,39 +448,42 @@ function OcrFields({ value, onChange }: { value: OcrSettings; onChange: (v: OcrS
   const fellBack = test && value.device === 'gpu' && cards.length > 0 && test.backend === 'CPU';
   return (
     <section className={page.section} aria-labelledby={`${id}-ocr`}>
-      <h2 id={`${id}-ocr`} className={page.heading}>文字识别</h2>
-      {cards.length > 0 && (
-        <div className={page.fields2}>
-          <SegmentedControl label="识别设备" options={DEVICES} value={value.device} onValueChange={(v) => change({ device: v as OcrSettings['device'] })} fullWidth />
-          {value.device === 'gpu' && (
-            <Select
-              label="显卡"
-              options={[
-                { value: 'auto', label: `自动(${auto?.name ?? '专用显存最大的'})` },
-                ...cards.map((a) => ({ value: String(a.index), label: `${a.name} · ${gb(a.memory_mb)}` })),
-              ]}
-              value={chosen}
-              onValueChange={(v) => change({ adapter: v === 'auto' ? null : Number(v) })}
-            />
-          )}
-        </div>
-      )}
-      <div className={page.actions}>
-        {test && (
-          <span className={page.rowTitle}>
-            <Badge size="sm" tone={fellBack ? 'warning' : 'success'} dot>
-              {fellBack ? '没用上显卡' : '可用'}
-            </Badge>
-            <span className={page.rowHint}>
-              {test.backend} · 整屏 {test.ms} 毫秒 · 初始化 {test.init_s} 秒
-            </span>
-          </span>
-        )}
-        {testError && <span className={page.rowHint}>{testError}</span>}
+      <div className={page.sectionHead}>
+        <h2 id={`${id}-ocr`} className={page.heading}>文字识别</h2>
         <Button size="sm" variant="secondary" loading={testing} onClick={runTest}>
           测速
         </Button>
       </div>
+      {cards.length > 0 && (
+        <div className={page.fields2}>
+          <div className={page.field}>
+            <span id={`${id}-device`} className={page.fieldLabel}>识别设备</span>
+            <SegmentedControl label="识别设备" options={DEVICES} value={value.device} onValueChange={(v) => change({ device: v as OcrSettings['device'] })} fullWidth />
+          </div>
+          {value.device === 'gpu' && (
+            <Select
+              label="显卡"
+              options={[
+                { value: 'auto', label: `自动(${info?.auto ?? '专用显存最大的'})` },
+                ...cards.map((a) => ({ value: a.name, label: `${a.name} · ${gb(a.memory_mb)}` })),
+              ]}
+              value={chosen}
+              onValueChange={(v) => change({ adapter: v === 'auto' ? null : v })}
+            />
+          )}
+        </div>
+      )}
+      {test && (
+        <span className={page.rowTitle}>
+          <Badge size="sm" tone={fellBack ? 'warning' : 'success'} dot>
+            {fellBack ? '没用上显卡' : '可用'}
+          </Badge>
+          <span className={page.rowHint}>
+            {test.backend} · 整屏识别一次 {test.ms} 毫秒
+          </span>
+        </span>
+      )}
+      {testError && <Alert tone="danger" title="测速失败">{testError}</Alert>}
     </section>
   );
 }

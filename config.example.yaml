@@ -53,7 +53,7 @@ agent:
 
 ocr:                                 # 文字识别(网页设置里也能改)
   device: gpu                        # gpu 用显卡(DirectML),不可用时退回 CPU;cpu 只用 CPU
-  adapter: null                      # 用哪块显卡(网页上列出的编号);null 选专用显存最大的那块
+  adapter: null                      # 用哪块显卡(网页上列出的名字);null 选专用显存最大的那块
 
 server:
   host: 127.0.0.1                    # 改成 0.0.0.0 才能从局域网其他设备打开网页

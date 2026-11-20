@@ -405,8 +405,8 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
         """可选的显卡(能用 DirectML 时才有)和自动会选哪块。"""
         adapters = list_adapters() if directml_available() else []
         auto = pick_adapter(adapters, None)
-        return {"adapters": [{"index": a.index, "name": a.name, "memory_mb": a.memory_mb} for a in adapters],
-                "auto": auto.index if auto else None}
+        return {"adapters": [{"name": a.name, "memory_mb": a.memory_mb} for a in adapters],
+                "auto": auto.name if auto else None}
 
     @app.post("/api/ocr/test")
     def ocr_test(body: OcrSettings) -> dict[str, Any]:

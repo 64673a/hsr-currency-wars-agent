@@ -118,12 +118,12 @@ export interface Settings {
 
 export interface OcrSettings {
   device: 'gpu' | 'cpu';
-  adapter: number | null;
+  adapter: string | null;
 }
 
 export interface OcrInfo {
-  adapters: { index: number; name: string; memory_mb: number }[];
-  auto: number | null;
+  adapters: { name: string; memory_mb: number }[];
+  auto: string | null;
 }
 
 export interface OcrTest {

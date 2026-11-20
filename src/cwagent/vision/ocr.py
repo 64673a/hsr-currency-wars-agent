@@ -30,13 +30,13 @@ class TextBox:
         return f"({self.x:.3f},{self.y:.3f}) {self.text}"
 
 
-_ENGINES: dict[tuple[str, int | None], tuple[object, str]] = {}   # (设备, 显卡编号) →(引擎, 实际用的设备)
+_ENGINES: dict[tuple[str, str | None], tuple[object, str]] = {}   # (设备, 显卡名字) →(引擎, 实际用的设备)
 _BUILD = threading.Lock()
 _RUN = threading.Lock()     # 同一个引擎不并发调用(DirectML 不支持同一会话并发推理)
 _SETTINGS: dict = {"device": "gpu", "adapter": None}   # 配置里的 ocr 段(serve 启动、保存设置时更新)
 
 
-def configure(device: str, adapter: int | None) -> None:
+def configure(device: str, adapter: str | None) -> None:
     """设置之后新建的 Ocr 用哪种设备、哪块显卡(已经建好的引擎不变,下一局开始时生效)。"""
     _SETTINGS.update(device=device, adapter=adapter)
 
@@ -100,10 +100,10 @@ def _on_gpu(ocr) -> bool | None:
         return None
 
 
-def engine(device: str = "gpu", adapter: int | None = None) -> tuple[object, str]:
+def engine(device: str = "gpu", adapter: str | None = None) -> tuple[object, str]:
     """进程里共用的识别引擎和它实际用的设备(「显卡:<名字>」或「CPU」)。
 
-    device=gpu:用 DirectML 跑在 adapter 号显卡上(没指定或没有这块时选专用显存最大的);DirectML 不可用、
+    device=gpu:用 DirectML 跑在名为 adapter 的显卡上(没指定或没有这块时选专用显存最大的);DirectML 不可用、
     初始化或预热失败时退回 CPU。device=cpu:只用 CPU。"""
     key = (device, adapter)
     with _BUILD:
@@ -133,7 +133,7 @@ def engine(device: str = "gpu", adapter: int | None = None) -> tuple[object, str
 
 
 class Ocr:
-    def __init__(self, min_score: float = 0.55, device: str | None = None, adapter: int | None = None):
+    def __init__(self, min_score: float = 0.55, device: str | None = None, adapter: str | None = None):
         """device / adapter 不给时按 configure() 设的(配置里的 ocr 段)。"""
         self.min_score = min_score
         self.device = device or _SETTINGS["device"]

@@ -155,7 +155,7 @@ class OcrSettings(BaseModel):
     """文字识别用的设备(网页设置里选)。"""
 
     device: Literal["gpu", "cpu"] = "gpu"            # gpu:用显卡(DirectML),不可用时退回 CPU
-    adapter: int | None = Field(default=None, ge=0)  # 用哪块显卡(显卡列表里的编号);不填时选专用显存最大的
+    adapter: str | None = None   # 用哪块显卡(名字;编号在不同会话里不一样);不填或找不到时选专用显存最大的
 
 
 class ServerSettings(BaseModel):
