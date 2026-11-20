@@ -211,7 +211,8 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
             rw.progress = f"{start}→100%"
         elif rw.result and rw.node not in battled:
             rw.progress = "没看到战斗"
-    # 没截到结算界面的战斗(进度最后读到 87% 不等于输了):看下一个节点的进场血量,胜利固定回 2 点,输了扣血
+    # 没截到结算界面的战斗(进度最后读到 87% 不等于输了):看下一个节点的进场血量。打完不论输赢都回 2 点(长线作战),
+    # 输了扣的血至少 5 点(第一位面基础值),回完仍是降的:涨了是赢,降了是输
     for i, rw in enumerate(out):
         if rw.result or not rw.progress or rw.hp_in is None:
             continue
