@@ -291,3 +291,23 @@ def test_situation_alternatives_and_reasons_are_kept(monkeypatch):
     assert out["alternatives"] == d.alternatives and out["actions"][0]["reason"] == "刃和克拉拉凑 2 反击"
     d2 = a.decide(ep, "执行结果")
     assert d2.error == "" and d2.alternatives == [] and d2.actions[0].reason == ""
+
+
+def test_shop_cards_do_not_recall_memories():
+    """商店卡面上的羁绊标签不拿来想起经验(2026-11-20 那局星期日卡面的「开拓银轨」每回合都叫出开拓商店的经验);
+    同一个名字出现在左侧羁绊栏(场上有这个羁绊)时照常想起。"""
+    from cwagent.memory import Memory
+    from cwagent.memory.models import Triggers
+
+    rail = Memory(kind="机制", title="开拓商店不会自动刷新", content="买「全部刷新」才整店换。",
+                  triggers=Triggers(entities=["开拓银轨"]), status="approved", confidence="high")
+    a = ScreenAgent(endpoint(), FakeIndex(), [rail], "规则")
+    box = lambda text, x, y: TextBox(text, x, y, 0.05, 0.02, 0.9)  # noqa: E731
+    shop_open = [box("备战阶段", 0.12, 0.04), box("收起", 0.85, 0.90), box("刷新", 0.84, 0.45),
+                 box("星期日", 0.80, 0.28), box("开拓银轨", 0.83, 0.22)]
+    ep = Episode(id=1, key=("prepare", "1-6"), screen="prepare", node="1-6", role="tactical", max_turns=4)
+    _, recalled = a.opening(ep, shop_open, ledger=RunLedger(), nodes={"battle"})
+    assert recalled == []
+    ep = Episode(id=2, key=("prepare", "1-7"), screen="prepare", node="1-7", role="tactical", max_turns=4)
+    _, recalled = a.opening(ep, shop_open + [box("开拓银轨", 0.07, 0.23)], ledger=RunLedger(), nodes={"battle"})
+    assert recalled == ["M1 开拓商店不会自动刷新"]

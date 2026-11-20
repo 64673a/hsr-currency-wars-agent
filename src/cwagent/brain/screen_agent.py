@@ -20,6 +20,7 @@ from ..knowledge.index import NameIndex, format_entities
 from ..llm import ImageInput, LLMError, LLMResponse, Message, ToolSpec, complete
 from ..memory import Cues, Memory, recall
 from ..vision.ocr import TextBox
+from ..vision.shop import off_shop
 from .ledger import LESSONS_TITLE
 
 PROMPTS = Path(__file__).parent / "prompts"
@@ -406,8 +407,11 @@ class ScreenAgent:
         档案渲染出来就带着当前相关、当前适用的那部分。ledger 是字符串时把条目和经验放在当前界面后面。"""
         book = ledger if hasattr(ledger, "render") else None
         external = self.endpoint(episode.role).format == "external"
-        texts = [b.text for b in boxes]
+        # 想起经验的线索不看商店卡面:卡面上的角色和羁绊标签(星期日的「开拓银轨」、遐蝶的「黄金大饭店」)
+        # 会把场上没有的东西的经验叫出来(2026-11-20 那局每回合都附上开拓商店、黄金大饭店的经验)。条目说明照旧带商店的
+        texts = [b.text for b in off_shop(boxes)]
         present = {e.name for e in self.index.link(texts + (names or []))}
+        shop_only = {e.name for e in self.index.link([b.text for b in boxes])} - present
         if book is not None:
             episode.book = book
             book.relevant = self._relevant(book, boxes, names)
@@ -415,7 +419,7 @@ class ScreenAgent:
             # 外部 agent 保留整局对话,收到过的都算(和档案共用一份,回合中途新给的也记进去)
             episode.seen = book.delivered_entries if external else set(book.relevant)
             described = ""
-            present |= set(book.relevant) | {n for n in (book.environment, book.companion) if n}
+            present |= {n for n in book.relevant if n not in shop_only} | {n for n in (book.environment, book.companion) if n}
             texts += [book.intro, *book.facts]      # 开局界面、位面词条等原文里出现的名字(怪物词条「能量逃逸」等)
         else:
             described, _ = self._entities(boxes, names, episode)
@@ -467,6 +471,8 @@ class ScreenAgent:
         whole = parts[:1] + [f"## 现在的界面\n程序判断的界面类型:{screen}\n{full}"]
         if described:
             parts.append("## 新出现的条目\n" + described)
+        # 商店刷新出来的角色给说明,但不拿来想起经验(同 opening)
+        new &= {e.name for e in self.index.link([b.text for b in off_shop(boxes)] + (names or []))}
         hits = [(c, m) for c, m in self.recall(Cues(entities=new, layer=LAYERS.get(episode.role)))
                 if c not in episode.lessons] if new else []
         if hits:

@@ -46,6 +46,14 @@ def shop_state(boxes: list[TextBox]) -> bool | None:
     return None
 
 
+def off_shop(boxes: list[TextBox]) -> list[TextBox]:
+    """商店展开时去掉卡片上的文字(角色名、羁绊标签、价格);收起或看不出来时原样返回。"""
+    if shop_state(boxes) is not True:
+        return boxes
+    x0, x1 = SHOP_X[0] - HALF_CARD, SHOP_X[-1] + HALF_CARD
+    return [b for b in boxes if not (x0 <= b.x <= x1 and b.y <= SHOP_NAME_Y[1] + 0.01)]
+
+
 def _split(text: str) -> tuple[str, int | None]:
     """「那刻夏1」→(那刻夏, 1);「银狼LV.9993」→(银狼LV.999, 3);没有合进价格的原样返回。"""
     m = re.fullmatch(f"({NAME})([1-5])", text)
