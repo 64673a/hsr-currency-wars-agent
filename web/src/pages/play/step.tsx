@@ -266,7 +266,8 @@ export function StepDetail({ step, notes, run }: { step: StepRecord; notes: stri
       {d && (
         <p className={styles.usage}>
           {d.episode ? `回合 ${d.episode} 第 ${d.turn} 轮 · ${ROLES[d.role ?? ''] ?? d.role} · ` : ''}
-          {d.model || run?.model} · {d.latency_s?.toFixed(1)} s · 输入 {tokens(d.usage?.input_tokens)}
+          {d.model || run?.model} · {(d.model_s || d.latency_s)?.toFixed(1)} s
+          {d.requests && d.requests > 1 ? `(${d.requests} 次请求)` : ''} · 输入 {tokens(d.usage?.input_tokens)}
           {d.usage?.cache_read_tokens ? `(缓存 ${tokens(d.usage.cache_read_tokens)})` : ''} · 输出 {tokens(d.usage?.output_tokens)}
         </p>
       )}

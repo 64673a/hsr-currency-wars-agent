@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -296,6 +297,9 @@ class Decision:
     summary: str | None = None     # 回合小结
     perception_issues: list[str] = field(default_factory=list)
     alternatives: list[str] = field(default_factory=list)   # 不选的其他做法(只写结论)
+    # 这一轮所有请求的总用时和次数:查资料、输出无效重问的几次都算(response.latency_s 只是最后一次)
+    model_s: float = 0.0
+    requests: int = 0
 
 
 def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str, dict[str, Memory]]:
@@ -512,14 +516,21 @@ class ScreenAgent:
         base = dict(prompt=text, recalled=recalled or [], episode=episode.id, turn=episode.turns, role=episode.role)
         resp: LLMResponse | None = None
         last_error = ""
-        tries, looks = 0, 0
+        tries, looks, requests = 0, 0, 0
+        started = time.monotonic()
+
+        def done(d: Decision) -> Decision:
+            d.model_s, d.requests = round(time.monotonic() - started, 3), requests
+            return d
+
         while tries < 2:  # 输出不合法时带着错误重问一次;查资料的几轮不算
             try:
                 episode.request_messages = list(episode.messages)
+                requests += 1
                 resp = complete(endpoint, self.system, episode.messages, [ACT_TOOL, LOOKUP_TOOL], on_delta=on_delta)
             except LLMError as e:
                 episode.messages, episode.pending, episode.turns = snapshot
-                return Decision("", [], None, [], response=None, error=str(e), **base)
+                return done(Decision("", [], None, [], response=None, error=str(e), **base))
             episode.messages.append(resp.as_message())
             asked = [c for c in resp.tool_calls if c.name == "lookup"]
             if asked and not any(c.name == "act" for c in resp.tool_calls):
@@ -556,9 +567,9 @@ class ScreenAgent:
                     episode.analysis = data.analysis
                     if data.summary:
                         episode.summary = data.summary.strip()[:200]
-                    return Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
-                                    guide=data.guide, summary=data.summary, perception_issues=data.perception_issues,
-                                    alternatives=[a.strip() for a in data.alternatives if a.strip()], **base)
+                    return done(Decision(data.analysis, data.actions, data.run_notes, data.notes, response=resp,
+                                         guide=data.guide, summary=data.summary, perception_issues=data.perception_issues,
+                                         alternatives=[a.strip() for a in data.alternatives if a.strip()], **base))
                 except ValidationError as e:
                     last_error = "; ".join(f"{'.'.join(map(str, er['loc']))}: {er['msg']}" for er in e.errors()[:5])
                 except ValueError as e:
@@ -568,7 +579,7 @@ class ScreenAgent:
                 episode.messages += [Message(role="tool", tool_call_id=i, content=retry) for i in ids]
             else:
                 episode.messages.append(Message(role="user", content=retry))
-        return Decision("", [], None, [], response=resp, error=last_error, **base)
+        return done(Decision("", [], None, [], response=resp, error=last_error, **base))
 
 
 def _f(v: float | None) -> str:
@@ -636,6 +647,7 @@ def to_jsonable(d: Decision) -> dict[str, Any]:
             "actions": [a.model_dump(exclude_none=True) for a in d.actions],
             "run_notes": d.run_notes, "notes": [n.model_dump() for n in d.notes], "recalled": d.recalled,
             "error": d.error, "reasoning": r.reasoning if r else "", "usage": r.usage.model_dump() if r else None,
-            "latency_s": r.latency_s if r else None, "model": r.model if r else "",
+            "latency_s": r.latency_s if r else None, "model_s": d.model_s, "requests": d.requests,
+            "model": r.model if r else "",
             "episode": d.episode, "turn": d.turn, "role": d.role, "prompt": d.prompt, "guide": d.guide,
             "summary": d.summary, "perception_issues": d.perception_issues}

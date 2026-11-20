@@ -366,7 +366,10 @@ class Runner:
         if not self._step_started or "timing" in record or "step" not in record:
             return
         total = time.monotonic() - self._step_started
-        model = float((record.get("decision") or {}).get("latency_s") or 0)
+        # 模型这一轮的全部请求(查资料、输出无效重问的几次也算);只记 latency_s 时这几次被算成了程序的
+        # (2026-11-20 那局「程序」34.7 分里有 23.6 分其实是这些请求)
+        decision = record.get("decision") or {}
+        model = float(decision.get("model_s") or decision.get("latency_s") or 0)
         battle = float((record.get("battle") or {}).get("seconds") or 0)
         record["timing"] = {
             "total": round(total, 2), "model": round(model, 2), "battle": round(battle, 2),

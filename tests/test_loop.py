@@ -538,3 +538,8 @@ def test_every_step_records_its_timing(tmp_path):
     assert [a[0] for a in timings[1]["actions"]] == ["click_text"]
     text = report.render(tmp_path / "run")
     assert "程序秒" in text and "- 用时 " in text
+    # 模型时间按这一轮全部请求算(查资料、重问的几次),不只是最后一次的 latency_s
+    runner._begin_timing()
+    record = {"step": 9, "decision": {"latency_s": 1.0, "model_s": 5.0}}
+    runner._stamp_timing(record)
+    assert record["timing"]["model"] == 5.0

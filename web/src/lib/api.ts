@@ -227,6 +227,9 @@ export interface StepDecision {
   reasoning: string;
   error: string;
   latency_s: number | null;
+  /** 这一轮所有请求的总用时和次数(查资料、重问的几次也算) */
+  model_s?: number;
+  requests?: number;
   model: string;
   usage: { input_tokens?: number; output_tokens?: number; cache_read_tokens?: number } | null;
   episode?: number;

@@ -93,6 +93,7 @@ def test_lookup_is_its_own_tool(monkeypatch):
                  max_turns=3)
     d = a.decide(ep, "开场", on_delta=lambda k, t: deltas.append((k, t)))
     assert d.error == "" and d.actions[0].text == "确认" and d.turn == 1
+    assert d.requests == 2 and screen_agent.to_jsonable(d)["requests"] == 2   # 查资料那一次也算进这一轮的用时
     assert sent[0][0] == ["act", "lookup"] and sent[1][1] == ["user", "assistant", "tool"]
     assert ep.messages[2].content == "查攻略:刃:找到 1 篇" and ("lookup", "查攻略:刃") in deltas
 
