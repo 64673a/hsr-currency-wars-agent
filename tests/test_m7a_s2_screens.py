@@ -163,3 +163,33 @@ def test_supply_four_card_layout_and_pick_count(monkeypatch):
     packs = supply.read_supply(Image.new("RGB", (1920, 1080)), words)
     assert [p.role for p in packs] == ["那刻夏", "景元", "白露", "符玄"] and packs[0].equipment == ["轮滑鞋"]
     assert supply.required(words) == 2 and "这次要选 2 组" in supply.describe(packs, 2)
+
+
+def test_spotlight_info_keeps_open_when_reselect_available(tmp_path):
+    """2026-11-20 实机 3-1:「主角光环与奇遇详情」有可用「重选主角」按钮时不能自动关掉,应交给模型决定是否重选。"""
+    from PIL import Image
+
+    from cwagent.orchestrator.loop import Runner, Trace
+    from cwagent.orchestrator.screens import role_of
+
+    from .test_loop import FakeBrain
+
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    dark = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    bright = Image.new("RGB", (1920, 1080), (235, 235, 235))
+
+    # 没有重选按钮或按钮是灰的:自动点右上角 X 关闭
+    no_btn = boxes(("主角光环与奇遇详情", 678, 60), ("周天鸽", 520, 960))
+    assert r.reflex("spotlight_info", bright, no_btn, {}, set())[0].type == "click"
+    with_btn = boxes(("主角光环与奇遇详情", 678, 60), ("重选主角", 835, 710))
+    assert r.reflex("spotlight_info", dark, with_btn, {}, set())[0].type == "click"
+
+    # 有亮着的「重选主角」按钮:不自动关掉,交给模型决策
+    assert r.reflex("spotlight_info", bright, with_btn, {}, set()) is None
+    assert role_of("spotlight_info") == "strategic"
+
+    class Frame:
+        image = bright
+
+    hints, _ = r._hints("spotlight_info", Frame(), with_btn, {"step": 1}, True)
+    assert "重选主角" in hints and "0.970, 0.060" in hints

@@ -110,7 +110,8 @@ BOSS_PREP_BUTTON = r"^(选择主角|出战)$"
 BOSS_PREP_BUTTON_AREA = (0.86, 0.60, 0.14, 0.15)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
-                  "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor", "equipment_reward", "privilege_choice"}
+                  "spotlight_info", "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor",
+                  "equipment_reward", "privilege_choice"}
 CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
@@ -1274,8 +1275,9 @@ class Runner:
                 # 助燃券到上限的提示只能确认;「前台区域无角色」确认后回到棋盘重新部署(M7A)
                 return [Action(type="click_text", text="确认", reason=SCREEN_NAMES.get(screen, screen))]
             case "spotlight_info":
-                # 只是查看(点左上角奇遇伙伴头像打开的);模型以前关它时点错过好几次位置
-                if find(boxes, "前往重选") is None:
+                # 有亮着的「重选主角」按钮(或重选引导)时交给模型决定是否重选;没有可用重选按钮时自动点右上角 X 关闭
+                reselect = [b for b in boxes if "重选主角" in b.text]
+                if find(boxes, "前往重选") is None and not any(image is None or lit(image, b) for b in reselect):
                     x, y = SPOTLIGHT_INFO_CLOSE
                     return [Action(type="click", x=x, y=y, reason="关掉主角光环与奇遇详情")]
             case "rail_shop":

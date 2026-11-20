@@ -164,7 +164,7 @@ def classify(boxes: list[TextBox]) -> str:
 ROLES = {
     "prepare": "tactical", "privilege_choice": "tactical",
     "environment_choice": "strategic", "strategy_choice": "strategic", "spotlight_choice": "strategic",
-    "spotlight_replace": "strategic",
+    "spotlight_info": "strategic", "spotlight_replace": "strategic",
     "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
     "rail_shop": "chooser", "black_market": "chooser", "ranger": "chooser", "dance": "chooser", "garden": "chooser",
     "hack": "chooser", "clara_mod": "strategic", "equipment_reward": "chooser", "mentor": "strategic",
@@ -178,7 +178,7 @@ def role_of(screen: str) -> str:
 SCREEN_NAMES = {
     "prepare": "备战", "environment_choice": "投资环境", "strategy_choice": "投资策略", "spotlight_choice": "主角光环",
     "encounter_choice": "遭遇节点", "supply": "补给", "tea_break": "幕后茶歇", "difficulty": "难度选择",
-    "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
+    "spotlight_info": "主角光环与奇遇详情", "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
     "dance": "梦境交织共舞", "garden": "奇兽花园", "hack": "骇入效果",
     "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备", "privilege_choice": "特权赋予卡",
     "mode_resume": "继续已有对局",
@@ -282,6 +282,9 @@ OVERLAY_HINTS = {
     "hack": """骇入效果:二选一。
 - 两列中心约 x 0.41 / 0.68,名字约 y 0.375,上方是效果说明。点名字选中,再点「确认选择」(约 0.777, 0.555);
   已经选过、改选时这个按钮是「确认更换」。""",
+    "spotlight_info": """主角光环与奇遇详情:展示已选的主角光环和本局奇遇伙伴。
+- 顶部右侧是剩余重选次数;有剩余次数时,点某张已选光环卡下方的「重选主角」会消耗 1 次次数,同时重选该槽位的主角角色和光环(若出现「前往重选」引导提示,先点击引导文字收起)。
+- 不重选就点右上角关闭图标 (0.970, 0.060) 返回备战界面。""",
     "spotlight_replace": """这个角色已经有主角光环,确认就会替换掉原来的光环;不想替换就点「取消」。""",
     "clara_mod": """机心巧匠改装(克拉拉专属羁绊,每进 2 个新节点出一次):3 张或 4 张强化卡选 1 张,
 每张卡右上标着金币价格,有的是 0(免费);选中后点「确认选择」,确认会消耗卡面标出的金币。""",
