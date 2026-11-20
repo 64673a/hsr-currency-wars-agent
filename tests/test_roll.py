@@ -111,6 +111,18 @@ def test_roll_needs_targets():
         Action(type="roll", targets=[])
 
 
+def test_roll_target_names_matched_to_known_roles():
+    """模型写错字(2026-11-20 写成「刻律德拉」)时按最像的角色找并说明;对不上任何角色的不找。"""
+    rounds = [[("那刻夏", 1), None, None, None, None]]
+    shop = Shop(rounds, gold=10)
+    text = run(shop, targets=[{"name": "那刻下"}, {"name": "张三"}])
+    assert "没有叫「那刻下」的角色,按「那刻夏」找" in text and "没有叫「张三」的角色,不找" in text
+    assert "买到 那刻夏×1" in text and "目标达成" in text
+    shop = Shop(rounds, gold=10)
+    text = run(shop, targets=[{"name": "张三"}])
+    assert text.endswith("没有可找的目标") and shop.clicks == 0
+
+
 class FoldedShop(Shop):
     """商店其实已经收起(前面装备、合成时被收的),模型决策时那一帧还是展开的。"""
 

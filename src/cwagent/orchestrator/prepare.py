@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 import time
 from collections import Counter
@@ -383,17 +384,20 @@ class PrepareExecutor:
         目标达成、到刷新上限、再花钱就低于保底金币、买不进、刷新没生效都会停。场上 + 备战席已有的按一星的量算
         (二星 3 张、三星 9 张),商店里按价格判断出的二星卡算 3 张。"""
         text = action_text(a)
+        costs = self.roster() if self.roster else {}
+        targets, notes = roll_targets(a.targets or [], costs)
+        head = f"{text}:" + "".join(f"{n};" for n in notes)
+        if not targets:
+            return head + "没有可找的目标", boxes
         # 按眼前这一帧判断商店开没开:前面做过装备、合成或关过开拓商店,手里那一帧可能已经旧了
         # (2026-11-20 那局 1-7、1-9 两次以为商店开着就直接按 D,一次没刷就停在「商店被收起了」)
         boxes = self.set_shop(out, self._glance(), True)
         if not self.shop:
-            return f"{text}:商店没有打开", boxes
-        costs = self.roster() if self.roster else {}
+            return f"{head}商店没有打开", boxes
         have: Counter = Counter()
         for slot in board or []:
             if slot.name:
                 have[slot.name] += 3 ** (max(slot.stars, 1) - 1)
-        targets = {t.name: t for t in a.targets or []}
         bought: Counter = Counter()
 
         def done(name: str) -> bool:
@@ -463,7 +467,7 @@ class PrepareExecutor:
         got = "、".join(f"{n}×{c}" for n, c in bought.items()) or "没买到目标"
         status = "、".join(f"{n} 买了 {bought[n]}/{t.count} 张" if t.count else f"{n} 现有一星的量 {have[n]} 张"
                           for n, t in targets.items())
-        return (f"{text}:刷新 {refreshes} 次,花了 {spent} 金,买到 {got};停下:{reason};"
+        return (f"{head}刷新 {refreshes} 次,花了 {spent} 金,买到 {got};停下:{reason};"
                 f"现在金币 {gold if gold is not None else '读不出'};{status}"), boxes
 
     def _drag_slot(self, out: PrepareResult, src: tuple[str, int], dst: tuple[str, int],
@@ -973,3 +977,28 @@ def _shift(pending: list[Action], removed: int) -> None:
                 setattr(a, f, 0)    # 指向已经用掉的那件
             elif v > removed:
                 setattr(a, f, v - 1)
+
+
+def _dots(name: str) -> str:
+    return re.sub(r"[·•・]", "·", name)
+
+
+def roll_targets(wanted: list, costs: dict) -> tuple[dict, list[str]]:
+    """roll 的目标名对上知识库里的角色名(2026-11-20 那局模型写成「刻律德拉」,正确是「刻律德菈」,程序照着找,
+    一直找不到,还回报「现有 0 张」)。差一两个字的按最像的找并说明;对不上任何角色的不找。知识库读不到时照原样。"""
+    if not costs:
+        return {t.name: t for t in wanted}, []
+    known = {_dots(n): n for n in costs}
+    known.setdefault("开拓者", "开拓者")
+    targets, notes = {}, []
+    for t in wanted:
+        name = known.get(_dots(t.name))
+        if name is None:
+            close = difflib.get_close_matches(_dots(t.name), list(known), n=1, cutoff=0.6)
+            if not close:
+                notes.append(f"没有叫「{t.name}」的角色,不找")
+                continue
+            name = known[close[0]]
+            notes.append(f"没有叫「{t.name}」的角色,按「{name}」找")
+        targets[name] = t.model_copy(update={"name": name})
+    return targets, notes
