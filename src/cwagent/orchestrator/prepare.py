@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from ..brain.screen_agent import ROLL_MAX, ROLL_REFRESHES, Action, action_text, slot_text
 from .. import paths
 from ..device import UserInterrupt
-from ..vision.board import SHOP_X, Slot, occupied_slots, slots
+from ..vision.board import SHOP_X, Slot, occupied_slots, slot_changed, slots
 from ..vision.cards import FIXED_UNITS
 from ..vision.boxes import CLOSE_POINT, read_panel
 from ..vision.equipment import (
@@ -27,6 +27,7 @@ from ..vision.equipment import (
     privilege_panel,
 )
 from ..vision.hud import read_gold, read_level
+from ..vision.motion import frame_diff
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_prices, read_shop, reread_names, shop_state, two_star
 
@@ -37,7 +38,6 @@ REFRESH_REGION = (0.78, 0.40, 0.12, 0.10)          # 商店右侧的「刷新」
 REFRESH_PRICE_REGION = (0.80, 0.455, 0.10, 0.075)  # 「刷新」下面那个价格(约 0.852, 0.492)
 NO_MONEY = r"金币不足|不足|余额不足"
 SHOP_CARD_Y = 0.15
-GAP = 0.5
 # 出战和别的操作一起发时的提醒:只在当轮执行结果里给,不记进本局经历(下一轮单独出战后经历里有「出战」)
 READY_DEFERRED = "出战:这一轮没有出战。"
 # 程序执行后能核对结果的操作:同一批里只有这些、而且都成功了,ready 就接着出战(报告 P1-6,维护者 2026-11-19 同意)
@@ -48,6 +48,19 @@ BEHIND_SHOP = {"选择主角", "出战"}   # 右下的按钮,商店展开时被�
 UNDERSTAFFED = "人数未达上限"    # 出战时的「可出战角色人数未达上限,是否确认出战?」(实机文字在 0.498, 0.473)
 UNDERSTAFFED_CANCEL = (0.43, 0.572)     # 读不到「取消」时的位置(trail-cli 的 BATTLE_TEAM_COUNT_CANCEL_POINT)
 UNDERSTAFFED_CONFIRM = (0.57, 0.572)    # 读不到「确认」时的位置(和取消左右对称,待实机核对)
+# 操作后看回执(2026-11-20,参考 M7A 的 ACTION_POLL):每隔 POLL 秒截一张看预期的变化出现没有,出现就走;
+# 原来是固定睡 0.5~1.2 秒、再等画面静止(至少两张截图隔 0.3 秒)、再整屏识别,一个上场要 2 秒多、卖一个 4 秒多。
+# 回执一直不来时最多看这么多眼,之后照原来的方式核对和报告
+POLL = 0.15
+SHOP_TRIES = 12
+BUY_TRIES = 8
+MOVE_TRIES = 12
+SELL_TRIES = 8
+EQUIP_TRIES = 12
+REFRESH_TRIES = 12
+READY_TRIES = 8
+STILL = 3.0      # 两眼之间画面平均差低于这个算静止(和等画面静止的标准一样)
+PREP_BANNER = (0.0, 0.0, 0.45, 0.12)   # 左上角「备战阶段」
 
 
 @dataclass
@@ -111,10 +124,38 @@ class PrepareExecutor:
         self.roster: Callable[[], dict[str, set[int]]] | None = None   # 角色名 → 费用(Runner 给;roll 认牌、算二星)
 
     def _look(self) -> list[TextBox]:
+        """等画面静止后整屏识别:结果说不准的操作(模型按坐标点的、等待)之后用。"""
         self.frame = self.capture()
         return self.ocr(self.frame.image)
 
-    def shop_now(self, boxes: list[TextBox]) -> bool:
+    def _grab(self):
+        """直接截一张,不等画面静止(看回执时靠多看几眼,而不是先等动画放完)。"""
+        self.frame = self.device.grab()
+        return self.frame
+
+    def _glance(self) -> list[TextBox]:
+        """直接截一张并整屏识别。"""
+        return self.ocr(self._grab().image)
+
+    def _until(self, done: Callable[[list[TextBox] | None], bool], *, tries: int,
+               read: bool = True) -> tuple[list[TextBox] | None, bool]:
+        """操作之后每隔 POLL 秒看一眼,done 为真就返回(这一眼的界面文字, True);看满 tries 眼还没等到,
+        返回(最后一眼, False),由调用方照原来的方式核对。read=False 时不做文字识别(只看像素,
+        done 收到 None,用 self.frame 判断),一眼只要几毫秒。"""
+        boxes = None
+        for _ in range(tries):
+            self.sleep(POLL)
+            if read:
+                boxes = self._glance()
+            else:
+                self._grab()
+            if done(boxes):
+                return boxes, True
+        return boxes, False
+
+    def shop_now(self, boxes: list[TextBox] | None) -> bool:
+        if boxes is None:
+            return self.shop          # 只看了像素、没识别文字:沿用上次的判断
         state = shop_state(boxes)
         if state is not None:
             self.shop = state
@@ -127,7 +168,7 @@ class PrepareExecutor:
     def _level(self) -> int | None:
         """左下「购买经验」上的等级,商店展开时也读得到(读不出返回 None)。"""
         try:
-            return read_level(self.capture().image, self.ocr)
+            return read_level(self._grab().image, self.ocr)
         except UserInterrupt:
             raise
         except Exception:  # noqa: BLE001 - 读等级只是为了跟上上场上限,失败就当拿不准
@@ -145,6 +186,21 @@ class PrepareExecutor:
                 self.deployed = raise_cap(self.deployed, after - before)
             return f":升到 {after} 级" + (f",上场 {self.deployed}" if self.deployed else "")
         return f":现在 {after} 级"
+
+    def _wait_ready(self) -> list[TextBox]:
+        """点了出战以后:弹出「人数未达上限」,或者左上角的「备战阶段」连续两眼都不见了(进了战斗或别的界面)就返回。
+        原来固定等 1 秒再等画面静止;弹窗出来时背景变暗,只看一眼「备战阶段」没了不算数。"""
+        gone = 0
+
+        def done(boxes) -> bool:
+            nonlocal gone
+            if find(boxes, UNDERSTAFFED) is not None:
+                return True
+            gone = gone + 1 if find(boxes, "备战阶段", region=PREP_BANNER) is None else 0
+            return gone >= 2
+
+        boxes, _ = self._until(done, tries=READY_TRIES)
+        return boxes
 
     def answer_understaffed(self, out: PrepareResult, boxes: list[TextBox]) -> str | None:
         """点出战后弹出「可出战角色人数未达上限,是否确认出战?」时怎么答(设计文档第 9 节,参考 trail-cli):
@@ -179,17 +235,22 @@ class PrepareExecutor:
         points = (SHOP_BUTTON,) if want_open else (SHOP_BUTTON, BOARD_BLANK)
         for point in points:
             self._click(out, *point)
-            last = None
-            for _ in range(5):
-                self.sleep(0.4)
-                boxes = self._look()
+            last, prev = None, None
+            for i in range(SHOP_TRIES):
+                self.sleep(POLL)
+                boxes = self._glance()
+                image, prev = prev, self.frame.image
                 state = shop_state(boxes)
                 if state is None:
                     continue                     # 一时看不出开合(动画中),再看一眼
                 if state is not want_open:
-                    break                        # 点出了反效果(比如收起时点到了商店),别在同一个点上反复等
+                    if i >= 4:
+                        break                    # 点出了反效果(比如收起时点到了商店),别在同一个点上反复等
+                    continue                     # 刚点完画面还没动,前几眼看到的还是原样
                 cards = read_shop(boxes)
-                if not want_open or cards == last:
+                # 展开要等卡片读稳:连续两眼一样;五格全空(买空了或卡片还没滑进来)时还要画面静止
+                if not want_open or (cards == last and (any(n for _, n, _ in cards)
+                                                         or image is not None and frame_diff(image, prev) < STILL)):
                     self.shop = want_open
                     return boxes
                 last = cards
@@ -204,13 +265,13 @@ class PrepareExecutor:
         和刷新价一起报回去,不让模型以为自己刷新过了。
         """
         before = read_shop(boxes)
+        gold = self._gold()
         button = find(boxes, "^刷新$", region=REFRESH_REGION)
         if button is not None:
             self._click(out, float(button.x), float(button.y))
         else:
             self.device.key("d")          # 认不出按钮时退回快捷键
-        self.sleep(1.0)
-        boxes = self._look()
+        boxes = self._wait_refresh(before, gold)
         after = read_shop(boxes)
         if after != before:
             return f"{text}(停下来看新商店)"
@@ -220,6 +281,24 @@ class PrepareExecutor:
                else f"刷新价 {price.text} 金币,可能不够" if price is not None else "可能金币不足")
         return (f"刷新没有生效:金币和商店都没变(还是 {format_shop(after)})——{why}。"
                 "不要反复点刷新,先看现有卡片怎么用")
+
+    def _wait_refresh(self, before: list, gold: int | None) -> list[TextBox]:
+        """点了刷新以后看到新的五张卡读稳(连续两眼一样)为止;商店被收起、提示金币不足也停。
+        五张碰巧和刷新前一样时看金币有没有扣。原来固定等 1 秒再等画面静止。"""
+        last = None
+
+        def done(boxes) -> bool:
+            nonlocal last
+            if shop_state(boxes) is False or find(boxes, NO_MONEY) is not None:
+                return True
+            cards, prev = read_shop(boxes), last
+            last = cards
+            now = self._gold()
+            changed = cards != before or (gold is not None and now is not None and now < gold)
+            return changed and cards == prev and any(n for _, n, _ in cards)
+
+        boxes, _ = self._until(done, tries=REFRESH_TRIES)
+        return boxes
 
     def _buy_slot(self, out: PrepareResult, slot: int, boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
         """点商店第 slot 格买卡并核对,返回(没买成的原因或 None, 最新的界面文字)。boxes 要是眼前这一帧(金币按它读)。
@@ -231,8 +310,17 @@ class PrepareExecutor:
         for attempt in range(2):
             gold = self._gold()
             self._click(out, SHOP_X[slot - 1], SHOP_CARD_Y)
-            self.sleep(GAP)
-            boxes = self._look()
+
+            def done(b) -> bool:
+                # 回执:这一格换了(买走了)、商店被收起、金币变了,或者界面提示买不了
+                if shop_state(b) is False or find(b, NO_MONEY) is not None or find(b, "备战席已满") is not None:
+                    return True
+                if name:
+                    return read_shop(b)[slot - 1][1] != name
+                now = self._gold()
+                return gold is not None and now is not None and now != gold
+
+            boxes, _ = self._until(done, tries=BUY_TRIES)
             now = self._gold()
             paid = None if gold is None or now is None else now < gold
             if shop_state(boxes) is not False:
@@ -279,7 +367,7 @@ class PrepareExecutor:
         boxes = self.set_shop(out, boxes, True)
         if not self.shop:
             return f"{text}:商店没有打开", boxes
-        boxes = self._look()                 # 商店本来就开着时没有重新截图,金币要按眼前这一帧读
+        boxes = self._glance()               # 商店本来就开着时没有重新截图,金币要按眼前这一帧读
         costs = self.roster() if self.roster else {}
         have: Counter = Counter()
         for slot in board or []:
@@ -339,8 +427,7 @@ class PrepareExecutor:
                 self._click(out, float(button.x), float(button.y))
             else:
                 self.device.key("d")
-            self.sleep(1.0)
-            boxes = self._look()
+            boxes = self._wait_refresh(before, gold)
             if shop_state(boxes) is False:
                 reason = "商店被收起了(界面可能变了)"
                 break
@@ -365,12 +452,26 @@ class PrepareExecutor:
         商店开着和收着时棋盘位置不同,而商店会被别的操作带着开合(实机见过买完卡后商店收起),所以每次按最新画面换算坐标,
         没成功再试一次。返回(失败原因或 None, 最新的界面文字)。"""
         for _ in range(2):
-            layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
+            shop = self.shop_now(boxes)
+            layout = {(s.zone, s.index): s for s in slots(shop, self.counts)}
             p, q = layout[src], layout[dst]
+            before = self._grab().image
+            was = occupied_slots(before, shop, self.counts)
             self.device.drag(p.x, p.y, q.x, q.y, duration=0.6)
             out.marks.append({"type": "drag", "x": p.x, "y": p.y, "x2": q.x, "y2": q.y})
-            self.sleep(GAP)
-            boxes = self._look()
+
+            def landed(_) -> bool:
+                # 回执只看像素(几毫秒一眼):目标格原来空着、现在有卡,或者原来有卡、现在卡面换了(换位)
+                filled = occupied_slots(self.frame.image, shop, self.counts)
+                if filled is None or was is None:
+                    return False
+                return dst in filled and (dst not in was or bool(slot_changed(before, self.frame.image, dst, shop,
+                                                                                self.counts)))
+
+            _, ok = self._until(landed, tries=MOVE_TRIES, read=False)
+            if ok:
+                return None, None          # 界面文字这一步没读,后面要用时再看
+            boxes = self._glance()
             refused = find(boxes, REFUSED)
             if refused is not None:
                 return f"界面提示「{refused.text}」", boxes
@@ -404,8 +505,8 @@ class PrepareExecutor:
             started = time.monotonic()
             try:
                 if a.type == "buy":
-                    if boxes is given:
-                        boxes = self._look()   # 模型决策要十几秒,这期间商店可能已经收起,按眼前的画面买
+                    if boxes is given or boxes is None:
+                        boxes = self._glance()   # 模型决策要十几秒,这期间商店可能已经收起,按眼前的画面买
                     boxes = self.set_shop(out, boxes, True)
                     if not self.shop:
                         out.results.append(f"{text}:商店没有打开")
@@ -500,22 +601,30 @@ class PrepareExecutor:
                         out.results.append(text)
                     else:
                         p = layout[src]
+                        shop = self.shop_now(boxes)
                         self._click(out, p.x, p.y)
-                        self.sleep(0.7)
-                        boxes = self._look()
+                        boxes, _ = self._until(lambda b: find(b, "^出售") is not None, tries=SELL_TRIES)
                         sell = find(boxes, "^出售")
                         if sell is None:
                             out.results.append(f"{text}:点开角色后没找到「出售」按钮")
                             out.observe = True
                             break
                         self._click(out, sell.x, sell.y)
-                        self.sleep(GAP)
-                        boxes = self._look()
+
+                        def sold(b, src=src, shop=shop) -> bool:
+                            # 回执:弹出确认,或者出售按钮没了、这一格空了
+                            if find(b, "^确认$") is not None:
+                                return True
+                            if find(b, "^出售") is not None:
+                                return False
+                            filled = occupied_slots(self.frame.image, shop, self.counts)
+                            return filled is None or src not in filled
+
+                        boxes, _ = self._until(sold, tries=SELL_TRIES)
                         confirm = find(boxes, "^确认$")
                         if confirm is not None:
                             self._click(out, confirm.x, confirm.y)
-                            self.sleep(GAP)
-                            boxes = self._look()
+                            boxes, _ = self._until(lambda b: find(b, "^确认$") is None, tries=SELL_TRIES)
                         if occupied is not None:
                             gone = occupied.pop(src, None)
                             if gone:
@@ -525,7 +634,7 @@ class PrepareExecutor:
                         out.results.append(text)
                 elif a.type == "refresh":
                     # 先确认商店开着:2026-11-18 那局梦境交织的弹窗把商店收了,程序还当开着,点的不是刷新
-                    boxes = self.set_shop(out, boxes, True)
+                    boxes = self.set_shop(out, boxes if boxes is not None else self._glance(), True)
                     if not self.shop:
                         out.results.append(f"{text}:商店没有打开")
                         out.observe = True
@@ -534,7 +643,7 @@ class PrepareExecutor:
                     out.observe = True
                     break
                 elif a.type == "roll":
-                    result, boxes = self._roll(out, a, boxes, board)
+                    result, boxes = self._roll(out, a, boxes if boxes is not None else self._glance(), board)
                     out.results.append(result)
                     out.observe = True      # 买进来的牌和新商店交给模型看,这一轮后面的操作不做
                     break
@@ -549,6 +658,7 @@ class PrepareExecutor:
                         self.sleep(0.3)
                     self.sleep(0.8)   # 升级有动画,紧接着点商店会点不上(2026-11-14 实机)
                     out.results.append(text + self._after_level_up(before, self._level()))
+                    boxes = None      # 升级后界面变了(上场上限、商店价格),后面要用时重新看
                 elif a.type in ("compose", "equip"):
                     done = self._equipment(a, text, out, occupied, boxes)
                     if done is None:
@@ -569,7 +679,7 @@ class PrepareExecutor:
                                            "确认无误再发 ready")
                         out.observe = True
                         break
-                    boxes = self.set_shop(out, boxes, False)
+                    boxes = self.set_shop(out, boxes if boxes is not None else self._glance(), False)
                     note = self.before_ready() if self.before_ready else None
                     if note:
                         out.results.append(note)
@@ -578,8 +688,7 @@ class PrepareExecutor:
                     if others and self.frame is not None:
                         out.ready_image = self.frame.image
                     self._click(out, *READY_BUTTON)
-                    self.sleep(1.0)
-                    blocked = self.answer_understaffed(out, self._look())
+                    blocked = self.answer_understaffed(out, self._wait_ready())
                     if blocked:
                         out.results.append(f"{text}:{blocked}")
                         out.observe = True
@@ -588,6 +697,8 @@ class PrepareExecutor:
                     out.ready = True
                     break
                 else:
+                    if boxes is None:
+                        boxes = self._glance()
                     if a.type == "click_text" and a.text in BEHIND_SHOP:
                         boxes = self.set_shop(out, boxes, False)   # 商店开着时点不到这些按钮
                     out.results.append(self.raw(a, boxes))
@@ -612,13 +723,13 @@ class PrepareExecutor:
     def _open(self, out: PrepareResult, x: float, y: float):
         """点开道具,返回选择面板。点得太快有时弹不出来(M7A 记的游戏 bug),就按住一会儿再点一次。"""
         self._click(out, x, y)
-        self.sleep(1.0)
-        panel = read_panel(self._look())
+        boxes, _ = self._until(lambda b: read_panel(b) is not None, tries=8)
+        panel = read_panel(boxes)
         if panel is None:
             self.device.drag(x, y, x, y, duration=0.25)
             out.marks.append({"type": "click", "x": x, "y": y})
-            self.sleep(1.5)
-            panel = read_panel(self._look())
+            boxes, _ = self._until(lambda b: read_panel(b) is not None, tries=12)
+            panel = read_panel(boxes)
         return panel
 
     def peek(self, out: PrepareResult, x: float, y: float, index: int) -> tuple[str, list[str]] | None:
@@ -646,29 +757,42 @@ class PrepareExecutor:
             self.sleep(0.6)
             return f"{title}里没有「{name}」,可选 {'、'.join(o.text for o in options)}(没选,道具留着)"
         self._click(out, pick.x, pick.y - 0.08)   # 选项卡片(名字上方的图标处)
-        self.sleep(1.0)
-        boxes = self._look()
+        self.sleep(0.5)                            # 选中有动画,确认按钮要等选中生效才点得动
+        boxes = self._glance()
         if read_panel(boxes) is not None:          # 还要确认
             ok = find(boxes, "^(确认|确定|选择)$")
             if ok is not None:
                 self._click(out, ok.x, ok.y)
-                self.sleep(1.0)
-                boxes = self._look()
+                boxes, _ = self._until(lambda b: read_panel(b) is None, tries=10)
         if read_panel(boxes) is not None:
             return f"点了「{name}」但选择面板还在,没拿成"
         return f"拿到 {name}(来自{title})"
 
     # ---------------------------------------------------------------- 装备
 
+    def _settled_bag(self) -> list[Item]:
+        """装备栏读稳了再交出去:连续两眼读到一样的才算(装上、合成后装备栏会重新排一次)。
+        原来固定等 1 秒、再等整屏静止后读一次。"""
+        last = None
+        items: list[Item] = []
+        for _ in range(EQUIP_TRIES):
+            items = self.equipment.read(self._grab().image)
+            names = [(i.index, i.name) for i in items]
+            if names == last:
+                return items
+            last = names
+            self.sleep(POLL)
+        return items
+
     def _confirm_compose(self, out: PrepareResult, ok, text: str) -> bool:
         """点合成确认框的 ✓。确认框有弹出动画,动画中点击会落空(2026-11-14 实机);点了还在就再点,
         最后取消,不能把它留在屏幕上。点不下去返回 False(结果里记下原因)。"""
         for _ in range(3):
             self.sleep(0.4)
-            ok = find_compose_confirm(self.capture().image) or ok
+            ok = find_compose_confirm(self._grab().image) or ok
             self._click(out, *ok)
-            self.sleep(1.0)
-            if find_compose_confirm(self.capture().image) is None:
+            _, gone = self._until(lambda _: find_compose_confirm(self.frame.image) is None, tries=8, read=False)
+            if gone:
                 return True
         self._click(out, *cancel_point(ok))
         self.sleep(0.8)
@@ -684,7 +808,7 @@ class PrepareExecutor:
         if a.item == 0 or (a.type == "compose" and a.onto == 0):
             out.results.append(f"{action_text(a).split(' ')[0]}:这件装备已经在前面的操作里用掉了")
             return None
-        before = self.equipment.read(self.capture().image)
+        before = self.equipment.read(self._grab().image)
         item = next((i for i in before if i.index == a.item), None)
         if item is None:
             out.results.append(f"{text}:装备栏没有第 {a.item} 件(现在有 {len(before)} 件)")
@@ -698,8 +822,8 @@ class PrepareExecutor:
                 return None
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
-            self.sleep(1.2)
-            shot = self.capture().image
+            self._until(lambda _: find_compose_confirm(self.frame.image) is not None, tries=EQUIP_TRIES, read=False)
+            shot = self.frame.image
             ok = find_compose_confirm(shot)
             if ok is None:
                 # 留一张现场图:是拖拽没触发、还是确认框换了样式,只能靠它判断(2026-11-16 两次合成都没确认框)
@@ -715,7 +839,7 @@ class PrepareExecutor:
                 return None
             if not self._confirm_compose(out, ok, text):
                 return None
-            after = self.equipment.read(self.capture().image)
+            after = self._settled_bag()
             if len(after) != len(before) - 1:
                 out.results.append(f"{text}:点了确认,但装备栏从 {len(before)} 件变成 {len(after)} 件(合成应该少 1 件),"
                                    f"可能没合成成功,以截图为准;装备栏现在是 {format_items(after, coords=True)}")
@@ -739,12 +863,14 @@ class PrepareExecutor:
         dst = layout[src]
         self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
         out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": dst.x, "y2": dst.y})
-        self.sleep(1.0)
+        # 回执:装备栏少了一件,或者弹出合成确认。
         # 角色身上已有一件简易装备时,再装一件简易装备会合成,也弹「A + B = 成品」要点 ✓(维护者 2026-11-18)
-        merged = find_compose_confirm(self.capture().image)
+        self._until(lambda _: find_compose_confirm(self.frame.image) is not None
+                    or len(self.equipment.read(self.frame.image)) != len(before), tries=EQUIP_TRIES, read=False)
+        merged = find_compose_confirm(self.frame.image)
         if merged is not None and not self._confirm_compose(out, merged, text):
             return None
-        after = self.equipment.read(self.capture().image)
+        after = self._settled_bag()
         if len(after) != len(before) - 1:
             out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
             out.observe = True

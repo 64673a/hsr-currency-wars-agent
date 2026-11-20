@@ -168,6 +168,22 @@ def occupied_slots(image: Image.Image, shop_open: bool, counts: dict[str, int] |
             if _filled(_crop(img, s.x, s.y, *_size(s.zone, shop_open)))}
 
 
+SWAP_DIFF = 12.0   # 同一格前后两张卡面的平均差超过这个就算换了人(同一张卡只有压缩噪声,不同角色的立绘差得多)
+
+
+def slot_changed(before: Image.Image, after: Image.Image, slot: tuple[str, int], shop_open: bool,
+                 counts: dict[str, int] | None = None) -> bool | None:
+    """同一格的卡面前后是不是换了(拖到有人的格子里换位,只看「有没有卡」看不出来)。画面太小或没有这一格时返回 None。"""
+    if min(before.size[0], after.size[0]) < 640:
+        return None
+    s = next((s for s in slots(shop_open, counts) if (s.zone, s.index) == slot), None)
+    if s is None:
+        return None
+    a, b = (_inner(_crop(_bgr(im.resize((1920, 1080)) if im.size != (1920, 1080) else im), s.x, s.y,
+                         *_size(s.zone, shop_open))) for im in (before, after))
+    return float(cv2.absdiff(a, b).mean()) > SWAP_DIFF
+
+
 def shop_is_open(boxes: list[TextBox]) -> bool:
     """商店展开时右下角的按钮是「收起」。"""
     return any(b.text == "收起" and b.x > 0.8 and b.y > 0.85 for b in boxes)

@@ -20,7 +20,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import numpy as np
 from PIL import Image
 
 from ..brain.ledger import MAX_LINE, RunLedger, compact_node, node_types
@@ -34,6 +33,7 @@ from ..vision.battle import has_marker, read_action_value
 from ..vision.board import Portraits, Slot, back_hint, confirm_stars, detail_name, format_board, recheck_diff
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_gold, read_hud
+from ..vision.motion import frame_diff
 from ..vision.ocr import Aliased, Ocr, TextBox, Timed, find, has
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
@@ -174,11 +174,6 @@ def _is_item(s: Slot, boxes: list[TextBox]) -> bool:
     """备战席里带「开启」的是武装箱一类的道具(维护者告知),头像比对会把它认成某个角色。"""
     return s.zone == "bench" and any(b.text == "开启" and abs(b.x - s.x) < 0.035 and abs(b.y - s.y) < 0.065
                                      for b in boxes)
-
-
-def frame_diff(a: Image.Image, b: Image.Image) -> float:
-    small = [np.asarray(im.convert("L").resize((96, 54)), dtype=np.int16) for im in (a, b)]
-    return float(np.abs(small[0] - small[1]).mean())
 
 
 class Trace:
