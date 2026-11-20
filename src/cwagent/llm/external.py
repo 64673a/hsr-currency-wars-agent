@@ -1,4 +1,4 @@
-"""外部 agent:把模型调用交给通过 MCP 连上来的 agent 工具(DSH、Claude Code、Codex 等)。设计见 docs/TECH_DESIGN.md 11.9。
+"""外部 agent:把模型调用交给通过 MCP 连上来的 agent 工具(DSH、Claude Code、Codex、Antigravity 等)。设计见 docs/TECH_DESIGN.md 11.9。
 
 对局线程照常调用 complete();模型档案是外部 agent 时,complete() 把这一轮的新内容放进信箱,等 agent 用 act 回答。
 MCP 那边用 take() 取局面、answer() 交回答(server/mcp.py)。同一时间只跑一局,所以整个进程只有一个信箱 BRIDGE。
@@ -44,7 +44,7 @@ class ExternalBridge:
         self.idle_seconds = idle_seconds
         self.system = ""            # 最近一次的系统提示词(rules 工具返回它)
         self.last_seen = 0.0        # 最近一次 MCP 调用的时间
-        self.agent_session = ""     # 正在下这一局的 agent 会话(Claude Code 插件的 hook 报上来的),新对局清空
+        self.agent_session = ""     # 正在下这一局的 agent 会话(外部 agent 插件的 hook 报上来的),新对局清空
         self._cond = threading.Condition()
         self._seq = 0
         self._turn: Turn | None = None

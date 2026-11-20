@@ -1,0 +1,15 @@
+{
+  "name": "cwagent",
+  "displayName": "货币战争 agent",
+  "version": "0.1.0",
+  "description": "连上装游戏那台电脑上的 cwagent serve,由 Antigravity 自主游玩《崩坏:星穹铁道》货币战争。",
+  "author": {
+    "name": "64673a"
+  },
+  "repository": "https://github.com/64673a/hsr-currency-wars-agent",
+  "suggestedPrompts": [
+    "用 cwagent-play 打一局标准博弈 A8-1",
+    "接手当前正在进行的货币战争对局,一直下到结算",
+    "调用 cwagent 的 status 和 observe 检查服务连接和当前游戏画面"
+  ]
+}

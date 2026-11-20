@@ -11,7 +11,7 @@
 - **自主打完整局**:从游戏大世界或货币战争首页出发,自己进入标准博弈、选难度、开局,打完结算后可以接着开下一局。
 - **决策过程看得见**:网页上逐步显示截图、模型看到的局面、思考过程(流式)和执行的操作;打完的对局可以逐步回放,并生成逐节点报表。
 - **不绑定模型厂商**:兼容 OpenAI Chat Completions 和 Anthropic Messages 两种接口格式,官方接口、中转网关、本地部署都可以接。每局可以选模型和思考强度,方便对比不同模型。
-- **用自己的 agent 工具下棋**:内置 MCP 服务,Claude Code、Codex、DSH 等工具可以连上来,用它们自己的模型和额度来做决策。
+- **用自己的 agent 工具下棋**:内置 MCP 服务,Claude Code、Codex、DSH、Antigravity 等工具可以连上来,用它们自己的模型和额度来做决策。
 - **官方数据和攻略**:从米游社官方阵容工具同步角色、羁绊、装备、投资策略、投资环境、主角光环和热门阵容攻略,给模型作参考。
 - **经验记忆**:游戏经验整理成一条条记忆,对局中按局面把相关的几条提示给模型;自己也可以添加。
 - **实时画面**:在浏览器里看游戏的实时画面(局域网内低延迟)。
@@ -129,10 +129,11 @@ uv run cwagent models test                      # 连通性测试
 
 难度可以不写,不写就用设置页里的。对局没结束时它想停下来,插件会让它接着下;中途想停,直接告诉它,或在网页上点停止。详见 [integrations/claude-code](integrations/claude-code/README.md)。
 
-### Codex、DSH
+### Codex、DSH、Antigravity
 
 - Codex:见 [integrations/codex](integrations/codex/README.md)
 - DSH:见 [integrations/dsh](integrations/dsh/README.md)
+- Antigravity:见 [integrations/antigravity](integrations/antigravity/README.md)
 
 也可以先在网页对局页把模型选成「外部 agent(MCP)」点开始,再让 agent 工具接手。局面交出去后 15 分钟没有任何动静,对局会自动暂停。
 

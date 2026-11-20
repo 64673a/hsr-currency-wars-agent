@@ -1,6 +1,6 @@
 """外部 agent 接入的 MCP 端点(/mcp,Streamable HTTP)。设计见 docs/TECH_DESIGN.md 11.9。
 
-用户自己的 agent 工具(DSH、Claude Code、Codex 等)连上来,通过这几个工具下棋:rules 读规则,start_run / wait 取局面,
+用户自己的 agent 工具(DSH、Claude Code、Codex、Antigravity 等)连上来,通过这几个工具下棋:rules 读规则,start_run / wait 取局面,
 act 交回答。局面和回答经过 llm/external.py 的信箱,对局编排和 API 模式完全一样。
 """
 
@@ -72,7 +72,7 @@ TOOLS = [
     Tool(name="snapshot", description="读取完整档案及最近截图,用于接手或上下文压缩后恢复,不执行游戏操作。", input_schema=_EMPTY),
     Tool(name="observe", description="只截图并标号,用于连通性与读图测试;不开始对局、不发送键鼠。", input_schema=_EMPTY),
     Tool(name="stop_run", description="停止当前对局。", input_schema=_EMPTY),
-    Tool(name="hook", description="供 Claude Code 插件的 hook 调用,不要直接调用。",
+    Tool(name="hook", description="供外部 agent 插件的 hook 调用,不要直接调用。",
          input_schema={"type": "object", "properties": {
              "event": {"type": "string", "enum": ["tool", "stop"]}, "session": {"type": "string"}},
              "required": ["event"]}),
@@ -262,9 +262,9 @@ class Tools:
         return json.dumps({k: st.get(k) for k in keys} | {"log": st["log"][-5:]}, ensure_ascii=False, indent=1)
 
     async def hook(self, args: dict[str, Any], wait: float) -> str:
-        """Claude Code 插件(integrations/claude-code)的 hook,返回 hook 输出(JSON)。
+        """外部 agent 插件(Claude Code、Antigravity 等)的 hook,返回 hook 输出(JSON)。
         tool:agent 调用了本服务的工具,记下它的会话;stop:agent 想停下,对局还在进行、且就是它在下时让它接着下。
-        连续续行的次数由 Claude Code 自己限制(调用过工具就重新计数),卡住时不会无限循环。"""
+        连续续行的次数由客户端或 hook 自己限制(调用过工具就重新计数),卡住时不会无限循环。"""
         session = str(args.get("session") or "")
         if args.get("event") == "tool":
             BRIDGE.claim(session)

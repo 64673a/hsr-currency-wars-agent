@@ -961,7 +961,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 
 ### 11.9 外部 agent 接入(MCP)
 
-2026-11-14 与用户确认方向,先适配 DSH(DeepSeek Harness,开源、可定制);2026-11-16 加上 Claude Code(插件);Codex 的接法未实测。
+2026-11-14 与用户确认方向,先适配 DSH(DeepSeek Harness,开源、可定制);2026-11-16 加上 Claude Code(插件)与 Codex(只读验收通过,完整游玩待实测);2026-11-20 加上 Antigravity(插件,待实测)。
 
 **目的**:让用户用自己的 agent 工具下棋,用的是这些工具自己的模型和额度(订阅、账号)。由用户自己打开 agent 工具并连上本服务;本服务不启动它们、不读取或转发它们的登录凭据。
 
@@ -980,14 +980,14 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 | `wait` | 等下一个需要判断的局面 |
 | `act` | 提交判断和操作(参数同 API 模式的 act 工具),执行后返回结果和下一个局面 |
 | `status` / `stop_run` | 查状态、停止对局 |
-| `hook` | 只给 Claude Code 插件的 hook 调用(见下面的 Claude Code 接入) |
+| `hook` | 供外部 agent 插件(Claude Code、Antigravity 等)的 hook 调用(见下文) |
 
 - **长等待**:战斗、动画期间没有需要判断的局面。`wait` / `act` 最多等 `wait` 秒后返回「还在等待」,agent 再调 `wait`。默认 50 秒,低于常见客户端 60 秒的默认工具超时;客户端能调大工具超时的,在地址上带 `?wait=1800` 这样的参数。每次「还在等待」都是一次模型调用,要重读整段上下文(2026-11-19 那局 Claude Code 每 100 秒回一次,`wait` 调了 29 次,占缓存读的 19%),所以三个接入都改成一次等到下一个局面(2026-11-19):`wait=1800`(30 分钟,和战斗监视的上限 `battle_watch.MAX_SECONDS` 一样;维护者定),客户端工具超时设得比它长(Claude Code 插件 `timeout: 1920000`、Codex `tool_timeout_sec = 1920`、DSH `toolCallTimeoutMs: 1920000`)。等的时候每 30 秒发一次 MCP 进度通知,调用方要进度时据此知道调用还活着。
 - **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
 - **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
 - **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
 - **安全**:`/mcp` 只接受 Host 为 IP 地址或 localhost 的请求(防 DNS 重绑定),和网页接口一样不带认证,局域网访问靠防火墙限制。
-- **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code 插件里的 Stop hook,Codex 的 Stop hook)。
+- **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code / Antigravity 插件里的 Stop hook,Codex 的 Stop hook)。
 
 **DSH 接入**(`integrations/dsh/`):DSH 的 MCP 客户端(`@deepseek-ai/dsh-mcp-client`)支持 Streamable HTTP,工具名为 `mcp__cwagent__<工具>`,服务说明(instructions)会加进系统提示词;默认工具超时 60 秒,由 `toolCallTimeoutMs` 调大。
 
@@ -999,6 +999,12 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 - 续行:skill 的 frontmatter 里带两个 `mcp_tool` 类型的 hook,只在调用过这个 skill 的会话里注册,serve 没开时也不会在别的会话里报错。它们通过插件已经连上的 MCP 服务调用 `hook` 工具(只给 hook 用),带上会话 ID:每次调用本服务的工具后(PostToolUse)记下「这一局是哪个会话在下」(新对局清空);想停下时(Stop),对局还在进行、且就是这个会话在下,就返回 `additionalContext` 让模型接着调 `wait`,否则放行。这样换一个会话接手、或者 DSH 在下时,之前下过的 Claude Code 会话不会被拉回来抢着下。连续续行次数由 Claude Code 限制(8 次,调用过工具就重新计数)。
   - 没用 `command` hook + `curl`:skill frontmatter 里的 hook 不替换插件的 `${user_config.*}`(2026-11-16 实测,curl 拿到的是原样的 `${user_config.server_url}`),放到插件级 `hooks/hooks.json` 又会在所有会话里生效。
 - 没有用 Claude Code 自带的 `/goal`:它每次停下都要再问一次模型判断条件,而对局是否结束 serve 自己知道。
+
+**Antigravity 接入**(`integrations/antigravity/`):做成 Antigravity 原生插件(`plugin.json` + `mcp_config.json` + `hooks.json` + `skills/cwagent-play/SKILL.md`),通过 `install.py` 安装到 `~/.gemini/config/plugins/cwagent/`(支持 Antigravity App / IDE / CLI,重启后可在插件页一键开关)。
+
+- MCP:`mcp_config.json` 用 Streamable HTTP 连 `/mcp`。Antigravity 文档未列出自定义 MCP 工具超时字段,默认不带 `?wait=1800`,沿用服务端默认 50 秒等待(可用 `install.py --wait` 覆盖)。【待实测:Antigravity 客户端的 MCP 调用超时上限与图片返回】
+- Skill:`skills/cwagent-play/SKILL.md` 兼容 Antigravity 的 Eager 直接工具和 Lazy `call_mcp_tool(ServerName="cwagent", ...)` 两种调用方式。
+- 续行:插件根 `hooks.json` 注册 `PostToolUse` 和 `Stop` 的 `command` hook(`scripts/hook.py`,纯 Python 标准库,安装时写入当前 Python 解释器路径)。`PostToolUse` 只对 `cwagent` 的对局工具写本机临时会话标记并调无状态 `/mcp` 的 `hook(event="tool", session=conversationId)`;未调用过 `cwagent` 的普通会话在 `Stop` 时看到无标记直接返回 `{}`、不碰网络。命中本会话且 `terminationReason == "NO_TOOL_CALL"` 且 `fullyIdle != false` 时调 `hook(event="stop")`,把服务端的 `additionalContext` 转成 Antigravity 的 `{"decision": "continue", "reason": ...}`,并带 8 次连续续行上限兜底。未装 hook 时可用 Antigravity 的 `/goal` 命令续行。【待实测:实际运行中 `PostToolUse` 传入的 MCP 工具名格式与完整游玩】
 
 ---
 
