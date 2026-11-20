@@ -109,3 +109,30 @@ def test_roll_needs_targets():
 
     with pytest.raises(ValueError):
         Action(type="roll", targets=[])
+
+
+class FoldedShop(Shop):
+    """商店其实已经收起(前面装备、合成时被收的),模型决策时那一帧还是展开的。"""
+
+    def __init__(self, rounds, gold):
+        super().__init__(rounds, gold)
+        self.open = False
+
+    def click(self, x, y, button="left"):
+        if abs(x - 0.845) < 0.02 and abs(y - 0.909) < 0.02:
+            self.open = not self.open
+            return
+        if self.open:
+            super().click(x, y, button)
+
+    def boxes(self, image=None):
+        return super().boxes() if self.open else [TextBox("商店", 0.845, 0.909, 0.04, 0.03, 0.9)]
+
+
+def test_roll_reads_the_shop_state_from_a_fresh_frame():
+    """2026-11-20 那局装备、合成之后 roll 拿着决策时的画面,以为商店开着直接按 D,一次没刷就停了。"""
+    rounds = [[("火花", 1), None, None, None, None], [("那刻夏", 1), None, None, None, None]]
+    shop = FoldedShop(rounds, gold=10)
+    stale = Shop(rounds, gold=10).boxes()            # 展开态的旧画面
+    out = executor(shop).run([Action(type="roll", targets=[{"name": "那刻夏"}])], stale, [])
+    assert shop.open and "买到 那刻夏×1" in out.results[0] and "刷新 1 次" in out.results[0]

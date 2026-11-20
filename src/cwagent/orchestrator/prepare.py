@@ -383,10 +383,11 @@ class PrepareExecutor:
         目标达成、到刷新上限、再花钱就低于保底金币、买不进、刷新没生效都会停。场上 + 备战席已有的按一星的量算
         (二星 3 张、三星 9 张),商店里按价格判断出的二星卡算 3 张。"""
         text = action_text(a)
-        boxes = self.set_shop(out, boxes, True)
+        # 按眼前这一帧判断商店开没开:前面做过装备、合成或关过开拓商店,手里那一帧可能已经旧了
+        # (2026-11-20 那局 1-7、1-9 两次以为商店开着就直接按 D,一次没刷就停在「商店被收起了」)
+        boxes = self.set_shop(out, self._glance(), True)
         if not self.shop:
             return f"{text}:商店没有打开", boxes
-        boxes = self._glance()               # 商店本来就开着时没有重新截图,金币要按眼前这一帧读
         costs = self.roster() if self.roster else {}
         have: Counter = Counter()
         for slot in board or []:
