@@ -395,6 +395,21 @@ def test_situation_facts():
     assert situation.at_ready(gpt_1_7_board(), hud) == "出战时前台 1/4,场上 5 人其中 2 星及以上 0 个,剩 56 金币(其中 6 不产生利息)"
 
 
+def test_combo_tiles_named_with_who_stands_there():
+    """连击 2 档起前台最左一格是连击地格,4 档起后台最左再一块(2026-11-20 那局知更鸟站在地格上,模型不知道)。"""
+    facts = situation.RoleFacts(traits_of={"那刻夏": ["连击"], "刻律德菈": ["连击"], "星期日": ["连击"], "白露": ["连击"],
+                                           "知更鸟": ["少女乐队"]}, layers={"连击": [2, 4, 6, 8]})
+    s = lambda zone, i, name: Slot(zone, i, 0.5, 0.5, name=name, score=0.9, stars=1)  # noqa: E731
+    board = [s("front", 0, "知更鸟"), s("front", 1, "那刻夏"), Slot("back", 0, 0.4, 0.6), s("back", 1, "刻律德菈")]
+    assert situation.tiles(board, facts) == ["前台 1 号(最左)是【连击地格】,站着 知更鸟"]
+    board += [s("back", 2, "星期日"), s("back", 3, "白露")]
+    assert situation.tiles(board, facts) == ["前台 1 号(最左)是【连击地格】,站着 知更鸟", "后台 1 号(最左)是【连击地格】,空着"]
+    assert situation.tiles(board[:2], facts) == []          # 连击只有 1 人,没激活
+    hud = Hud(node="1-4", hp=80, gold=10, level=5, exp="4/20", deployed="5/5")
+    assert "- 地格:前台 1 号(最左)是【连击地格】,站着 知更鸟" in situation.render(
+        board=board, hud=hud, shop=[], two_star=set(), facts=facts)
+
+
 def test_aha_banner_is_waited_out(tmp_path):
     """「阿哈帮大忙了」一两秒后自己消失(维护者 2026-11-16),程序直接等,不叫模型。"""
     pages = {"aha": [("阿哈帮大忙了", 0.5, 0.4), ("「贪饕」侵蚀 污染等级3", 0.5, 0.5)]}

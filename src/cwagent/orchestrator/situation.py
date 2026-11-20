@@ -16,6 +16,9 @@ from pathlib import Path
 
 INTEREST_STEP, INTEREST_CAP = 10, 5        # 每 10 金币 1 利息,最多 5(规则卡,游戏内「金币说明」)
 EXP_PER_BUY = 4                            # 买一次经验 +4(规则卡;有的投资策略会改)
+# 羁绊到这一档时,这一区最左边一格是地格(维护者 2026-11-20:连击 2 档起前台最左,4 档起后台最左再一块)。
+# 画面上只是一圈发光边框,模型不知道是什么(2026-11-20 那局把知更鸟、花火放了上去)
+TILES = {"连击": (("front", 2), ("back", 4))}
 
 
 @dataclass
@@ -123,14 +126,8 @@ def shop_upgrades(shop: list[tuple[int, str | None, int | None]], count: Counter
     return out
 
 
-def traits(board: list, facts: RoleFacts) -> list[str]:
-    """场上(前台 + 后台)的羁绊:当前人数和档位,`*` 是已激活的档。同名只算一次;星徽等装备带来的羁绊没算进去。
-
-    计数规则特殊的按官方说明算(2026-11-16 实机:千星商会按人头算成「1 人已激活」,游戏里是 1/2):
-    千星商会只数 3 星的人,少女乐队只在人数恰好等于某档时激活。
-    只写全已激活的和「恰好」类的;再上 1 人就激活的只列名字;差得更远的只报个数(2026-11-19 报告 P1-8:
-    原来每个只有 1 人的羁绊都写一遍档位,羁绊行占回合内返回文字的 11%)。
-    """
+def _field_counts(board: list, facts: RoleFacts) -> tuple[Counter, Counter]:
+    """场上每个羁绊算数的人数(星级要求够的)和人头数。同名只算一次,星徽不计。"""
     stars: dict[str, int] = {}
     for s in board:
         if s.zone in ("front", "back") and s.name:
@@ -142,6 +139,32 @@ def traits(board: list, facts: RoleFacts) -> list[str]:
             heads[t] += 1
             if st >= facts.star_req.get(t, 0):
                 count[t] += 1
+    return count, heads
+
+
+def tiles(board: list, facts: RoleFacts) -> list[str]:
+    """地格在哪一格、现在站的是谁。档位和羁绊那一行一样按场上角色算(星徽不计)。"""
+    count, _ = _field_counts(board, facts)
+    out = []
+    for trait, spots in TILES.items():
+        for zone, need in spots:
+            if count[trait] < need:
+                continue
+            here = next((s for s in board if s.zone == zone and s.index == 0 and not s.empty), None)
+            where = f"{'前台' if zone == 'front' else '后台'} 1 号(最左)是【{trait}地格】"
+            out.append(where + (f",站着 {here.name or '没认出的角色'}" if here else ",空着"))
+    return out
+
+
+def traits(board: list, facts: RoleFacts) -> list[str]:
+    """场上(前台 + 后台)的羁绊:当前人数和档位,`*` 是已激活的档。同名只算一次;星徽等装备带来的羁绊没算进去。
+
+    计数规则特殊的按官方说明算(2026-11-16 实机:千星商会按人头算成「1 人已激活」,游戏里是 1/2):
+    千星商会只数 3 星的人,少女乐队只在人数恰好等于某档时激活。
+    只写全已激活的和「恰好」类的;再上 1 人就激活的只列名字;差得更远的只报个数(2026-11-19 报告 P1-8:
+    原来每个只有 1 人的羁绊都写一遍档位,羁绊行占回合内返回文字的 11%)。
+    """
+    count, heads = _field_counts(board, facts)
     lines, near, far = [], [], 0
     for t, h in sorted(heads.items(), key=lambda kv: (-count[kv[0]], kv[0])):
         c = count[t]
@@ -191,6 +214,9 @@ def render(*, board: list | None, hud, shop: list | None, two_star: set[int], fa
             tl = traits(board, facts)
             if tl:
                 parts.append("- 羁绊(按场上角色算,星徽不计):" + ";".join(tl))
+            spots = tiles(board, facts)
+            if spots:
+                parts.append("- 地格:" + ";".join(spots))
         tried = sorted({s.name for s in board if s.name and (trial or {}).get(s.name)})
         if tried:
             parts.append("- 试用角色(这局在商店或补给卡面上标着「试用」,账号里没有、用的试用版):" + "、".join(tried))
