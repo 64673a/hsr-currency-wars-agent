@@ -17,6 +17,7 @@ def test_new_s2_screens():
     assert classify(boxes(("选择一个角色获得主角光环", 960, 90), ("从师", 420, 436))) == "spotlight_choice"
     assert classify(boxes(("选择装备", 1028, 40), ("请选择1个", 1028, 100), ("查看详情", 738, 800))) == "equipment_reward"
     assert classify(boxes(("备战阶段", 287, 70), ("请选择1名角色作为师父，受益于其羁绊效果", 960, 103))) == "mentor"
+    assert classify(boxes(("骇入效果", 960, 100), ("确认更换", 1492, 585))) == "hack"
     assert role_of("clara_mod") == "strategic"
 
 
@@ -130,6 +131,11 @@ def test_ready_button_variants_and_paired_strategy(tmp_path):
                         boxes(("请选择投资策略", 960, 100), ("选择一个", 515, 248), ("两个都带走", 1184, 248)),
                         {"step": 1}, False)
     assert "两张一起拿" in hints
+    from PIL import Image
+    dark = Frame()
+    dark.image = Image.new("RGB", (1920, 1080), (20, 20, 20))
+    hints, _ = r._hints("hack", dark, boxes(("骇入效果", 960, 100), ("确认更换", 1492, 585)), {"step": 1}, False)
+    assert "确认更换" in hints and "灰色的" in hints
 
 
 def test_peppy_recognized_by_avatar():

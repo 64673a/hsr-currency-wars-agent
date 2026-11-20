@@ -1350,7 +1350,7 @@ class Runner:
             return None
         for d in reversed(done):
             m = re.search(r"点击「(.+?)」", d)
-            if not m or m.group(1) in ("确认", "确定", "选择", "刷新", "确认选择"):
+            if not m or m.group(1) in ("确认", "确定", "选择", "刷新", "确认选择", "确认更换"):
                 continue
             text = m.group(1)
             for name in [text] + sorted((n for n in by_name if n.startswith(text) or (len(n) >= 2 and n in text)),
@@ -1431,7 +1431,7 @@ class Runner:
                 last += f"\n阵容:{self._lineup()}"
             hints = (hints + last).strip()
         if screen in CHOICE_SCREENS:
-            grey = [b.text for b in boxes if b.text in ("确认", "确认选择") and not lit(frame.image, b)]
+            grey = [b.text for b in boxes if b.text in ("确认", "确认选择", "确认更换") and not lit(frame.image, b)]
             if grey:
                 hints += "\n" + GREY_CONFIRM.format(text=grey[0])
         if self._same >= 3:

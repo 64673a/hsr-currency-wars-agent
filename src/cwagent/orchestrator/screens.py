@@ -114,7 +114,7 @@ def classify(boxes: list[TextBox]) -> str:
         return "dance"
     if _top(boxes, "奇兽花园") and (has(boxes, "选择奇美拉") or find(boxes, "^确认选择$")):
         return "garden"
-    if has(boxes, "骇入效果") and (find(boxes, "^确认选择$") or find(boxes, "^详情$")):
+    if has(boxes, "骇入效果") and (find(boxes, "^确认选择$|^确认更换$") or find(boxes, "^详情$")):
         return "hack"
     # 以下三个界面取自 M7A v2026.11.18(local/ref/m7a-2026.11.18.md),还没实机核对;原来都落到 other 交给导航层
     if find(boxes, "机心巧匠", region=(0.45, 0.04, 0.17, 0.07)) and (
