@@ -34,7 +34,7 @@ def test_paired_strategy_titles_refresh_and_shared_choice(tmp_path):
     groups = invest_refresh(words, "strategy_choice")["groups"]
     assert groups == [{"columns": (1,), "remaining": 0}, {"columns": (2, 3), "remaining": 1}]
     hint = investment_hint(words, "strategy_choice")
-    assert "一起更换这两张" in hint and "各自独立" not in hint
+    assert "一起更换这两张" in hint and "各自独立" not in hint and "M7A" not in hint
 
     entities = {n: [SimpleNamespace(name=n, kind="augments", text=f"{n}效果")]
                 for n in ["左侧策略", "右侧策略甲", "右侧策略乙"]}

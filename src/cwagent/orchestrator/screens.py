@@ -309,7 +309,7 @@ INVEST_REFRESH_STRAT = (0.76, 0.82)                 # 投资策略每张卡下�
 
 
 def paired_investment(boxes: list[TextBox], screen: str) -> bool:
-    """泡泡狼的左一张、右两张布局,按顶部组标题判断。"""
+    """组合投资策略(泡泡狼的奇遇之一)的左一张、右两张布局,按顶部组标题判断,不看本局伙伴。"""
     return screen == "strategy_choice" and find(boxes, "^(选择一个|两个都带走)$", region=(0.15, 0.20, 0.70, 0.08)) is not None
 
 
@@ -360,7 +360,7 @@ def investment_hint(boxes: list[TextBox], screen: str, env_left: int = ENV_REFRE
     if "groups" in info:
         counts = [f"{'左侧' if i == 0 else '右侧'}刷新剩余 {g['remaining']} 次" if g["remaining"] is not None
                   else f"{'左侧' if i == 0 else '右侧'}刷新次数没读出" for i, g in enumerate(info["groups"])]
-        return ("泡泡狼的投资策略布局(M7A 资料,待实测):左边「选择一个」选 1 张;右边「两个都带走」两张一起拿。"
+        return ("投资策略是组合布局:左边「选择一个」选 1 张;右边「两个都带走」两张一起拿。"
                 "右侧两张共用刷新,刷新右侧会一起更换这两张,左侧不变;左侧刷新只换左侧一张。"
                 + "、".join(counts) + "。")
     if screen == "strategy_choice":
