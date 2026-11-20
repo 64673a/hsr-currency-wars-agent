@@ -150,3 +150,18 @@ def test_uninstall_all_removes_everything(home):
     components.uninstall(log=lambda m: None, everything=True)
     for p in ("data", "runs", "config.yaml", "web/dist"):
         assert not (home / p).exists(), p
+
+
+def test_pad_waits_for_the_prompt_to_show_up():
+    """切到手柄界面后「开启」提示晚一点才出来:多看几眼等它,而不是看一眼没有就改用鼠标(2026-11-20 去掉固定的 1 秒)。"""
+    dev = Dev(ORBS)
+    late = {"n": 2}
+
+    def ocr(image):
+        if late["n"]:
+            late["n"] -= 1
+            return []
+        return dev.ocr(image)
+
+    r = macros.open_crystals(dev, dev.grab().image, lambda m: None, ocr=ocr)
+    assert dev.calls == ["pad", "lt+rt", "back"] and r.how == "手柄" and r.after == 0

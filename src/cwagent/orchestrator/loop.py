@@ -948,7 +948,7 @@ class Runner:
             if controls_ready and not popup and prev is not None and frame_diff(prev, frame.image) < STABLE_DIFF:
                 return frame, boxes
             prev = frame.image
-            time.sleep(0.6)
+            time.sleep(0.3)      # 两眼之间还隔着一次整屏识别,静止的判断不会太短(原来 0.6 秒)
         self.log("界面一直没静下来" + (f"(棋盘上有:{'、'.join(popup[:4])})" if popup else "") + ",固定流程先跳过")
         return None
 

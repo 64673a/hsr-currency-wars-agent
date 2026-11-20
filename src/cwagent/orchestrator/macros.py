@@ -128,13 +128,16 @@ def open_plane_detail(device, ocr: Ocr, log: Callable[[str], None], *, wait: flo
         device.click(*TOP_FIRST_NODE)
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
-            time.sleep(0.4)
+            time.sleep(0.2)
             frame = device.grab()
             boxes = ocr(frame.image)
             if has(boxes, "位面详情"):
                 return frame, boxes
     log("收集节点:等了两个来回也没打开位面详情,放弃")
     return None
+
+
+CLOSE_TRIES = 6
 
 
 def survey_plane(device, ocr: Ocr, log: Callable[[str], None], *, affixes: list | None = None, book=None,
@@ -151,19 +154,22 @@ def survey_plane(device, ocr: Ocr, log: Callable[[str], None], *, affixes: list 
     for x in xs:
         device.click(x, y)
         time.sleep(0.6)
-        text = _panel_text(ocr(device.grab().image))
+        boxes = ocr(device.grab().image)
+        text = _panel_text(boxes)
         if text and text not in lines:
             lines.append(text)
     if affixes is not None:
         try:
-            affixes.extend(read_affixes(device, ocr, ocr(device.grab().image), book, log, debug))
+            # 底部的词条一直在,用最后一个节点那一眼的文字就行(原来再截一张、整屏再识别一次)
+            affixes.extend(read_affixes(device, ocr, boxes, book, log, debug))
         except Exception as e:  # noqa: BLE001 - 词条读不出不影响收集节点
             log(f"读敌人词条出错:{type(e).__name__}: {e}")
     device.click(*CLOSE_X)
-    time.sleep(1.0)
-    back = ocr(device.grab().image)
-    if not find(back, "备战阶段"):
-        log("收集节点:关闭位面详情后没回到备战界面")
+    for _ in range(CLOSE_TRIES):          # 回到备战界面就走(原来固定等 1 秒)
+        time.sleep(0.25)
+        if find(ocr(device.grab().image), "备战阶段"):
+            return lines
+    log("收集节点:关闭位面详情后没回到备战界面")
     return lines
 
 
@@ -291,7 +297,7 @@ def settled_orbs(device, image: Image.Image, *, seconds: float = 4.0) -> tuple[I
     count = len(find_orbs(image))
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        time.sleep(0.7)
+        time.sleep(ORB_POLL)
         image = device.grab().image
         now = len(find_orbs(image))
         if now == count:
@@ -326,6 +332,9 @@ class Crystals:
 
 
 PROMPT_AREA = (0.62, 0.08, 0.3, 0.42)   # 手柄界面里晶矿上的「开启 LT + RT」提示
+ORB_POLL = 0.3          # 数晶矿的间隔(找圆只要几毫秒;原来 0.7 秒)
+PAD_TRIES = 6           # 切到手柄界面后最多看几眼「开启」提示(原来固定等 1 秒再看一眼)
+OPEN_TRIES = 8          # 按了 LT+RT 后最多看几眼晶矿消失(原来固定等 1.5 秒)
 SHOP_OPEN = (0.8, 0.85, 0.1, 0.12)      # 商店展开时右下角是「收起」
 
 
@@ -344,9 +353,17 @@ def _by_pad(device, ocr: Ocr | None, log: Callable[[str], None], debug: Path | N
             log(f"晶矿:{error},改用鼠标")
         return False
     shot = device.grab().image
+    boxes = []
+    if ocr is not None:
+        for i in range(PAD_TRIES):        # 「开启」提示出来(或者商店自己展开了)就不再等
+            if i:
+                time.sleep(0.15)
+                shot = device.grab().image
+            boxes = ocr(shot)
+            if find(boxes, "^开启$", region=PROMPT_AREA) or find(boxes, "^收起$", region=SHOP_OPEN):
+                break
     _save(debug, "晶矿-手柄界面", shot)
     if ocr is not None:
-        boxes = ocr(shot)
         if not find(boxes, "^开启$", region=PROMPT_AREA) and find(boxes, "^收起$", region=SHOP_OPEN):
             # 切到手柄界面时商店有时会自己展开(2026-11-14 实机,1-2、1-8 各一次),按 B 收起
             device.pad_press("B")
@@ -359,7 +376,13 @@ def _by_pad(device, ocr: Ocr | None, log: Callable[[str], None], debug: Path | N
             device.pad_exit()
             return False
     device.pad_press_triggers()
-    _save(debug, "晶矿-按了LT+RT", device.grab().image)
+    shot = device.grab().image
+    for _ in range(OPEN_TRIES):           # 晶矿开完(面板上找不到了)就切回键鼠
+        if not find_orbs(shot):
+            break
+        time.sleep(0.15)
+        shot = device.grab().image
+    _save(debug, "晶矿-按了LT+RT", shot)
     device.pad_exit()
     return True
 

@@ -195,7 +195,8 @@ class WindowsDevice:
         self.move(0.5, 0.5)
         time.sleep(0.1)
         self.move(0.503, 0.5)
-        time.sleep(1.0)
+        # 切回键鼠界面要一会儿;之后先数晶矿、识别提示、下一步再等画面静止,下一次点击至少在 1 秒以后(原来这里等 1 秒)
+        time.sleep(0.3)
 
     def scroll(self, x: float, y: float, notches: int) -> None:
         self._guard()

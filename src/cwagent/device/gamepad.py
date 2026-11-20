@@ -88,7 +88,7 @@ class Gamepad:
         time.sleep(0.4)
         pad.reset()
         pad.update()
-        time.sleep(1.0)
+        time.sleep(0.3)      # 界面切过去要一会儿:调用方接着看「开启」提示出来没有(原来固定等 1 秒)
         return True
 
     def press_triggers(self) -> None:
@@ -100,7 +100,7 @@ class Gamepad:
         time.sleep(0.4)
         pad.reset()
         pad.update()
-        time.sleep(1.5)
+        time.sleep(0.3)      # 调用方接着看晶矿消失没有(原来固定等 1.5 秒)
 
     def press(self, button: str) -> None:
         """按一下手柄按键(A、B、X、Y)。在手柄界面里 B 是「返回」,可以收起商店。"""
