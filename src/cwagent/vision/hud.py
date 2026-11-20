@@ -37,10 +37,12 @@ class Hud:
     def as_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
 
-    def text(self) -> str:
+    def text(self, *, node_info: str = "", next_info: str = "") -> str:
         # 数字发红不一定是超员:备战席满了的警告状态下 7/7 也是红的(2026-11-18 实机),已上场大于上限才说超过
         beyond = self.over and _beyond(self.deployed)
-        parts = [f"节点 {self.node}" if self.node else "",
+        node_part = f"节点 {self.node}" + (f"({node_info})" if node_info else "") if self.node else ""
+        next_part = f"下一节点 {next_info}" if next_info else ""
+        parts = [node_part, next_part,
                  f"小队生命 {self.hp}" if self.hp is not None else "",
                  f"金币 {self.gold}" if self.gold is not None else "金币 认不出",
                  f"等级 {self.level}" if self.level is not None else "",

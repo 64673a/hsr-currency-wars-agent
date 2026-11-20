@@ -22,7 +22,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from ..brain.ledger import MAX_LINE, RunLedger, compact_node, node_types
+from ..brain.ledger import MAX_LINE, RunLedger, compact_node, next_node, node_briefs, node_types
 from ..knowledge.affixes import AffixBook
 from ..knowledge.equipment import EquipmentBook
 from ..knowledge.guides import Guide, GuideAdvisor, brief, card
@@ -654,7 +654,10 @@ class Runner:
         elif seen_node == node:
             hud.deployed = self.prepare.deployed
         state: dict = {"hud": hud.as_dict()}
-        lines = [hud.text()]
+        nxt = next_node(node) if node else None
+        nxt_brief = self.ledger.node_brief(nxt)
+        lines = [hud.text(node_info=self.ledger.node_brief(node),
+                          next_info=f"{nxt}({nxt_brief})" if nxt and nxt_brief else "")]
         names: list[str] = []
         shop = self.prepare.shop_now(boxes)
         cards: list = []
@@ -1004,6 +1007,7 @@ class Runner:
             if lines:
                 self.ledger.plane_nodes = f"位面 {plane}(从左到右):\n" + "\n".join(f"- {t}" for t in lines)
                 self.ledger.node_kinds.update(node_types(lines))
+                self.ledger.node_briefs.update(node_briefs(lines))
                 self.ledger.add_fact(f"位面 {plane} 的节点(从左到右):" + " | ".join(compact_node(t) for t in lines))
                 self.log(f"位面 {plane} 的节点:{' | '.join(lines)[:300]}")
             if affixes:

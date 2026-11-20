@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from cwagent.brain.ledger import RunLedger, node_types
+from cwagent.brain.ledger import RunLedger, compact_node, node_briefs, node_types
 from cwagent.brain.screen_agent import Episode, ScreenAgent
 from cwagent.config import ModelEndpoint, ModelProfile, ProviderConfig
 from cwagent.memory import MemoryStore
@@ -53,6 +53,44 @@ def test_node_types_skip_leading_marker():
     """2026-11-19 那局位面 3 的详情在 3-7 前面多读出一个「■」,3-7 没被认成首领节点。"""
     kinds = node_types(["■ 3-7 首领节点 当前位面的首领挑战，请小心应对。", "3-6 幕后茶歇 特殊的奖励节点"])
     assert kinds == {"3-7": {"boss"}, "3-6": {"tea_break"}}
+    assert compact_node("■ 3-7 首领节点 当前位面的首领挑战。 主角光环") == "3-7 首领节点(主角光环)"
+
+
+def test_node_briefs_and_hud_label(tmp_path):
+    """备战界面第一行直接标出当前节点和下一节点的类型,不再要模型回翻几十步前的位面节点表。"""
+    briefs = node_briefs(PLANE_1 + ["2-6 奖励节点 难度较低。 本局效果:次元扑满"])
+    assert briefs["1-1"] == "奖励节点"
+    assert briefs["1-3"] == "投资策略、选完打战斗"
+    assert briefs["1-4"] == "战斗节点、狂化状态"
+    assert briefs["1-8"] == "幕后茶歇"
+    assert briefs["1-9"] == "首领节点、主角光环"
+    assert briefs["2-6"] == "奖励节点[次元扑满]"
+
+    ledger = RunLedger()
+    ledger.node_briefs.update(briefs)
+    ledger.node_kinds["2-7"] = {"boss"}
+    assert ledger.node_brief("1-1") == "奖励节点"
+    assert ledger.node_brief("2-7") == "首领节点"          # 只有 node_kinds 时兜底
+
+    hud = Hud(node="1-8", hp=59, gold=22, level=6, exp="2/40", deployed="6/6")
+    assert hud.text() == "节点 1-8,小队生命 59,金币 22,等级 6,经验 2/40,上场 6/6"
+    assert hud.text(node_info="奖励节点", next_info="1-9(首领节点、主角光环)") == (
+        "节点 1-8(奖励节点),下一节点 1-9(首领节点、主角光环),小队生命 59,金币 22,等级 6,经验 2/40,上场 6/6"
+    )
+
+    pages = {"prep": [("备战阶段", 0.24, 0.04), ("1-1", 0.24, 0.07), ("80", 0.75, 0.07), ("0/4", 0.15, 0.88),
+                      ("3/3", 0.49, 0.24), ("出战", 0.94, 0.70)]}
+    sim = Sim(pages, "prep", lambda s, a: None)
+    r = runner_for(sim, tmp_path)
+    r.ledger.node_briefs.update(briefs)
+    seen, _, _ = r.perceive(sim.grab().image, FakeOcr(sim)(sim.grab().image), "1-1")
+    first = seen.splitlines()[0]
+    assert first.startswith("节点 1-1(奖励节点),下一节点 1-2(奖励节点),")
+    assert "奖励节点" not in r.ledger.node("1-1").start     # 本局经历的进场数字不受影响
+
+    seen_last, _, _ = r.perceive(sim.grab().image, FakeOcr(sim)(sim.grab().image), "1-9")
+    assert seen_last.splitlines()[0].startswith("节点 1-9(首领节点、主角光环),小队生命")
+    assert "下一节点" not in seen_last.splitlines()[0]      # 位面最后一个节点不显示下一节点
 
 
 def test_public_memories_are_in_the_catalog(tmp_path):

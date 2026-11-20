@@ -69,6 +69,7 @@ class RunLedger:
     intro: str = ""                                          # 开局界面上的首领、怪物词条等原文
     plane_nodes: str = ""                                    # 本位面的节点序列(程序在位面开始时收集)
     node_kinds: dict[str, set[str]] = field(default_factory=dict)   # 节点号 → 类型(reward、battle……),给记忆检索
+    node_briefs: dict[str, str] = field(default_factory=dict)       # 节点号 → 类型与标记(如 奖励节点、首领节点、主角光环)
     direction: str = ""                                      # 对局方向与计划(模型写)
     equipped: dict[str, list[str]] = field(default_factory=dict)   # 角色 → 程序给他装上的装备
     items: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号的道具:(名字, 看过的选项)
@@ -136,6 +137,17 @@ class RunLedger:
         if not node:
             return set()
         return self.node_kinds.get(node, set()) | self.node_kinds.get(next_node(node) or "", set())
+
+    def node_brief(self, node: str | None) -> str:
+        """节点号对应的简明类型与标记(优先位面详情读到的,没读到时按 node_kinds 兜底)。"""
+        if not node:
+            return ""
+        if node in self.node_briefs:
+            return self.node_briefs[node]
+        kinds = self.node_kinds.get(node)
+        if not kinds:
+            return ""
+        return "、".join(label for label, key in NODE_LABELS if key in kinds)
 
     def equip(self, role: str, item: str, combine=None) -> None:
         """程序执行 equip 成功后记一笔。一个角色最多穿 3 件(规则卡),多出来的说明前面的记录已经过期,只留最近 3 件。
@@ -248,16 +260,38 @@ class RunLedger:
         return "\n\n".join(parts)
 
 
+def _parse_node_line(line: str) -> tuple[str, str, list[str], str] | None:
+    """解析位面详情里的节点说明行 → (节点号, 节点类型名, 画面标记列表, 本局效果)。"""
+    m = re.match(r"\W*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
+    if not m:
+        return None
+    node, label, rest = m.groups()
+    marks = [k for k in ("狂化状态", "主角光环") if k in rest]
+    if "继续备战【战斗节点】" in rest:
+        marks.append("选完打战斗")
+    effect = re.search(r"本局效果[:：](.+?)(?:$|\s{2})", rest)
+    return node, label, marks, (effect.group(1).strip() if effect else "")
+
+
+def node_briefs(lines: list[str]) -> dict[str, str]:
+    """位面详情的节点说明行 → {节点号: 类型与标记},给备战界面的当前/下一节点标注用。"""
+    out: dict[str, str] = {}
+    for line in lines:
+        parsed = _parse_node_line(line)
+        if not parsed:
+            continue
+        node, label, marks, effect = parsed
+        text = "、".join([label, *marks])
+        out[node] = text + (f"[{effect}]" if effect else "")
+    return out
+
+
 def compact_node(line: str) -> str:
     """位面详情的节点说明行压成一小段:节点号 + 名字 + 画面上的标记(狂化状态、主角光环、奇遇伙伴带来的效果)。
     说明正文(「难度较低的节点,拥有无限的行动值……」)每局都一样,放进规则卡,这里不重复。"""
-    m = re.match(r"\s*([1-3]-\d{1,2})\s+(\S+)(.*)", line)
-    if not m:
+    parsed = _parse_node_line(line)
+    if not parsed:
         return line.strip()[:40]
-    node, label, rest = m.groups()
-    marks = [k for k in ("狂化状态", "主角光环") if k in rest]
-    effect = re.search(r"本局效果[:：](.+?)(?:$|\s{2})", rest)
-    if "继续备战【战斗节点】" in rest:
-        marks.append("选完打战斗")
+    node, label, marks, effect = parsed
     text = f"{node} {label}" + (f"({'、'.join(marks)})" if marks else "")
-    return text + (f"[{effect.group(1).strip()}]" if effect else "")
+    return text + (f"[{effect}]" if effect else "")
