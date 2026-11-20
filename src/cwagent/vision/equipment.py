@@ -22,6 +22,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+from .ocr import TextBox, find
+
 COL_X = 1845          # 第一列格子中心(像素)
 COL_STEP = 79.75      # 往左一列
 ROW_Y = 248           # 第一行格子中心
@@ -77,6 +79,22 @@ def cell_center(index: int) -> tuple[float, float]:
     """第 index 格(从 1 开始)的中心,归一化坐标。"""
     col, row = divmod(index - 1, ROWS)
     return (COL_X - col * COL_STEP) / 1920, (ROW_Y + row * ROW_STEP) / 1080
+
+
+def privilege_confirm(boxes: list[TextBox]) -> TextBox | None:
+    return find(boxes, "^确认选择$", region=(0.65, 0.43, 0.24, 0.15))
+
+
+def privilege_panel(boxes: list[TextBox]) -> bool:
+    """强化选择覆盖备战界面；道具说明浮窗的标题不在上方居中。"""
+    return find(boxes, "^特权赋予卡$", region=(0.33, 0.01, 0.40, 0.07)) is not None and (
+        privilege_confirm(boxes) is not None
+        or find(boxes, r"^请选择\s*[1一]\s*个", region=(0.33, 0.07, 0.40, 0.07)) is not None
+    )
+
+
+def privilege_options(boxes: list[TextBox]) -> list[TextBox]:
+    return [b for b in boxes if 0.19 <= b.x <= 0.87 and 0.25 <= b.y <= 0.35 and b.text.endswith("·特权")]
 
 
 def _bgr(image: Image.Image) -> np.ndarray:

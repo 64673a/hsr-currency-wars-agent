@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from ..vision.ocr import TextBox, find, has
+from ..vision.equipment import privilege_panel
 
 
 RESULT_TITLE = (0.21, 0.12, 0.49, 0.26)    # 结算页标题一带(M7A 的 RESULT_TITLE,1920x1080 下 410,135~1350,410)
@@ -101,6 +102,8 @@ def classify(boxes: list[TextBox]) -> str:
         return "supply"
     # 备战界面上叠的面板:背景里仍有「备战阶段」,要先于备战界面判断(M7A S2 资料;开拓商店 2026-11-14 实机见过,
     # 当成备战界面时点商店只提示「该状态下不可使用」,卡住了一个节点)
+    if privilege_panel(boxes):
+        return "privilege_choice"
     if _top(boxes, "开拓商店") and (has(boxes, "星穹列车") or has(boxes, "累计消耗解锁") or find(boxes, "^详情$")):
         return "rail_shop"
     if has(boxes, "黑市主理人") and has(boxes, "轮换商品|招牌商品"):
@@ -159,7 +162,7 @@ def classify(boxes: list[TextBox]) -> str:
 
 # 需要模型判断的界面交给哪个决策层的模型(config.yaml 的 roles;没配的用对局选的模型)
 ROLES = {
-    "prepare": "tactical",
+    "prepare": "tactical", "privilege_choice": "tactical",
     "environment_choice": "strategic", "strategy_choice": "strategic", "spotlight_choice": "strategic",
     "spotlight_replace": "strategic",
     "encounter_choice": "chooser", "supply": "chooser", "tea_break": "chooser",
@@ -177,7 +180,7 @@ SCREEN_NAMES = {
     "encounter_choice": "遭遇节点", "supply": "补给", "tea_break": "幕后茶歇", "difficulty": "难度选择",
     "spotlight_replace": "替换主角光环", "rail_shop": "开拓商店", "black_market": "黑市商店", "ranger": "巡海游侠任命",
     "dance": "梦境交织共舞", "garden": "奇兽花园", "hack": "骇入效果",
-    "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备",
+    "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备", "privilege_choice": "特权赋予卡",
     "mode_resume": "继续已有对局",
     "other": "其他界面",
 }
@@ -286,6 +289,7 @@ OVERLAY_HINTS = {
 候选卡可以横向滚动(scroll),没选时上方写着「请选择一名角色」;选中后「确认选择」才亮。""",
     "equipment_reward": """选择装备(投资策略「独家代言」等给的;M7A S2 资料,待实测):几件进阶装备选 1 件,
 每张卡有「查看详情」可看效果;选完可能还要点确认。""",
+    "privilege_choice": "特权赋予卡：选中一件装备，再点「确认选择」。成品会回到装备栏，不会留在原角色身上。确认后按新装备栏编号穿戴。",
 }
 GREY_CONFIRM = "「{text}」按钮现在是灰色的(还没选够,点了没用):先选中选项再确认。"
 

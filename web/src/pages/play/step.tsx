@@ -14,6 +14,7 @@ const SCREENS: Record<string, string> = {
   run_intro: '开局',
   environment_choice: '投资环境',
   prepare: '备战',
+  privilege_choice: '特权赋予卡',
   battle: '战斗',
   spotlight_choice: '主角光环',
   supply: '补给',

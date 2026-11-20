@@ -20,7 +20,7 @@ CHOICE_NAMES = {"environment_choice": "投资环境", "strategy_choice": "投资
                 "encounter_choice": "遭遇", "spotlight_choice": "主角光环", "tea_break": "幕后茶歇",
                 "spotlight_replace": "替换主角光环", "hack": "骇入效果", "dance": "梦境交织共舞", "ranger": "巡海游侠任命",
                 "garden": "奇兽花园", "clara_mod": "机心巧匠改装", "mentor": "从师", "equipment_reward": "选择装备",
-                "other": "其他界面"}
+                "privilege_choice": "特权赋予卡", "other": "其他界面"}
 
 
 @dataclass

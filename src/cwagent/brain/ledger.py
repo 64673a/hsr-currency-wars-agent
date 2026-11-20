@@ -149,9 +149,15 @@ class RunLedger:
         items.append(item)
         del items[:-3]
 
-    def unequip(self, role: str | None = None) -> None:
-        """角色卖掉、或者用了拆装道具:去掉对应记录(role 为 None 时全部清空,拆的是谁看不出来)。"""
-        if role is None:
+    def unequip(self, role: str | None = None, *, item: str | None = None) -> None:
+        """删除指定的穿戴记录；拆装目标不明时清空全部记录。"""
+        if item is not None:
+            items = self.equipped.get(role) if role else None
+            if items and item in items:
+                items.remove(item)
+                if not items:
+                    self.equipped.pop(role, None)
+        elif role is None:
             self.equipped.clear()
         else:
             self.equipped.pop(role, None)

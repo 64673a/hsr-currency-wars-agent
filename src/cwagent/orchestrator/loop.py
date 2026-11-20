@@ -15,6 +15,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -49,7 +50,7 @@ from .entry import EntryNavigator
 from .battle_watch import BattleWatcher
 from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
 from ..vision.boxes import item_slots
-from ..vision.equipment import cancel_point, find_compose_confirm
+from ..vision.equipment import cancel_point, family, find_compose_confirm, privilege_confirm, privilege_options, privilege_panel
 from . import situation
 from .pending import PendingDecision
 from .prepare import READY_DEFERRED, PrepareExecutor, PrepareResult
@@ -108,7 +109,7 @@ BOSS_PREP_BUTTON = r"^(选择主角|出战)$"
 BOSS_PREP_BUTTON_AREA = (0.86, 0.60, 0.14, 0.15)
 SPOTLIGHT_INFO_CLOSE = (0.970, 0.060)   # 「主角光环与奇遇详情」右上角的 X(实机关掉过;M7A 也点这里)
 CHOICE_SCREENS = {"supply", "strategy_choice", "environment_choice", "encounter_choice", "spotlight_choice",
-                  "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor", "equipment_reward"}
+                  "ranger", "dance", "garden", "hack", "tea_break", "clara_mod", "mentor", "equipment_reward", "privilege_choice"}
 CRYSTAL_TRIES = 2          # 同一节点开晶矿连续几次没开成就放过这个节点
 CENTER = (0.25, 0.12, 0.5, 0.55)                       # 棋盘中间:弹窗、奇遇伙伴动画出现的地方
 # 棋盘上本来就有的文字,以及一直挂着、不挡操作的提示
@@ -133,6 +134,7 @@ ITEM_BAR = (0.87, 0.08, 0.19)   # 右上角道具栏:x 下限、y 范围(实机 
 
 
 GEAR_ITEMS = {350101, 350102, 350103}   # 拆装扳手、精密拆装扳手、冶金炉:用了会取下或重掷角色身上的装备
+PRIVILEGE_CARD = 350104
 ZONE_NAMES = {"front": "前台", "back": "后台", "bench": "备战席"}
 SURVEY_WAITS = 3   # 新位面第一个备战回合界面静不下来时,最多再等几轮才交给模型
 SHOP_WAITS = 3     # 开场动画期间商店打不开时,每个节点最多再等几轮才交给模型
@@ -309,6 +311,7 @@ class Runner:
         self._facts: situation.RoleFacts | None = None         # 角色 → 羁绊、羁绊档位(局面要点用)
         self._last_hud = None                                  # 最近一次读到的备战数字
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
+        self._privilege_role: str | None = None
         self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
         self._shop_waits: dict[str, int] = {}                  # 节点 → 开场动画期间商店打不开、等了几轮
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
@@ -407,12 +410,19 @@ class Runner:
                             xs, y = coords[slot.zone]
                             if slot.index < len(xs) and abs(a.x - xs[slot.index]) < 0.025 and abs(a.y - y) < 0.04:
                                 self.episode.spotlight_role = slot.name or "角色未识别"
+            from_item_bar = a.x >= ITEM_BAR[0] and ITEM_BAR[1] <= a.y <= ITEM_BAR[2]
+            item = None
+            if from_item_bar:
+                self._privilege_role = None
+                item = self._item_at(self._items, a)
+                if item is None:
+                    item = self._item_at(read_items(self.device.grab().image), a)
             # seconds:拖到目标后按住几秒再松开(黄金大饭店把角色拖到白厄身上要按住约 5 秒才喂食,维护者 2026-11-18)
             self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8, hold=min(a.seconds or 0.0, 15.0))
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
-            if a.x >= ITEM_BAR[0] and ITEM_BAR[1] <= a.y <= ITEM_BAR[2]:
+            if from_item_bar:
                 time.sleep(ACTION_GAP)
-                return self._used_item(a)
+                return self._used_item(a, item)
         elif a.type == "scroll":
             x, y = (a.x if a.x is not None else 0.5), (a.y if a.y is not None else 0.5)
             self.device.scroll(x, y, a.notches or -3)
@@ -426,9 +436,12 @@ class Runner:
         time.sleep(ACTION_GAP)
         return action_text(a)
 
-    def _used_item(self, a: Action) -> str:
+    @staticmethod
+    def _item_at(items, a: Action):
+        return next((it for it in items if abs(it.x - a.x) < 0.02 and abs(it.y - a.y) < 0.035), None)
+
+    def _used_item(self, a: Action, item) -> str:
         """从右上角道具栏拖出了道具:说清拖的是什么、拖到了谁身上;会动装备的道具让程序记的穿戴作废。"""
-        item = next((it for it in self._items if abs(it.x - a.x) < 0.02 and abs(it.y - a.y) < 0.035), None)
         target = None
         for slot in self._board or []:
             if slot.name and not slot.empty and abs(slot.x - a.x2) < 0.03 and abs(slot.y - a.y2) < 0.05:
@@ -438,12 +451,89 @@ class Runner:
         onto = f"{ZONE_NAMES.get(target.zone, target.zone)}{target.index + 1}号 {target.name}" if target else \
             f"({a.x2:.3f},{a.y2:.3f})"
         text = f"把{what}拖到 {onto}"
+        if item is None or item.id == PRIVILEGE_CARD:
+            if privilege_panel(self.ocr(self.settle().image)):
+                self._privilege_role = target.name if target else None
+                return "已打开特权赋予卡的装备选择框，尚未强化"
+            if item is not None:
+                self._privilege_role = target.name if target else None
+                return text + "；未见强化选择框，请核对新局面"
         if item is None or item.id in GEAR_ITEMS:
             # 拆装扳手、冶金炉会取下或重掷装备:拖到谁身上就清掉谁的记录,看不出是谁就全部作废
             self.ledger.unequip(target.name if target and item is not None else None)
             text += ";程序记的这名角色的装备已清掉,以截图为准" if target and item is not None else \
                 ";程序记的角色装备已全部清掉,以截图为准"
         return text + "(结果看新截图)"
+
+    def _privilege_actions(self, actions: list[Action]) -> list[str]:
+        """只执行强化面板内的操作；面板一关闭就核对装备栏，不沿用旧编号。"""
+        results = []
+        for a in actions:
+            frame = self.settle()
+            boxes = self.ocr(frame.image)
+            if not privilege_panel(boxes):
+                results.append("特权选择框已不在当前画面，先看新局面")
+                break
+            if a.type in ("wait", "zoom", "recheck") or (a.type == "inspect" and a.mode != "click"):
+                results.append(self._raw(a, boxes))
+                continue
+            if a.type not in ("click", "click_text", "inspect"):
+                results.append("特权选择框打开时只能选择或查看装备，不能执行备战操作")
+                break
+            options = privilege_options(boxes)
+            confirm = privilege_confirm(boxes)
+            if a.type == "click_text":
+                buttons = [b for b in boxes if b is confirm or b in options or (
+                    b.text == "查看详情" and 0.19 <= b.x <= 0.87 and 0.34 <= b.y <= 0.40)]
+                matches = [b for b in buttons if b.text == a.text] or [b for b in buttons if a.text in b.text]
+                if len(matches) <= a.nth:
+                    results.append(f"特权选择框里没找到「{a.text}」")
+                    break
+                b = matches[a.nth]
+                x, y = b.x, b.y - 0.10 if b in options else b.y
+            elif a.mark is not None:
+                mark = self._vision_marks.get(a.mark)
+                if mark is None:
+                    results.append("当前截图没有这个标号")
+                    break
+                x, y = mark.x, mark.y
+            else:
+                x, y = a.x, a.y
+            is_confirm = 0.65 <= x <= 0.89 and 0.43 <= y <= 0.58
+            if is_confirm and a.type == "inspect":
+                results.append("查看装备不会执行「确认选择」，请单独用点击确认")
+                break
+            if not is_confirm and not (0.18 <= x <= 0.88 and 0.11 <= y <= 0.40):
+                results.append("没有点击：目标在特权选择框外")
+                break
+            reader = self.equipment_reader
+            before = reader.read(frame.image) if is_confirm and reader else []
+            results.append(self._raw(Action(type="click", x=x, y=y), boxes))
+            after = self.settle()
+            screen = self.screen_of(after.image, self.ocr(after.image))
+            if screen == "privilege_choice":
+                if is_confirm:
+                    results.append("特权选择框仍在，未确认强化")
+                    break
+                continue
+            role, self._privilege_role = self._privilege_role, None
+            if is_confirm:
+                current = reader.read(after.image) if reader and screen == "prepare" else []
+                seen = Counter(family(i.name) for i in before if i.name and i.privileged)
+                added = Counter(family(i.name) for i in current if i.name and i.privileged) - seen
+                names = {family(b.text) for b in options}
+                if sum(added.values()) == 1 and (not names or next(iter(added)) in names):
+                    name = next(iter(added))
+                    if role:
+                        self.ledger.unequip(role, item=name)
+                    slots = "、".join(f"{i.index}号" for i in current if i.name and family(i.name) == name and i.privileged)
+                    results.append(f"{name}·特权已回到装备栏（同名特权装备所在格：{slots}），尚未穿戴")
+                else:
+                    results.append("特权选择框已关闭，未能核实成品所在格；请核对新装备栏，成品不会自动穿戴")
+                if screen == "prepare" and self.episode is not None:
+                    self.episode.max_turns = max(self.episode.max_turns, self.episode.turns + 1)
+            break
+        return results
 
     def _remember_choice(self, x: float, y: float, boxes) -> str | None:
         ep = self.episode
@@ -1145,6 +1235,8 @@ class Runner:
 
     def _key(self, screen: str, sig: set[str]) -> tuple:
         ep = self.episode
+        if screen == "privilege_choice":
+            return ("prepare", self._node)
         if screen == "other":
             # 模型操作后弹出的界面(角色详情、确认框……)仍属于原来的回合
             return ep.key if ep is not None and ep.pending else ("other", frozenset(sig))
@@ -1445,7 +1537,9 @@ class Runner:
             # 只看不操作的一轮不占备战决策次数(Codex 2026-11-16:1-1 放大一次、查看两次后就被强制出战)
             ep.free_looks += 1
             ep.max_turns += 1
-        if ep.screen == "prepare":
+        if screen == "privilege_choice":
+            return self.finish(record, screen, decision.actions, boxes, sig)
+        if ep.screen == "prepare" or screen == "prepare":
             return self._finish_prepare(record, decision.actions, boxes, sig, screen)
         return self.finish(record, screen, decision.actions, boxes, sig)
 
@@ -1525,7 +1619,7 @@ class Runner:
         if not waiting:
             self._waits = 0
         self._marks = []
-        results = self.execute(actions, boxes) if actions else []
+        results = self._privilege_actions(actions) if screen == "privilege_choice" else self.execute(actions, boxes)
         record["actions"] = results
         if self._marks:
             record["marks"] = self._marks
@@ -1603,6 +1697,8 @@ class Runner:
         if screen == "environment_choice":
             self._track_env_refresh(boxes, n)
         node = node_of(boxes)
+        if (node and node != self._node) or screen in CLOSES:
+            self._privilege_role = None
         if (node and node != self._node) or screen in CLOSES | {"tea_break", "equipment_reward", "spotlight_choice"}:
             self._ready_at = 0.0
         if node:

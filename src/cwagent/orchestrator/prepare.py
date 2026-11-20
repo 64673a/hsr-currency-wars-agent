@@ -24,6 +24,7 @@ from ..vision.equipment import (
     cancel_point,
     find_compose_confirm,
     format_items,
+    privilege_panel,
 )
 from ..vision.hud import read_gold, read_level
 from ..vision.ocr import Ocr, TextBox, find
@@ -590,6 +591,9 @@ class PrepareExecutor:
                     out.results.append(self.raw(a, boxes))
                     if a.type != "wait":
                         boxes = self._look()
+                        if privilege_panel(boxes):
+                            out.observe = True
+                            break
             except UserInterrupt:
                 raise
             except Exception as e:

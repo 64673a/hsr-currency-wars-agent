@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from ..llm.base import ImageInput
-from .equipment import cell_center
+from .equipment import cell_center, privilege_confirm, privilege_options
 from .ocr import TextBox
 
 
@@ -115,6 +115,12 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
                     and b.score >= 0.55):
                 # 标号贴在图标左边(屏幕边缘那一小条是空的);贴在名字右边会压到下一行的档位
                 add(BOND_ICON_X, b.y + 0.016, f"羁绊 {b.text}", BOND_ICON_W, 0.0, "left")
+    if screen == "privilege_choice":
+        for b in privilege_options(boxes):
+            add(b.x, b.y - 0.10, b.text, 0.13, 0.18, "left")
+        confirm = privilege_confirm(boxes)
+        boxes = [b for b in boxes if b is confirm or (b.text == "查看详情" and 0.19 <= b.x <= 0.87
+                                                     and 0.34 <= b.y <= 0.40)]
     for b in boxes:
         if not b.text.strip() or b.y > 0.95 or b.score < 0.55:
             continue
@@ -133,7 +139,7 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
         for i, x in enumerate((0.370, 0.422, 0.474, 0.528, 0.583, 0.630), 1):
             add(x, 0.700, f"光环界面后台{i}")
         add(0.5, 0.407, "主角空位")
-    for x, y in crosses(image):
+    for x, y in crosses(image) if screen != "privilege_choice" else ():
         if len(marks) < 100:
             add(x, y, "关闭图标", 0.02, 0.035, "left")
     img = image.convert("RGB").copy()
