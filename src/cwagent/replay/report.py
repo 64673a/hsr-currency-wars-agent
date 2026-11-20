@@ -252,7 +252,8 @@ def render(run: Path) -> str:
     if timed:
         def minutes(key: str) -> str:
             return f"{sum(float(t.get(key) or 0) for t in timed) / 60:.1f}"
-        ocr = sum((t.get("ocr") or [0, 0])[1] for t in timed) / 60
+        # 战斗中读进度的识别算在战斗时间里,这里只算程序部分的(2026-11-20 那局 7.9 分里 4.9 分是战斗中的)
+        ocr = sum((t.get("ocr") or [0, 0])[1] for t in timed if not t.get("battle")) / 60
         lines.append(f"- 用时 {minutes('total')} 分:战斗 {minutes('battle')} 分,模型 {minutes('model')} 分,"
                      f"程序 {minutes('program')} 分(其中文字识别 {ocr:.1f} 分)")
     lines += ["",
