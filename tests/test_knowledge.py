@@ -242,3 +242,18 @@ def test_prompt_texts_carry_no_source_notes():
         texts[comp["name"]] = "\n".join(comp.get("flow_effects") or [])
     for name, text in texts.items():
         assert not re.search(SOURCE_NOTE, text), (name, re.search(SOURCE_NOTE, text).group())
+
+
+def test_trait_remarks_reach_the_description_with_game_values():
+    """羁绊备注解释【连击地格】等专有名词,要随条目说明发给模型;接口里和游戏内不一致的数值按游戏内改。"""
+    from cwagent.knowledge.index import _describe
+
+    tile = "【连击地格】:进入战斗时,此地格上的角色获得0%普攻/战技伤害增幅。"   # 真实数据清洗后的样子
+    one = lineup()
+    for stage in one["tourn_detail"]["role_stages"]:
+        for t in stage.get("traits") or []:
+            t["remarks"] = [{"remark": tile}]
+    k = build(config(), [one])
+    combo = next(e.data for e in k.entries["traits"] if e.name == "连击")
+    assert combo["remarks"] == ["【连击地格】:进入战斗时,此地格上的角色获得15%普攻/战技伤害增幅。"]
+    assert _describe("traits", combo).endswith(combo["remarks"][0])

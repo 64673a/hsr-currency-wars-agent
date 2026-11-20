@@ -32,8 +32,10 @@ def _describe(kind: str, d: dict, stats: str = "") -> str:
         text = f"{d['cost']}费 {d['position']},定位 {tags},羁绊 {'、'.join(t['name'] for t in d['traits'])}。{skills}"
         return text + (f"({stats})" if stats else "")
     if kind == "traits":
+        # 备注解释羁绊里的专有名词(【连击地格】【连击率】等):原来没发,模型不知道连击地格的效果只给站在上面的角色(2026-11-20)
         layers = ";".join(f"{l['count']}人:{l['desc']}" for l in d.get("layers", []))
-        return f"{d['type']}羁绊。{d.get('desc', '')} {layers}".strip()
+        notes = " ".join(d.get("remarks") or [])
+        return f"{d['type']}羁绊。{d.get('desc', '')} {layers} {notes}".strip()
     if kind == "equipment":
         recipe = "、".join(f"{r['a_name']}+{r['b_name']}" for r in d.get("recipes", []))
         return f"{d['category']}。{d.get('desc', '')}" + (f"(配方:{recipe})" if recipe else "")

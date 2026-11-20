@@ -35,6 +35,10 @@ EFFECT_RULES: list[tuple[str, str]] = [
     ("主角光环", r"主角光环"),
     ("风险", r"敌人难度|受到的伤害|小队生命值"),
 ]
+# 官方接口文字和游戏内显示不一致的地方,按游戏内改(维护者在游戏里核对过,出处见 docs/RULES_EVIDENCE.md)
+REMARK_FIXES = {
+    "此地格上的角色获得0%普攻/战技伤害增幅": "此地格上的角色获得15%普攻/战技伤害增幅",   # 连击地格:接口写 0%,游戏内 15%
+}
 # 会改变流程或让既定计划失效的标签:拿到时应重新规划
 FLOW_EFFECTS = {"改变节点", "商店概率", "人口上限", "随机变化"}
 
@@ -147,6 +151,8 @@ def build(config: dict[str, Any], lineups: list[dict[str, Any]],
                                                                  c(layer.get("trait_desc"))))
                 for rm in t.get("remarks") or []:
                     text = c(rm.get("remark"))
+                    for wrong, right in REMARK_FIXES.items():
+                        text = text.replace(wrong, right)
                     if text and text not in remarks.setdefault(tid, []):
                         remarks[tid].append(text)
 
