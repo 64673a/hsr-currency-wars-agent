@@ -53,7 +53,7 @@ from ..vision.boxes import item_slots
 from ..vision.equipment import cancel_point, family, find_compose_confirm, privilege_confirm, privilege_options, privilege_panel
 from . import situation
 from .pending import PendingDecision
-from .prepare import READY_DEFERRED, PrepareExecutor, PrepareResult
+from .prepare import REST, READY_DEFERRED, PrepareExecutor, PrepareResult
 from .screens import (
     CLOSE_CORNER,
     DIFFICULTY_HINT,
@@ -453,6 +453,8 @@ class Runner:
                     item = self._item_at(read_items(self.device.grab().image), a)
             # seconds:拖到目标后按住几秒再松开(黄金大饭店把角色拖到白厄身上要按住约 5 秒才喂食,维护者 2026-11-18)
             self.device.drag(a.x, a.y, a.x2, a.y2, duration=0.8, hold=min(a.seconds or 0.0, 15.0))
+            if hasattr(self.device, "move"):
+                self.device.move(*REST)   # 指针停在卡上卡面会抬起,下一眼读卡不准
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
             if from_item_bar:
                 time.sleep(ACTION_GAP)

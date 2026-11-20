@@ -61,6 +61,9 @@ REFRESH_TRIES = 12
 READY_TRIES = 8
 STILL = 3.0      # 两眼之间画面平均差低于这个算静止(和等画面静止的标准一样)
 PREP_BANNER = (0.0, 0.0, 0.45, 0.12)   # 左上角「备战阶段」
+# 拖完把指针停到客户区左上角(M7A v2026.11.20 的 POINTER_REST,1920x1080 下 12 像素处,离屏幕角很远,不会触发急停):
+# 指针停在卡上卡面会抬起,换位后核对目标格、读卡都会受影响
+REST = (0.006, 0.011)
 
 
 @dataclass
@@ -127,6 +130,11 @@ class PrepareExecutor:
         """等画面静止后整屏识别:结果说不准的操作(模型按坐标点的、等待)之后用。"""
         self.frame = self.capture()
         return self.ocr(self.frame.image)
+
+    def _park(self) -> None:
+        move = getattr(self.device, "move", None)
+        if move is not None:
+            move(*REST)
 
     def _grab(self):
         """直接截一张,不等画面静止(看回执时靠多看几眼,而不是先等动画放完)。"""
@@ -458,6 +466,7 @@ class PrepareExecutor:
             before = self._grab().image
             was = occupied_slots(before, shop, self.counts)
             self.device.drag(p.x, p.y, q.x, q.y, duration=0.6)
+            self._park()
             out.marks.append({"type": "drag", "x": p.x, "y": p.y, "x2": q.x, "y2": q.y})
 
             def landed(_) -> bool:
@@ -821,6 +830,7 @@ class PrepareExecutor:
                 out.observe = True
                 return None
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
+            self._park()
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
             self._until(lambda _: find_compose_confirm(self.frame.image) is not None, tries=EQUIP_TRIES, read=False)
             shot = self.frame.image
@@ -862,6 +872,7 @@ class PrepareExecutor:
             return None
         dst = layout[src]
         self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
+        self._park()
         out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": dst.x, "y2": dst.y})
         # 回执:装备栏少了一件,或者弹出合成确认。
         # 角色身上已有一件简易装备时,再装一件简易装备会合成,也弹「A + B = 成品」要点 ✓(维护者 2026-11-18)

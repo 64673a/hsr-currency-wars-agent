@@ -72,7 +72,8 @@ def test_drag_can_hold_on_the_target(tmp_path):
     r = Runner(dev, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
     r._raw(Action(type="drag", x=0.29, y=0.85, x2=0.46, y2=0.62, seconds=6), [])
     r._raw(Action(type="drag", x=0.29, y=0.85, x2=0.46, y2=0.62), [])
-    assert dev.actions == [("drag", 0.29, 0.85, 0.46, 0.62, 6.0), ("drag", 0.29, 0.85, 0.46, 0.62)]
+    rest = ("move", 0.006, 0.011)        # 拖完把指针移开(停在卡上卡面会抬起)
+    assert dev.actions == [("drag", 0.29, 0.85, 0.46, 0.62, 6.0), rest, ("drag", 0.29, 0.85, 0.46, 0.62), rest]
 
 
 def test_transition_after_ready_does_not_call_the_model(tmp_path):
