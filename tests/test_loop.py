@@ -513,3 +513,28 @@ def test_environment_refresh_is_counted_by_card_names(tmp_path):
     assert r._env_left == 1
     r._track_env_refresh(cards("刷刷刷", "召唤邀请", "人身意外险"), 3)
     assert r._env_left == 0
+
+
+def test_every_step_records_its_timing(tmp_path):
+    """每一步记下耗时(整步、模型、战斗、程序自己)、识别次数和每个操作的用时,报表按节点汇总程序耗时(2026-11-20)。"""
+    import json
+
+    from cwagent.replay import report
+
+    pages = {"tap": [("点击空白处继续", 0.5, 0.89)], "env": [("投资环境", 0.5, 0.09), ("追击概念股", 0.77, 0.36),
+                                                      ("确认", 0.56, 0.91)], "end": [("对局评价", 0.5, 0.3)]}
+
+    def rules(state, a):
+        return {("tap", ("click", 0.5, 0.89)): "env", ("env", ("click", 0.56, 0.91)): "end"}.get((state, a))
+
+    sim = Sim(pages, "tap", rules)
+    brain = FakeBrain({"environment_choice": [[Action(type="click_text", text="确认")]]})
+    runner = Runner(sim, brain, Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda m: None, settle=False)
+    runner.run(RunOptions(max_steps=5))
+    steps = [json.loads(x) for x in (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    timings = [s["timing"] for s in steps]
+    assert all(set(t) == {"total", "model", "battle", "program", "ocr", "settle", "actions"} for t in timings)
+    assert timings[0]["ocr"][0] >= 1 and timings[0]["actions"][0][0] == "click"
+    assert [a[0] for a in timings[1]["actions"]] == ["click_text"]
+    text = report.render(tmp_path / "run")
+    assert "程序秒" in text and "- 用时 " in text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, replace
 
 from PIL import Image
@@ -98,3 +99,30 @@ class Aliased:
     def line(self, image: Image.Image, *, min_score: float = 0.9) -> str:
         text = self.ocr.line(image, min_score=min_score)
         return self.aliases.get(text, text)
+
+
+class Timed:
+    """记下识别了几次、一共用了多久(每一步的耗时统计用),识别本身原样转给被包的 OCR。"""
+
+    def __init__(self, ocr):
+        self.ocr = ocr
+        self.calls = 0
+        self.seconds = 0.0
+
+    def _count(self, started: float) -> None:
+        self.calls += 1
+        self.seconds += time.perf_counter() - started
+
+    def __call__(self, image: Image.Image, region: tuple[float, float, float, float] | None = None) -> list[TextBox]:
+        started = time.perf_counter()
+        try:
+            return self.ocr(image, region) if region is not None else self.ocr(image)
+        finally:
+            self._count(started)
+
+    def line(self, image: Image.Image, *, min_score: float = 0.9) -> str:
+        started = time.perf_counter()
+        try:
+            return self.ocr.line(image, min_score=min_score)
+        finally:
+            self._count(started)

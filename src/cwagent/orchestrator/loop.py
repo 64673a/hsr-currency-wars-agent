@@ -34,7 +34,7 @@ from ..vision.battle import has_marker, read_action_value
 from ..vision.board import Portraits, Slot, back_hint, confirm_stars, detail_name, format_board, recheck_diff
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_gold, read_hud
-from ..vision.ocr import Aliased, Ocr, TextBox, find, has
+from ..vision.ocr import Aliased, Ocr, TextBox, Timed, find, has
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
 from ..vision.items import read_items
@@ -187,6 +187,7 @@ class Trace:
         (root / "shots").mkdir(parents=True, exist_ok=True)
         self._f = (root / "steps.jsonl").open("a", encoding="utf-8")
         self._image_paths: dict[str, str] = {}
+        self.stamp: Callable[[dict], None] | None = None   # 写记录前补上耗时(Runner 设置)
 
     def shot(self, step: int, image: Image.Image) -> str:
         name = f"shots/{step:04d}.jpg"
@@ -224,6 +225,8 @@ class Trace:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def write(self, record: dict) -> None:
+        if self.stamp is not None:
+            self.stamp(record)
         self._f.write(json.dumps(record, ensure_ascii=False, default=_plain) + "\n")
         self._f.flush()
 
@@ -242,7 +245,7 @@ class Runner:
         self.brain = brain
         self.trace = trace
         # 开拓者在商店、补给、角色详情里显示的是玩家自己取的名字,识别出来统一换成「开拓者」
-        self.ocr = Aliased(ocr or Ocr(), {trailblazer: "开拓者"}) if trailblazer.strip() else (ocr or Ocr())
+        self.ocr = Timed(Aliased(ocr or Ocr(), {trailblazer: "开拓者"}) if trailblazer.strip() else (ocr or Ocr()))
         self.portraits = portraits
         self.on_companion = on_companion
         self.log = log
@@ -317,6 +320,12 @@ class Runner:
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
         self._trial: dict[str, bool] = {}                      # 这局见过的角色 → 是不是试用(卡面标签)
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
+        # 每一步的耗时统计(记进 steps.jsonl 的 timing,报表按节点汇总程序自己花的时间)
+        self._step_started = 0.0
+        self._ocr_mark = (0, 0.0)                              # 这一步开始时 OCR 的累计次数和用时
+        self._settle_stats = [0, 0.0]                          # 这一步等画面静止的次数和用时
+        self._action_times: list[list] = []                    # 这一步每个操作的用时 [类型, 秒]
+        trace.stamp = self._stamp_timing
 
     # ---------------------------------------------------------------- 截图
 
@@ -327,6 +336,14 @@ class Runner:
         结果乱流格这类一直在闪的局部光效(位置每个节点随机)让每次截图都等满 18 秒,备战的固定流程也因此被跳过
         (2026-11-17 实机)。现在照 trail-cli 的思路:截图为准,局部动画造成的误读由读星级时的两帧核对
         (board.confirm_stars,用这里留下的前一帧)和模型的 recheck 兜底。"""
+        started = time.monotonic()
+        try:
+            return self._settle()
+        finally:
+            self._settle_stats[0] += 1
+            self._settle_stats[1] += time.monotonic() - started
+
+    def _settle(self):
         frame = self.device.grab()
         self._settled = None
         if not self.settle_frames:
@@ -341,6 +358,28 @@ class Runner:
                 return nxt
             frame = nxt
         return frame
+
+    def _begin_timing(self) -> None:
+        self._step_started = time.monotonic()
+        self._ocr_mark = (self.ocr.calls, self.ocr.seconds)
+        self._settle_stats = [0, 0.0]
+        self._action_times = []
+
+    def _stamp_timing(self, record: dict) -> None:
+        """写记录前补上这一步的耗时:整步、模型、战斗,剩下的算程序自己的;另记识别、等画面静止的次数和用时,
+        以及每个操作的用时。提速前后对比用(2026-11-20:一局 108 分钟里备战回合的程序部分占了 25 分钟)。"""
+        if not self._step_started or "timing" in record or "step" not in record:
+            return
+        total = time.monotonic() - self._step_started
+        model = float((record.get("decision") or {}).get("latency_s") or 0)
+        battle = float((record.get("battle") or {}).get("seconds") or 0)
+        record["timing"] = {
+            "total": round(total, 2), "model": round(model, 2), "battle": round(battle, 2),
+            "program": round(max(0.0, total - model - battle), 2),
+            "ocr": [self.ocr.calls - self._ocr_mark[0], round(self.ocr.seconds - self._ocr_mark[1], 2)],
+            "settle": [self._settle_stats[0], round(self._settle_stats[1], 2)],
+            "actions": self._action_times,
+        }
 
     def _earlier(self, image) -> Image.Image | None:
         """settle 返回 image 时,比它早 STABLE_GAP 截的那一帧(核对星级用)。"""
@@ -580,12 +619,15 @@ class Runner:
     def execute(self, actions: list[Action], boxes: list[TextBox]) -> list[str]:
         results = []
         for a in actions:
+            started = time.monotonic()
             try:
                 results.append(self._raw(a, boxes))
             except UserInterrupt:
                 raise
             except Exception as e:  # noqa: BLE001 - 单个操作失败记录下来,交给下一步重新判断
                 results.append(f"{action_text(a)}:失败({e})")
+            finally:
+                self._action_times.append([a.type, round(time.monotonic() - started, 2)])
         return results
 
     # ---------------------------------------------------------------- 局面识别
@@ -1570,6 +1612,7 @@ class Runner:
         self._marks = []
         ep = self.episode
         result = self.prepare.run(actions, boxes, self._board, final=ep is not None and ep.turns >= ep.max_turns)
+        self._action_times += result.timings
         if (ep is not None and result.observe and not result.ready and ep.turns >= ep.max_turns
                 and ep.grace < GRACE_TURNS):
             # 最后一轮被程序打断(合成后装备栏重排、上场没成功):给模型看一眼结果再出战,不直接强制出战
@@ -1678,6 +1721,7 @@ class Runner:
         return None
 
     def step(self, n: int) -> str:
+        self._begin_timing()
         frame = self.settle()
         boxes = self.ocr(frame.image)
         screen = self.screen_of(frame.image, boxes)

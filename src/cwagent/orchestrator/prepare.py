@@ -62,6 +62,7 @@ class PrepareResult:
     taken: list[int] = field(default_factory=list)                         # 已经开掉的道具格子
     sold: list[str] = field(default_factory=list)                          # 卖掉的角色名(清掉他的装备记录)
     ready_image: object = None   # 同一轮先做了别的操作再出战时,点出战前的画面(出战时的金币要按它读)
+    timings: list[list] = field(default_factory=list)   # 每个操作的用时 [类型, 秒]
 
     def lineup(self) -> str:
         if self.occupied is None:
@@ -400,6 +401,7 @@ class PrepareExecutor:
         while pending:
             a = pending.pop(0)
             text = action_text(a)
+            started = time.monotonic()
             try:
                 if a.type == "buy":
                     if boxes is given:
@@ -600,6 +602,8 @@ class PrepareExecutor:
                 out.results.append(f"{text}:失败({type(e).__name__}: {e})")
                 out.observe = True
                 break
+            finally:
+                out.timings.append([a.type, round(time.monotonic() - started, 2)])
         out.occupied = occupied
         return out
 

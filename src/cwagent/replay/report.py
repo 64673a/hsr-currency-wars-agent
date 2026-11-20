@@ -41,6 +41,7 @@ class NodeRow:
     hp_after: int | None = None
     calls: int = 0
     tokens: int = 0
+    program: float | None = None        # 程序自己花的秒数(不含模型思考和战斗;2026-11-20 起的记录才有)
     choices: list[str] = field(default_factory=list)
 
 
@@ -125,6 +126,10 @@ def node_rows(steps: list[dict]) -> list[NodeRow]:
             pending_choices = []
         screen = r.get("screen")
         decision = r.get("decision") or {}
+        timing = r.get("timing") or {}
+        if timing and current:
+            rw = row(current)
+            rw.program = (rw.program or 0.0) + float(timing.get("program") or 0)
         if decision and current:
             rw = row(current)
             rw.calls += 1
@@ -241,15 +246,24 @@ def render(run: Path) -> str:
              f"- 模型 {meta.get('profile') or meta.get('model') or '?'},难度 {meta.get('difficulty') or '?'},"
              f"结果 {result}",
              f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
-             f"{usage}", "",
-             "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡横幅 | 胜负 | 战后血量 | 调用 | 输入token |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             f"{usage}"]
+    timed = [r["timing"] for r in steps if r.get("timing")]
+    if timed:
+        def minutes(key: str) -> str:
+            return f"{sum(float(t.get(key) or 0) for t in timed) / 60:.1f}"
+        ocr = sum((t.get("ocr") or [0, 0])[1] for t in timed) / 60
+        lines.append(f"- 用时 {minutes('total')} 分:战斗 {minutes('battle')} 分,模型 {minutes('model')} 分,"
+                     f"程序 {minutes('program')} 分(其中文字识别 {ocr:.1f} 分)")
+    lines += ["",
+              "| 节点 | 进场血量 | 进场金币 | 等级 | 出战时上场 | 前台 | 场上2星+ | 出战时金币 | 战斗进度 | 阵亡横幅 | 胜负 | 战后血量 | 调用 | 输入token | 程序秒 |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         level = _cell(r.level_in) + (f"→{r.level_out}" if r.level_out and r.level_out != r.level_in else "")
         stars = f"{r.stars2}/{r.on_field}" if r.on_field else ""
         lines.append(f"| {r.node} | {_cell(r.hp_in)} | {_cell(r.gold_in)} | {level} | {_cell(r.deployed)} | "
                      f"{_cell(r.front)} | {stars} | {_cell(r.gold_out)} | {r.progress} | {_cell(r.deaths)} | {r.result} | "
-                     f"{_cell(r.hp_after)} | {r.calls} | {'-' if external else r.tokens} |")
+                     f"{_cell(r.hp_after)} | {r.calls} | {'-' if external else r.tokens} | "
+                     f"{'' if r.program is None else round(r.program)} |")
     picks = [(r.node, c) for r in rows for c in r.choices]
     if picks:
         lines += ["", "## 选择", ""] + [f"- {n} {c}" for n, c in picks]

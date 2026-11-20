@@ -419,4 +419,4 @@ def test_node_report_external_agent_has_no_token_count(tmp_path):
     (tmp_path / "steps.jsonl").write_text(json.dumps(steps[0], ensure_ascii=False), encoding="utf-8")
     (tmp_path / "meta.json").write_text(json.dumps({"profile": "外部 agent"}, ensure_ascii=False), encoding="utf-8")
     text = report.render(tmp_path)
-    assert "token 用量程序看不到" in text and "输入 0 token" not in text and text.rstrip().endswith("| 1 | - |")
+    assert "token 用量程序看不到" in text and "输入 0 token" not in text and text.rstrip().endswith("| 1 | - |  |")
