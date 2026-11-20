@@ -220,3 +220,25 @@ def test_companions_and_flow_flags():
     assert rabbit["flow"] and rabbit["screens"] == ["tea_break"] and not rabbit["verified"]
     aug = {e.name: e.data for e in k.entries["augments"]}
     assert aug["特战资金"]["effects"] == ["经济"] and not aug["特战资金"]["flow"]
+
+
+# 规则卡、界面提示、奇遇伙伴的流程影响都会进提示词:出处记在 docs/RULES_EVIDENCE.md,不写进去
+SOURCE_NOTE = r"S1 资料|M7A|维护者(告知|确认|建议)|待实测|实测|\d{4}-\d{2}-\d{2}"
+
+
+def test_prompt_texts_carry_no_source_notes():
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    from cwagent.brain.screen_agent import load_rules, system_prompt
+    from cwagent.orchestrator.screens import OVERLAY_HINTS, SPOTLIGHT_LAYOUT, TEA_BREAK_HINT
+
+    root = Path(__file__).resolve().parents[1]
+    prompt, _ = system_prompt(load_rules(root / "knowledge" / "rules.md"), [])
+    texts = {"系统提示词": prompt, "茶歇": TEA_BREAK_HINT, "主角光环": SPOTLIGHT_LAYOUT, **OVERLAY_HINTS}
+    for comp in yaml.safe_load((root / "knowledge" / "companions.yaml").read_text(encoding="utf-8")):
+        texts[comp["name"]] = "\n".join(comp.get("flow_effects") or [])
+    for name, text in texts.items():
+        assert not re.search(SOURCE_NOTE, text), (name, re.search(SOURCE_NOTE, text).group())

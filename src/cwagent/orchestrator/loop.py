@@ -1374,8 +1374,7 @@ class Runner:
                 hints += "\n- 右侧按钮是「开启宝库」而不是「出战」:这是宝库节点,ready 会开启宝库。"
             skip = find(boxes, r"^跳过\s*[(（]\d+/\d+[)）]$", region=(0.80, 0.60, 0.20, 0.15))
             if skip:
-                hints += (f"\n- 右侧按钮是「{skip.text}」而不是「出战」:ready 会用掉一次跳过、直接跳过这场战斗"
-                          "(M7A 资料,跳过的结果待实测)。")
+                hints += f"\n- 右侧按钮是「{skip.text}」而不是「出战」:ready 会用掉一次跳过、直接跳过这场战斗。"
             full = self._crystal_full
             if full and full[0] == self._node:
                 hints += (f"\n- 晶矿还剩 {full[1]} 个没开:备战席满了,晶矿里的角色放不下。出售或上场角色腾出备战席后,"
