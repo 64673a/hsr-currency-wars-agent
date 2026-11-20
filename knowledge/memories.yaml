@@ -34,6 +34,20 @@
   confidence: medium
   source: 维护者(2026-11-14);玩家攻略(今日头条「货币战争技巧攻略」、B 站视频 BV1TSkkBMEkE)
 
+- id: m-20261114-armory-box-hold
+  kind: 打法
+  title: 简易武装箱可以先屯着,拿到配方的另一件再开
+  content: |-
+    简易武装箱不开时选项不变(点开看过、点棋盘空白收起,箱子和选项都还在)。
+    可以先留着,等从别的渠道拿到某件简易装备,再开箱选能和它合成进阶装备的那件;过早开箱只能赌一件。
+    代价是箱子一直占一个备战席格子。
+  triggers:
+    entities: [武装箱]
+  scope: [战术]
+  status: approved
+  confidence: medium
+  source: 维护者(2026-11-14)
+
 - id: m-20261114-feiying-stack
   kind: 打法
   title: 绯英可以在奖励节点单独上场,压低伤害多放终结技叠永久增伤
@@ -75,6 +89,20 @@
   status: approved
   confidence: high
   source: 维护者(2026-11-14)
+
+- id: m-20261116-invest-refresh-use
+  kind: 打法
+  title: 投资环境和投资策略的刷新次数过了这个界面就作废,不合用就先刷掉再看
+  content: |-
+    投资环境整局只在开局选这一次,底部那 1 次刷新(三张全换)过了这个界面就没用了:三张里有合用的就直接选,三张都一般就刷新。
+    投资策略每张卡下面各有自己的刷新次数(只换这一张),每次进入选择界面重新给、不用就作废:不合用的那张先刷掉再看,不要直接确认。
+  triggers:
+    screens: [environment_choice, strategy_choice]
+  scope: [战略]
+  status: approved
+  confidence: high
+  source: 维护者(2026-11-16)
+  evidence: ["2026-11-16 对局:提示写「整局的次数有限」时,模型把刷新次数留着不用,三张一般也直接确认"]
 
 - id: m-20261116-support-over-dps
   kind: 打法
