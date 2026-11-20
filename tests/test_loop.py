@@ -230,7 +230,7 @@ def test_prepare_semantic_actions(tmp_path):
     runner.run(RunOptions(max_steps=4))
     assert brain.calls == [("prepare", "opening", 1)]
     kinds = [a[0] for a in sim.actions]
-    assert kinds == ["click", "click", "drag", "click", "click"]      # 开商店、买、拖上场、收起商店、出战
+    assert kinds == ["click", "click", "click", "drag", "click"]      # 开商店、买、收起商店、拖上场、出战
     assert sim.actions[1] == ("click", SHOP_X[1], 0.15)
     assert runner.episode is None
     assert any(h.startswith("[1-3 备战]") and "操作:买商店第 2 格(黄泉);备战席1号 → 前台1号;出战" in h

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from ..brain.screen_agent import ROLL_MAX, ROLL_REFRESHES, Action, action_text, slot_text
 from .. import paths
 from ..device import UserInterrupt
+from ..vision.annotate import AHA_PANEL
 from ..vision.board import SHOP_X, Slot, occupied_slots, slot_changed, slots
 from ..vision.cards import FIXED_UNITS
 from ..vision.boxes import CLOSE_POINT, read_panel
@@ -109,13 +110,15 @@ class PrepareExecutor:
     def __init__(self, device, ocr: Ocr, *, raw: Callable[[Action, list[TextBox]], str],
                  sleep: Callable[[float], None] | None = None, equipment: EquipmentReader | None = None,
                  before_ready: Callable[[], str | None] | None = None, capture: Callable | None = None,
-                 open_crystals: Callable[[], str] | None = None):
+                 open_crystals: Callable[[], str] | None = None,
+                 on_shop_closed: Callable[[object, list[TextBox]], None] | None = None):
         self.device = device
         self.ocr = ocr
         self.equipment = equipment
         self.raw = raw            # 坐标类操作(click / drag / key ……)交回 Runner 执行
         self.before_ready = before_ready   # 点出战前(商店已收起)先做的事;返回说明时不出战,让模型先看新局面
         self.open_crystals = open_crystals
+        self.on_shop_closed = on_shop_closed   # 商店收起、画面无遮挡时通知 Runner(缓存道具栏与 HUD)
         self.sleep = sleep or (lambda s: time.sleep(s))
         self.capture = capture or (lambda: self.device.grab())
         self.shop = False         # 商店是否展开:看得出来时以画面为准,被遮住时沿用上次的判断
@@ -260,10 +263,18 @@ class PrepareExecutor:
                 if not want_open or (cards == last and (any(n for _, n, _ in cards)
                                                          or image is not None and frame_diff(image, prev) < STILL)):
                     self.shop = want_open
+                    if not want_open and self.frame is not None and self.on_shop_closed is not None:
+                        self.on_shop_closed(self.frame.image, boxes)
                     return boxes
                 last = cards
         self.shop_now(boxes)
         return boxes
+
+    def _close_shop(self, out: PrepareResult, boxes: list[TextBox] | None) -> list[TextBox] | None:
+        """商店开着就先收起(拖动角色、装备、道具前调用);已经收起时不动画面也不额外识别。"""
+        if not self.shop_now(boxes):
+            return boxes
+        return self.set_shop(out, boxes if boxes is not None else self._glance(), False)
 
     def _refresh(self, out: PrepareResult, boxes: list[TextBox], text: str) -> str:
         """点商店右侧的「刷新」按钮,再核对 5 张卡真的换了。
@@ -455,11 +466,11 @@ class PrepareExecutor:
                 f"现在金币 {gold if gold is not None else '读不出'};{status}"), boxes
 
     def _drag_slot(self, out: PrepareResult, src: tuple[str, int], dst: tuple[str, int],
-                   boxes: list[TextBox]) -> tuple[str | None, list[TextBox]]:
+                   boxes: list[TextBox] | None) -> tuple[str | None, list[TextBox] | None]:
         """把 src 格的角色拖到 dst 格,再看一眼:被游戏拒绝(界面中间的提示)或目标格还是空的就算没成功。
-        商店开着和收着时棋盘位置不同,而商店会被别的操作带着开合(实机见过买完卡后商店收起),所以每次按最新画面换算坐标,
-        没成功再试一次。返回(失败原因或 None, 最新的界面文字)。"""
+        拖动前先收起商店(棋盘不缩小也不遮挡),按最新画面换算坐标,没成功再试一次。返回(失败原因或 None, 最新的界面文字)。"""
         for _ in range(2):
+            boxes = self._close_shop(out, boxes)
             shop = self.shop_now(boxes)
             layout = {(s.zone, s.index): s for s in slots(shop, self.counts)}
             p, q = layout[src], layout[dst]
@@ -505,7 +516,7 @@ class PrepareExecutor:
         occupied: dict[tuple[str, int], str] | None = None
         if board is not None:
             occupied = {(s.zone, s.index): (s.name or "认不出的角色") for s in board if not s.empty}
-        self.shop_now(boxes)
+        decision_shop = self.shop_now(boxes)
         given = boxes             # 模型决策时的那一帧;执行中还拿着它的话,说明画面已经旧了
         pending = [a.model_copy() for a in actions]
         while pending:
@@ -669,7 +680,7 @@ class PrepareExecutor:
                     out.results.append(text + self._after_level_up(before, self._level()))
                     boxes = None      # 升级后界面变了(上场上限、商店价格),后面要用时重新看
                 elif a.type in ("compose", "equip"):
-                    done = self._equipment(a, text, out, occupied, boxes)
+                    done, boxes = self._equipment(a, text, out, occupied, boxes)
                     if done is None:
                         failed = True
                         break
@@ -711,12 +722,19 @@ class PrepareExecutor:
                         boxes = self._glance()
                     if a.type == "click_text" and a.text in BEHIND_SHOP:
                         boxes = self.set_shop(out, boxes, False)   # 商店开着时点不到这些按钮
+                    elif a.type == "drag":
+                        boxes = self._close_shop(out, boxes)       # 拖道具/角色/阿哈装备前先关商店,露全道具栏和棋盘
+                        if decision_shop and not self.shop:
+                            a = _remap_drag(a, self.counts)        # 模型看的是商店展开态坐标,收起后把棋盘与面板坐标换算过去
                     out.results.append(self.raw(a, boxes))
                     if a.type != "wait":
                         boxes = self._look()
                         if privilege_panel(boxes):
                             out.observe = True
                             break
+                        if (a.type == "drag" and self.frame is not None and self.on_shop_closed is not None
+                                and shop_state(boxes) is False and read_panel(boxes) is None):
+                            self.on_shop_closed(self.frame.image, boxes)
             except UserInterrupt:
                 raise
             except Exception as e:
@@ -810,26 +828,33 @@ class PrepareExecutor:
         out.observe = True
         return False
 
-    def _equipment(self, a: Action, text: str, out: PrepareResult, occupied, boxes) -> int | None:
-        """合成或装备。成功返回装备栏里被用掉的编号(后面的装备会往前顺移);失败时记下原因、返回 None 停下来。"""
+    def _equipment(self, a: Action, text: str, out: PrepareResult, occupied,
+                   boxes: list[TextBox] | None) -> tuple[int | None, list[TextBox] | None]:
+        """合成或装备。成功返回(装备栏里被用掉的编号, 最新界面文字);失败时记下原因、返回 (None, boxes) 停下来。"""
         if self.equipment is None:
             out.results.append(f"{text}:没有装备识别(知识库还没同步)")
-            return None
+            return None, boxes
         if a.item == 0 or (a.type == "compose" and a.onto == 0):
             out.results.append(f"{action_text(a).split(' ')[0]}:这件装备已经在前面的操作里用掉了")
-            return None
+            return None, boxes
+        if a.type == "equip":
+            src = (a.zone, a.index - 1)
+            if occupied is not None and src not in occupied:
+                out.results.append(f"{text}:{slot_text(a.zone, a.index)}没有角色")
+                return None, boxes
+        boxes = self._close_shop(out, boxes)
         before = self.equipment.read(self._grab().image)
         item = next((i for i in before if i.index == a.item), None)
         if item is None:
             out.results.append(f"{text}:装备栏没有第 {a.item} 件(现在有 {len(before)} 件)")
             out.observe = True
-            return None
+            return None, boxes
         if a.type == "compose":
             target = next((i for i in before if i.index == a.onto), None)
             if target is None or a.onto == a.item:
                 out.results.append(f"{text}:装备栏没有第 {a.onto} 件")
                 out.observe = True
-                return None
+                return None, boxes
             self.device.drag(item.x, item.y, target.x, target.y, duration=0.6)
             self._park()
             out.marks.append({"type": "drag", "x": item.x, "y": item.y, "x2": target.x, "y2": target.y})
@@ -847,30 +872,27 @@ class PrepareExecutor:
                 out.results.append(f"{text}({item.name or '?'}+{target.name or '?'}):没有出现合成确认,"
                                    "这两件可能不能合成(截图已存 data/debug,可用 cwagent 排查)")
                 out.observe = True
-                return None
+                return None, boxes
             if not self._confirm_compose(out, ok, text):
-                return None
+                return None, boxes
             after = self._settled_bag()
             if len(after) != len(before) - 1:
                 out.results.append(f"{text}:点了确认,但装备栏从 {len(before)} 件变成 {len(after)} 件(合成应该少 1 件),"
                                    f"可能没合成成功,以截图为准;装备栏现在是 {format_items(after, coords=True)}")
                 out.observe = True
-                return None
+                return None, boxes
             rest = Counter(i.name for i in before if i.index not in (a.item, a.onto))
             new = [i for i in after if (Counter(x.name for x in after) - rest)[i.name] > 0]
             product = f"{new[0].name or '认不出的装备'}(现在是 {new[0].index} 号)" if len(new) == 1 else "认不出的装备"
             out.results.append(f"{text}({item.name or '认不出'}+{target.name or '认不出'}):合成了 {product};"
                                f"装备栏现在是 {format_items(after)}")
-            return max(a.item, a.onto)
+            return max(a.item, a.onto), boxes
         # 装备给角色
         src = (a.zone, a.index - 1)
-        if occupied is not None and src not in occupied:
-            out.results.append(f"{text}:{slot_text(a.zone, a.index)}没有角色")
-            return None
         layout = {(s.zone, s.index): s for s in slots(self.shop_now(boxes), self.counts)}
         if src not in layout:
             out.results.append(f"{text}:没有{slot_text(a.zone, a.index)}这个格子")
-            return None
+            return None, boxes
         dst = layout[src]
         self.device.drag(item.x, item.y, dst.x, dst.y, duration=0.6)
         self._park()
@@ -881,24 +903,55 @@ class PrepareExecutor:
                     or len(self.equipment.read(self.frame.image)) != len(before), tries=EQUIP_TRIES, read=False)
         merged = find_compose_confirm(self.frame.image)
         if merged is not None and not self._confirm_compose(out, merged, text):
-            return None
+            return None, boxes
         after = self._settled_bag()
         if len(after) != len(before) - 1:
             out.results.append(f"{text}({item.name}):装备栏没有变化,可能没装上(角色的装备可能已经满了)")
             out.observe = True
-            return None
+            return None, boxes
         if _lost(before, after) not in (None, Counter({item.name: 1})):
             lost = "、".join(n for n in _lost(before, after).elements()) or "?"
             out.results.append(f"{text}:装备栏少掉的不是 {item.name}(少了 {lost}),可能装错了;"
                                f"装备栏现在是 {format_items(after)}")
             out.observe = True
-            return None
+            return None, boxes
         who = occupied.get(src, "") if occupied is not None else ""
         out.results.append(f"{text}:{item.name} 给了 {who or slot_text(a.zone, a.index)}"
                            + (",和身上的简易装备合成了(点了确认)" if merged is not None else ""))
         if who and item.name:
             out.equipped.append((who, item.name))
-        return a.item
+        return a.item, boxes
+
+
+def _remap_point(x: float, y: float, counts: dict[str, int] | None) -> tuple[float, float]:
+    """把商店展开时的棋盘(前/后台)或左上面板(阿哈面板、奇兽花园)坐标换算到商店收起后的位置。"""
+    opened = {(s.zone, s.index): s for s in slots(True, counts) if s.zone in ("front", "back")}
+    closed = {(s.zone, s.index): s for s in slots(False, counts) if s.zone in ("front", "back")}
+    hit = min(
+        ((abs(x - s.x) + abs(y - s.y), key) for key, s in opened.items()
+         if abs(x - s.x) < 0.029 and abs(y - s.y) < 0.048),
+        default=None,
+    )
+    if hit is not None:
+        dst = closed[hit[1]]
+        return dst.x, dst.y
+    ox0, oy0, ox1, oy1 = AHA_PANEL[True]
+    if ox0 - 0.015 <= x <= ox1 + 0.015 and oy0 - 0.015 <= y <= oy1 + 0.015:
+        cx0, cy0, cx1, cy1 = AHA_PANEL[False]
+        rx = max(0.0, min(1.0, (x - ox0) / (ox1 - ox0)))
+        ry = max(0.0, min(1.0, (y - oy0) / (oy1 - oy0)))
+        return cx0 + rx * (cx1 - cx0), cy0 + ry * (cy1 - cy0)
+    return x, y
+
+
+def _remap_drag(a: Action, counts: dict[str, int] | None) -> Action:
+    if None in (a.x, a.y, a.x2, a.y2):
+        return a
+    x, y = _remap_point(a.x, a.y, counts)
+    x2, y2 = _remap_point(a.x2, a.y2, counts)
+    if (x, y, x2, y2) == (a.x, a.y, a.x2, a.y2):
+        return a
+    return a.model_copy(update={"x": x, "y": y, "x2": x2, "y2": y2})
 
 
 def _lost(before: list[Item], after: list[Item]) -> Counter | None:

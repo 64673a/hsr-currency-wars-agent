@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ..llm.base import ImageInput
 from .equipment import cell_center, privilege_confirm, privilege_options
+from .items import SHOP_VISIBLE_SLOTS
 from .ocr import TextBox
 
 
@@ -104,6 +105,8 @@ def annotate(image: Image.Image, boxes: list[TextBox], *, screen: str, shop_open
             i = item["index"] if isinstance(item, dict) else item.index
             add(*cell_center(i), f"装备{i}", CELL[0] * 2, CELL[1] * 2, "corner")
         for it in items or []:   # 右上角道具栏(vision.items.Item)
+            if shop_open and it.slot > SHOP_VISIBLE_SLOTS:
+                continue         # 商店展开时第 3 格起被商店面板遮住,不在商店卡面上打标号
             add(it.x, it.y, f"道具{it.slot} {it.name}", CELL[0] * 2, CELL[1] * 2, "corner")
         panel = aha_panel(image, shop_open)
         if panel is not None:

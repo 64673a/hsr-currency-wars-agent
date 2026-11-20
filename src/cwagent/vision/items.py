@@ -26,6 +26,7 @@ ICONS = Path(__file__).resolve().parents[1] / "assets" / "items"
 RIGHT_X, STEP_X, ROW_Y = 0.961, 0.040, 0.152   # 最右一格中心、每格间距、图标中心高度
 ICON_W = 0.0355          # 图标宽度占画面宽度的比例
 MAX_SLOTS = 6
+SHOP_VISIBLE_SLOTS = 2   # 商店展开时右缘在 x≈0.892,只完整露出最右 2 格(第 3 格起被遮挡)
 MATCH = 0.68             # 认作这个道具的最低分
 SEARCH = 0.012           # 每格中心附近找的范围(画面宽度的比例)
 
@@ -109,12 +110,12 @@ def _count(image: Image.Image, ocr: Ocr, cx: float, cy: float) -> int | None:
     return int(text) if re.fullmatch(r"[1-9]", text) else None
 
 
-def read_items(image: Image.Image, ocr: Ocr | None = None) -> list[Item]:
+def read_items(image: Image.Image, ocr: Ocr | None = None, max_slots: int = MAX_SLOTS) -> list[Item]:
     """从右往左一格格认,遇到认不出的格子就停(道具栏从右边排起,中间不留空)。"""
     img = np.asarray(image.convert("RGB"))
     names = catalog()
     out = []
-    for i in range(MAX_SLOTS):
+    for i in range(min(max_slots, MAX_SLOTS)):
         cx = RIGHT_X - STEP_X * i
         score, item_id = _best(img, cx, ROW_Y)
         if item_id is None or score < MATCH:
@@ -125,10 +126,26 @@ def read_items(image: Image.Image, ocr: Ocr | None = None) -> list[Item]:
     return out
 
 
-def describe(items: list[Item]) -> str:
+def merge_items(visible: list[Item], cached: list[Item], *, shop_open: bool) -> list[Item]:
+    """合并当前读出的道具栏和上次商店收起时的缓存。
+
+    商店收起时画面无遮挡,直接以 visible 为准;商店展开时只能读出最右 2 格,
+    如果前 2 格都有道具且和缓存前 2 格是同一批道具(没有发生消耗位移),就把缓存里被遮挡的第 3 格起接上。
+    """
+    if not shop_open or len(visible) < SHOP_VISIBLE_SLOTS:
+        return list(visible)
+    if (len(cached) > SHOP_VISIBLE_SLOTS
+            and [it.id for it in cached[:SHOP_VISIBLE_SLOTS]] == [it.id for it in visible[:SHOP_VISIBLE_SLOTS]]):
+        return list(visible[:SHOP_VISIBLE_SLOTS]) + list(cached[SHOP_VISIBLE_SLOTS:])
+    return list(visible)
+
+
+def describe(items: list[Item], *, shop_open: bool = False) -> str:
     """给模型看的一行:道具名、数量、拖动起点。用法(官方文案)作为条目说明另给。"""
     if not items:
         return ""
     parts = [f"{it.name}" + (f"×{it.count}" if it.count else "") + f"({it.x:.3f},{it.y:.3f})" for it in items]
-    return ("道具栏(右上角,从右往左;用法是把道具拖到角色或装备上,drag 从括号里的坐标拖;数量以截图为准):"
-            + "、".join(parts))
+    hidden = (";第 3 格起当前被商店遮挡(来自收起商店时的缓存),拖动时程序会自动收起商店"
+              if shop_open and any(it.slot > SHOP_VISIBLE_SLOTS for it in items) else "")
+    return ("道具栏(右上角,从右往左;用法是把道具拖到角色或装备上,drag 从括号里的坐标拖;数量以截图为准"
+            + hidden + "):" + "、".join(parts))

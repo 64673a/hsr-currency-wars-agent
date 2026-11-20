@@ -31,13 +31,14 @@ from .. import paths
 from ..device import UserInterrupt
 from ..vision.battle import has_marker, read_action_value
 from ..vision.board import Portraits, Slot, back_hint, confirm_stars, detail_name, format_board, recheck_diff
+from ..vision.board import slots as board_slots
 from ..vision.buttons import lit
 from ..vision.hud import read_crop, read_gold, read_hud
 from ..vision.motion import frame_diff
 from ..vision.ocr import Aliased, Ocr, TextBox, Timed, find, has
+from ..vision.items import SHOP_VISIBLE_SLOTS, merge_items, read_items
 from ..vision.items import catalog as item_catalog
 from ..vision.items import describe as describe_items
-from ..vision.items import read_items
 from ..vision.cards import FIXED_UNITS
 from ..vision.supply import describe as describe_supply
 from ..vision.supply import read_supply
@@ -129,7 +130,7 @@ class RunOptions:
     on_step: Callable[[dict], None] | None = None       # 每一步的记录,给网页实时推送
 
 
-ITEM_BAR = (0.87, 0.08, 0.19)   # 右上角道具栏:x 下限、y 范围(实机 960 宽截图里两个道具在 x≈0.905、0.95;商店第 5 张卡到 x≈0.885)
+ITEM_BAR = (0.74, 0.10, 0.19)   # 右上角道具栏:x 下限(覆盖最多 6 格,第 6 格中心 0.761)、y 范围(拖动前已收起商店)
 # y 上限原来是 0.22,盖住了装备栏第 1 格(格子上沿 y≈0.197):从第 1 件装备拖动被当成拖道具(2026-11-18 那局)
 
 
@@ -258,7 +259,8 @@ class Runner:
         self.equipment_reader = equipment.reader(paths.templates_dir() / "equipment") if equipment else None
         self.prepare = PrepareExecutor(device, self.ocr, raw=self._raw, equipment=self.equipment_reader,
                                        before_ready=self._crystals_before_ready, capture=self.settle,
-                                       open_crystals=self._open_crystals_on_request)
+                                       open_crystals=self._open_crystals_on_request,
+                                       on_shop_closed=self._on_shop_closed)
         self.prepare.roster = self._role_costs
         self.guides = guides
         self._guide: Guide | None = None                       # 模型挂上的攻略(guide 字段)
@@ -309,6 +311,7 @@ class Runner:
         self._facts: situation.RoleFacts | None = None         # 角色 → 羁绊、羁绊档位(局面要点用)
         self._last_hud = None                                  # 最近一次读到的备战数字
         self._items = []                                       # 最近一次认出的道具栏(vision.items.Item)
+        self._items_cache = []                                 # 商店收起时完整认出的道具栏(商店展开遮住第 3 格起时沿用)
         self._privilege_role: str | None = None
         self._survey_waits: dict[str, int] = {}                # 节点 → 等界面静下来收集节点等了几轮
         self._shop_waits: dict[str, int] = {}                  # 节点 → 开场动画期间商店打不开、等了几轮
@@ -434,8 +437,8 @@ class Runner:
                 time.sleep(ACTION_GAP)
                 return f"点击「{target}」"
         elif a.type == "drag":
-            fixed = next((s for s in self._board or [] if s.name in FIXED_UNITS and any(
-                abs(s.x - x) < 0.03 and abs(s.y - y) < 0.05 for x, y in ((a.x, a.y), (a.x2, a.y2)))), None)
+            fixed = next((s for x, y in ((a.x, a.y), (a.x2, a.y2))
+                          if (s := self._slot_at(x, y)) is not None and s.name in FIXED_UNITS), None)
             if fixed is not None:
                 return f"{fixed.name}是后台固定单位,不能拖动或换位,没有执行"
             if self.episode is not None and self.episode.screen == "spotlight_choice" and self._board:
@@ -460,6 +463,7 @@ class Runner:
                 self.device.move(*REST)   # 指针停在卡上卡面会抬起,下一眼读卡不准
             self._marks.append({"type": "drag", "x": a.x, "y": a.y, "x2": a.x2, "y2": a.y2})
             if from_item_bar:
+                self._items_cache = []    # 消耗后道具栏可能位移,清掉旧缓存等下一次商店收起时重读
                 time.sleep(ACTION_GAP)
                 return self._used_item(a, item)
         elif a.type == "scroll":
@@ -479,13 +483,21 @@ class Runner:
     def _item_at(items, a: Action):
         return next((it for it in items if abs(it.x - a.x) < 0.02 and abs(it.y - a.y) < 0.035), None)
 
+    def _slot_at(self, x: float, y: float) -> Slot | None:
+        """按当前商店开合状态找 (x, y) 对应的棋盘格子(商店收起后 self._board 里留的可能是展开态坐标)。"""
+        if not self._board:
+            return None
+        layout = {(s.zone, s.index): s for s in board_slots(self.prepare.shop, self.prepare.counts)}
+        by_key = {(s.zone, s.index): s for s in self._board}
+        for key, pos in layout.items():
+            if abs(pos.x - x) < 0.03 and abs(pos.y - y) < 0.05 and key in by_key:
+                return by_key[key]
+        return next((s for s in self._board if abs(s.x - x) < 0.03 and abs(s.y - y) < 0.05), None)
+
     def _used_item(self, a: Action, item) -> str:
         """从右上角道具栏拖出了道具:说清拖的是什么、拖到了谁身上;会动装备的道具让程序记的穿戴作废。"""
-        target = None
-        for slot in self._board or []:
-            if slot.name and not slot.empty and abs(slot.x - a.x2) < 0.03 and abs(slot.y - a.y2) < 0.05:
-                target = slot
-                break
+        slot = self._slot_at(a.x2, a.y2)
+        target = slot if slot is not None and slot.name and not slot.empty else None
         what = f"道具「{item.name}」" if item else "道具栏里的道具(没认出是哪个)"
         onto = f"{ZONE_NAMES.get(target.zone, target.zone)}{target.index + 1}号 {target.name}" if target else \
             f"({a.x2:.3f},{a.y2:.3f})"
@@ -711,7 +723,7 @@ class Runner:
             self._roles = names
         self._recheck = False
         try:
-            self._items = read_items(image, self.ocr)
+            self._items = self._read_items(image, shop_open=shop)
         except Exception as e:  # noqa: BLE001 - 道具栏认不出就不给
             self._items = []
             self.log(f"读道具栏出错:{type(e).__name__}: {e}")
@@ -719,7 +731,7 @@ class Runner:
         if self._items:
             state["items"] = [{"slot": it.slot, "id": it.id, "name": it.name, "count": it.count, "score": it.score}
                               for it in self._items]
-            lines.append(describe_items(self._items))
+            lines.append(describe_items(self._items, shop_open=shop))
             for it in self._items:   # 每种道具第一次出现时附上官方说明(回合中途出现的直接写在这里)
                 desc = (item_catalog().get(it.id) or {}).get("desc", "").replace("\n", "")
                 if desc and self.ledger.add_entry(f"道具:{it.name}", f"- [道具] {it.name}:{desc}") \
@@ -775,6 +787,27 @@ class Runner:
         if hud.deployed:
             self.prepare.deployed = hud.deployed
             self._hud_seen = (self._node, hud.hp if hud.hp is not None else self._hud_seen[1])
+
+    def _cache_items(self, image) -> None:
+        """商店收起时完整读一次道具栏并缓存,供商店展开(遮住第 3 格起)时沿用。"""
+        try:
+            self._items_cache = list(read_items(image, self.ocr))
+        except Exception as e:  # noqa: BLE001 - 缓存失败不影响主流程
+            self.log(f"缓存道具栏出错:{type(e).__name__}: {e}")
+
+    def _on_shop_closed(self, image, boxes: list[TextBox]) -> None:
+        self._remember_hud(image, boxes)
+        self._cache_items(image)
+
+    def _read_items(self, image, *, shop_open: bool) -> list:
+        if not shop_open:
+            found = list(read_items(image, self.ocr))
+            self._items_cache = list(found)
+            return found
+        visible = list(read_items(image, self.ocr, SHOP_VISIBLE_SLOTS))
+        merged = merge_items(visible, self._items_cache, shop_open=True)
+        self._items_cache = list(merged)
+        return merged
 
     def _identify_unknown(self, n: int, frame, boxes: list[TextBox]) -> tuple | None:
         """头像认不出的角色卡:点开看详情面板里的名字(M7A 的做法),把卡面存成这个角色的头像模板,之后直接认。
@@ -1476,6 +1509,8 @@ class Runner:
                 did = None
                 self.log(f"[{n}] 固定流程出错:{type(e).__name__}: {e}")
             if did:
+                if shop_state(boxes) is False:
+                    self._on_shop_closed(frame.image, boxes)
                 record["actions"] = [did]
                 record.update(self._macro_detail)     # 读到的词条、伙伴,网页这一步显示详情
                 self._macro_detail = {}
@@ -1501,7 +1536,7 @@ class Runner:
                 now = self.screen_of(frame.image, boxes)
                 attempted = now == "prepare" and shop_state(boxes) is False
                 if attempted:
-                    self._remember_hud(frame.image, boxes)
+                    self._on_shop_closed(frame.image, boxes)
                     boxes = self.prepare.set_shop(PrepareResult(), boxes, True)
                     frame = self.prepare.frame or frame
                     if not self.prepare.shop:
@@ -1778,6 +1813,8 @@ class Runner:
         if actions is None:
             actions = self.reflex(screen, frame.image, boxes, record, sig)
         if actions is not None:
+            if screen == "prepare" and shop_state(boxes) is False and find_compose_confirm(frame.image) is None:
+                self._on_shop_closed(frame.image, boxes)
             if screen in CLOSES:
                 self.close_episode()
             return self.finish(record, screen, actions, boxes, sig)
