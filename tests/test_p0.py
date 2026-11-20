@@ -65,6 +65,14 @@ def test_public_memories_are_in_the_catalog(tmp_path):
     assert "{memories}" not in brain.system and "{rules}" not in brain.system
 
 
+def test_public_memory_content_has_no_play_log(tmp_path):
+    """经验原文会附进提示词:哪局、哪天出过什么事记在 evidence,正文只写经验本身。"""
+    import re
+
+    for m in MemoryStore(ROOT / "knowledge" / "memories.yaml", tmp_path / "m.sqlite").public():
+        assert not re.search(r"\d{4}-\d{2}-\d{2}|实机|那局", m.content), m.id
+
+
 # ---------------------------------------------------------------- 出战人数未满、买经验后的上场上限
 
 from PIL import Image  # noqa: E402
