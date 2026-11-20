@@ -145,6 +145,7 @@ def test_ready_with_full_seats_is_unchanged():
     game = Game(seats_full=True)
     r = executor(game).run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
     assert r.ready and game.started and r.results == ["出战"]
+    assert r.ready_image is not None          # 只发 ready 也截出战前的画面,出战时的阵容按它认
 
 
 def test_buy_exp_raises_deploy_cap():

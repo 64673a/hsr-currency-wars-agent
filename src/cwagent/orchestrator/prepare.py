@@ -77,7 +77,7 @@ class PrepareResult:
     seen: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号:(道具名, 选项)
     taken: list[int] = field(default_factory=list)                         # 已经开掉的道具格子
     sold: list[str] = field(default_factory=list)                          # 卖掉的角色名(清掉他的装备记录)
-    ready_image: object = None   # 同一轮先做了别的操作再出战时,点出战前的画面(出战时的金币要按它读)
+    ready_image: object = None   # 点出战前(商店已收起)截的画面:出战时的站位、金币按它读
     timings: list[list] = field(default_factory=list)   # 每个操作的用时 [类型, 秒]
 
     def lineup(self) -> str:
@@ -694,8 +694,9 @@ class PrepareExecutor:
                         out.results.append(note)
                         out.observe = True
                         break
-                    if others and self.frame is not None:
-                        out.ready_image = self.frame.image
+                    # 不管这一轮有没有别的操作,出战前都截一张:本局经历里「出战时前台几人」按它认(2026-11-20:
+                    # ready 和上场一起发时,写进去的是回合开头的站位)
+                    out.ready_image = self._grab().image
                     self._click(out, *READY_BUTTON)
                     blocked = self.answer_understaffed(out, self._wait_ready())
                     if blocked:

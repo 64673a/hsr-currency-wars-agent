@@ -271,6 +271,27 @@ def test_ready_transition_ignores_residual_prepare_screen(tmp_path, monkeypatch)
     assert runner.step(3) == "battle" and not runner._ready_at
 
 
+def test_ready_facts_use_the_board_seen_right_before_ready(tmp_path):
+    """本局经历里「出战时前台几人」按点出战前那一帧认的阵容写,不用回合开头的(2026-11-20:ready 和上场一起发时
+    写成了「前台 0/4、场上 0 人」)。"""
+    from cwagent.vision.board import Slot
+    from cwagent.vision.hud import Hud
+
+    pages = {"prepare": [("备战阶段", 0.24, 0.04), ("1-1", 0.24, 0.07), ("商店", 0.845, 0.909), ("出战", 0.946, 0.694)]}
+    sim = Sim(pages, "prepare", lambda *_: None)
+    ocr = FakeOcr(sim)
+    runner = Runner(sim, FakeBrain({}), Trace(tmp_path / "run"), ocr=ocr, log=lambda _: None, settle=False)
+    runner._node = "1-1"
+    runner._last_hud = Hud(node="1-1", hp=80, gold=5, level=3, exp="0/4", deployed="3/3")
+    runner._board = []                                   # 回合开头:场上没人
+    seen = [Slot("front", 0, 0.41, 0.45, name="那刻夏", score=0.9, stars=1),
+            Slot("back", 0, 0.35, 0.64, name="符玄", score=0.9, stars=1),
+            Slot("back", 1, 0.41, 0.64, name="刻律德菈", score=0.9, stars=1)]
+    runner.portraits = type("P", (), {"read": lambda self, image, **_: seen, "counts": {}})()
+    runner._finish_prepare({"step": 1}, [Action(type="ready")], ocr(sim.grab().image), set(), "prepare")
+    assert runner._ready_facts.startswith("出战时前台 1/4,场上 3 人")
+
+
 def test_auto_shop_checks_current_frame_before_click(tmp_path, monkeypatch):
     pages = {
         "prepare": [("备战阶段", 0.24, 0.04), ("商店", 0.845, 0.909)],

@@ -632,6 +632,16 @@ class Runner:
 
     # ---------------------------------------------------------------- 局面识别
 
+    def _board_at(self, image, hud) -> list | None:
+        """只认阵容(商店收起时的画面),出战时用;认不出就返回 None,沿用回合开头的。"""
+        if self.portraits is None:
+            return None
+        try:
+            return self.portraits.read(image, shop_open=False, back_hint=back_hint(hud.level, hud.deployed))
+        except Exception as e:  # noqa: BLE001 - 认不出就照旧
+            self.log(f"出战前认阵容出错:{type(e).__name__}: {e}")
+            return None
+
     def perceive(self, image, boxes: list[TextBox], node: str | None) -> tuple[str, dict, list[str]]:
         """备战界面:读数字、阵容和商店。返回(给模型的文字, 记进记录的结构, 认出的角色名)。"""
         hud = read_hud(image, boxes, self.ocr, node=node)
@@ -1637,10 +1647,14 @@ class Runner:
                 self.ledger.node(self.episode.node).lineup = result.lineup()
             hud = self._last_hud
             if result.ready_image is not None and hud is not None:
-                # 最后一轮连着买卖再出战:金币按点出战前那一刻读(Codex 2026-11-16:出战前买了 3 张,记录还是操作前的 14)
+                # 站位和金币按点出战前那一刻的画面读(Codex 2026-11-16:出战前买了 3 张,记录还是操作前的 14;
+                # 2026-11-20:ready 和上场一起发时,「出战时前台」写的是回合开头的站位)
                 gold = read_gold(result.ready_image, self.ocr)
                 if gold is not None:
                     hud = replace(hud, gold=gold)
+                board = self._board_at(result.ready_image, hud)
+                if board is not None:
+                    self._board = board
             self._ready_facts = situation.at_ready(self._board, hud,
                                                    (self.prepare.counts or {}).get("front", 4), self.prepare.deployed)
             self.close_episode()
