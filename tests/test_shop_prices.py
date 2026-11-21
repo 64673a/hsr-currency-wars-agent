@@ -40,3 +40,15 @@ def test_single_coin_prices_and_projector_count(size):
     ocr = Ocr()
     assert read_prices(image, ocr) == {i: 1 for i in range(1, 6)}
     assert [(it.name, it.count) for it in read_items(image, ocr)] == [("实习生投影仪", 2), ("拆装扳手", 1)]
+
+
+def test_item_scales_cover_1080p_privilege_card():
+    """1920x1080 下图标核心约 41~42px(整图约 70px),加密后的 SCALES 能高分认出特权赋予卡。"""
+    from cwagent.vision.items import ICONS, RIGHT_X, ROW_Y, read_items
+
+    canvas = Image.new("RGB", (1920, 1080), (30, 35, 60))
+    icon = Image.open(ICONS / "350104.png").convert("RGBA").resize((70, 70), Image.LANCZOS)
+    cx, cy = round(RIGHT_X * 1920), round(ROW_Y * 1080)
+    canvas.paste(icon, (cx - 35, cy - 35), icon)
+    found = read_items(canvas)
+    assert len(found) == 1 and found[0].id == 350104 and found[0].name == "特权赋予卡" and found[0].score >= 0.90

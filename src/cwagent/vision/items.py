@@ -29,6 +29,8 @@ MAX_SLOTS = 6
 SHOP_VISIBLE_SLOTS = 2   # 商店展开时右缘在 x≈0.892,只完整露出最右 2 格(第 3 格起被遮挡)
 MATCH = 0.68             # 认作这个道具的最低分
 SEARCH = 0.012           # 每格中心附近找的范围(画面宽度的比例)
+# 1920 宽下 size=40,原来 (0.92, 1.0, 1.08) 对应 36/40/43 像素,跨过了 70px 图标(核心 42px)的 41~42 像素峰值(2026-11-21 实机 3-7 漏检特权赋予卡)
+SCALES = (0.92, 0.96, 1.0, 1.03, 1.06, 1.09)
 
 
 @dataclass
@@ -75,9 +77,9 @@ def _best(img: np.ndarray, cx: float, cy: float) -> tuple[float, int | None]:
     x, y = int(cx * W), int(cy * H)
     area = img[max(0, y - half):y + half, max(0, x - half):x + half]
     best = (0.0, None)
+    sizes = sorted({max(8, round(size * scale)) for scale in SCALES})
     for item_id, t in _templates().items():
-        for scale in (0.92, 1.0, 1.08):
-            s = max(8, int(size * scale))
+        for s in sizes:
             if s >= min(area.shape[:2]):
                 continue
             tt = cv2.resize(t, (s, s), interpolation=cv2.INTER_AREA)
