@@ -7,7 +7,10 @@ import { Input } from '@/components/arc/input/input';
 import { NumberField } from '@/components/arc/number-field/number-field';
 import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
-import { api, EFFORTS, effortName, enc, errorText, EXTERNAL_AGENT, type ModelProfile, type PlayStatus, type RunSummary } from '@/lib/api';
+import {
+  api, EFFORTS, effortName, enc, errorText, EXTERNAL_AGENT,
+  type ExternalAgent, type ModelProfile, type PlayStatus, type RunSummary,
+} from '@/lib/api';
 import page from '@/lib/page.module.css';
 import { useToast } from '@/lib/toast';
 
@@ -40,6 +43,60 @@ function savePrefs(patch: StartPrefs) {
   } catch {
     // 隐私模式下存不了,只影响下次打开
   }
+}
+
+/** 外部 agent 用的模型和思考强度:用户给每个连上来过的 agent 填,离开输入框时保存;还没有 agent 连上来过时不显示 */
+function ExternalAgentFields() {
+  const [agents, setAgents] = useState<ExternalAgent[]>([]);
+  const [name, setName] = useState('');
+  const [draft, setDraft] = useState({ model: '', effort: '' });
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const load = () => api<ExternalAgent[]>('/api/external-agents').then(setAgents).catch(() => {});
+    load();
+    const t = window.setInterval(load, POLL_MS);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const current = agents.find((a) => a.name === name);
+
+  const pick = useCallback((agent: ExternalAgent) => {
+    setName(agent.name);
+    setDraft({ model: agent.model, effort: agent.effort });
+    setError('');
+  }, []);
+
+  // 默认选最近连上来的;列表刷新时不动正在填的内容
+  useEffect(() => {
+    if (!current && agents.length) pick(agents[0]);
+  }, [agents, current, pick]);
+
+  const save = async () => {
+    const body = { model: draft.model.trim(), effort: draft.effort.trim() };
+    if (!current || (body.model === current.model && body.effort === current.effort)) return;
+    try {
+      const saved = await api<ExternalAgent>(`/api/external-agents/${enc(name)}`, { method: 'PUT', body });
+      setAgents((list) => list.map((a) => (a.name === saved.name ? saved : a)));
+      setError('');
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  if (!current) return null;
+  return (
+    <>
+      <Select label="agent" options={agents.map((a) => ({ value: a.name, label: a.name }))} value={name}
+        onValueChange={(v) => pick(agents.find((a) => a.name === v) ?? current)} />
+      <div className={page.fields2}>
+        <Input label="模型 ID" placeholder="claude-opus-5-5" value={draft.model} error={error || undefined}
+          onChange={(e) => setDraft({ ...draft, model: e.target.value })} onBlur={save} />
+        <Input label="思考强度" placeholder="high" value={draft.effort}
+          onChange={(e) => setDraft({ ...draft, effort: e.target.value })} onBlur={save} />
+      </div>
+    </>
+  );
 }
 
 /** 开局表单(右栏) */
@@ -108,11 +165,14 @@ function StartForm({ onChange }: { onChange: () => void }) {
         options={[...models.map((m) => ({ value: m.name, label: m.name })), { value: EXTERNAL_AGENT, label: '外部 agent(MCP)' }]}
         value={model} onValueChange={pickModel} />
       {model === EXTERNAL_AGENT ? (
-        <div className={styles.mcp}>
-          <span className={styles.mcpLabel}>MCP 地址</span>
-          <span className={styles.mcpValue}>{mcp}</span>
-          <CopyButton value={mcp} label="复制" iconOnly variant="plain" />
-        </div>
+        <>
+          <div className={styles.mcp}>
+            <span className={styles.mcpLabel}>MCP 地址</span>
+            <span className={styles.mcpValue}>{mcp}</span>
+            <CopyButton value={mcp} label="复制" iconOnly variant="plain" />
+          </div>
+          <ExternalAgentFields />
+        </>
       ) : (
         <Select label="思考强度"
           options={[{ value: PROFILE_EFFORT, label: profileEffort ? `档案设置(${profileEffort})` : '档案设置' }, ...EFFORTS]}

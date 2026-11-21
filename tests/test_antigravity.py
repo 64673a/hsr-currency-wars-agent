@@ -64,6 +64,7 @@ def mcp_server(tmp_path):
         runs_dir=tmp_path / "runs",
         memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"),
         device_factory=None,
+        agents_file=tmp_path / "agents.json",
     )
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
@@ -94,10 +95,11 @@ def test_plugin_manifest_and_static_files():
 
 
 def test_normalize_url():
-    assert install_mod.normalize_url("http://192.168.0.200:8770") == "http://192.168.0.200:8770/mcp"
-    assert install_mod.normalize_url("http://192.168.0.200:8770/") == "http://192.168.0.200:8770/mcp"
-    assert install_mod.normalize_url("http://127.0.0.1:8770/mcp?wait=120") == "http://127.0.0.1:8770/mcp?wait=120"
-    assert install_mod.normalize_url("http://127.0.0.1:8770/mcp?wait=120", wait=600) == "http://127.0.0.1:8770/mcp?wait=600"
+    assert install_mod.normalize_url("http://192.168.0.200:8770") == "http://192.168.0.200:8770/mcp?agent=antigravity"
+    assert install_mod.normalize_url("http://192.168.0.200:8770/") == "http://192.168.0.200:8770/mcp?agent=antigravity"
+    assert install_mod.normalize_url("http://127.0.0.1:8770/mcp?wait=120") == "http://127.0.0.1:8770/mcp?wait=120&agent=antigravity"
+    assert install_mod.normalize_url("http://127.0.0.1:8770/mcp?wait=120", wait=600) == "http://127.0.0.1:8770/mcp?wait=600&agent=antigravity"
+    assert install_mod.normalize_url("http://127.0.0.1:8770/mcp?agent=gemini") == "http://127.0.0.1:8770/mcp?agent=gemini"
 
     with pytest.raises(ValueError):
         install_mod.normalize_url("ftp://127.0.0.1:8770/mcp")
@@ -126,7 +128,7 @@ def test_install_creates_plugin_and_honors_no_hooks(tmp_path):
     assert (target / "scripts" / "hook.py").is_file()
 
     mcp_cfg = json.loads((target / "mcp_config.json").read_text(encoding="utf-8"))
-    assert mcp_cfg == {"mcpServers": {"cwagent": {"url": "http://192.168.0.200:8770/mcp?wait=120"}}}
+    assert mcp_cfg == {"mcpServers": {"cwagent": {"url": "http://192.168.0.200:8770/mcp?wait=120&agent=antigravity"}}}
 
     hooks_cfg = json.loads((target / "hooks.json").read_text(encoding="utf-8"))
     spec = hooks_cfg["cwagent-keep-playing"]

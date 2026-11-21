@@ -2,7 +2,7 @@
   "mcpServers": {
     "cwagent": {
       "type": "http",
-      "url": "${user_config.server_url}/mcp?wait=1800",
+      "url": "${user_config.server_url}/mcp?wait=1800&agent=claude-code",
       "timeout": 1920000,
       "alwaysLoad": true
     }

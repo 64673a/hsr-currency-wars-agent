@@ -1,4 +1,4 @@
 [mcp_servers.cwagent]
-url = "http://127.0.0.1:8770/mcp?wait=1800"
+url = "http://127.0.0.1:8770/mcp?wait=1800&agent=codex"
 tool_timeout_sec = 1920
 startup_timeout_sec = 20

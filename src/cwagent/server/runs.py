@@ -14,7 +14,7 @@ from typing import Any
 
 from .. import proc
 from ..config import ConfigStore
-from ..llm.external import BRIDGE, EXTERNAL
+from ..llm.external import BRIDGE, EXTERNAL, AgentBook
 from ..orchestrator import pending as pending_file
 
 RUN_ID = re.compile(r"^[\w.-]+$")
@@ -91,6 +91,7 @@ class RunStore:
         live = self._live(meta) and not info["outcome"]
         profile = meta.get("profile") or (d.name.split("_", 1)[1] if "_" in d.name else "")
         return {"id": d.name, "profile": profile, "model": meta.get("model", ""), "effort": meta.get("effort"),
+                "agent": meta.get("agent"),
                 "difficulty": meta.get("difficulty", ""), "started_at": meta.get("started_at") or _started(d.name),
                 "ended_at": meta.get("ended_at"), "result": meta.get("result"), "live": live, **info}
 
@@ -174,9 +175,10 @@ class PlayController:
     """网页上的开始 / 停止。同一时间只跑一局。"""
 
     def __init__(self, store: ConfigStore, runs: RunStore,
-                 device_factory: Callable[[], Any] | None | str = "default"):
+                 device_factory: Callable[[], Any] | None | str = "default", *, agents: AgentBook | None = None):
         self.store = store
         self.runs = runs
+        self.agents = agents
         self.device_factory = default_device_factory() if device_factory == "default" else device_factory
         self._lock = threading.Lock()
         self._hotkey: str | None = None
@@ -195,6 +197,28 @@ class PlayController:
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def bind_agent(self, name: str) -> None:
+        """外部 agent 的对局:记下是哪个 agent 在下(MCP 取局面时调用),把网页上给它填的模型和思考强度写进对局记录。"""
+        if not BRIDGE.status()["active"] or BRIDGE.agent == name:
+            return
+        BRIDGE.agent = name
+        self._apply_agent()
+
+    def agent_updated(self, name: str) -> None:
+        """网页上改了某个 agent 的模型和思考强度:正在下的就是它时,这一局的记录跟着改。"""
+        if BRIDGE.status()["active"] and BRIDGE.agent == name:
+            self._apply_agent()
+
+    def _apply_agent(self) -> None:
+        name = BRIDGE.agent
+        if not name or self.agents is None:
+            return
+        info = self.agents.get(name)
+        BRIDGE.agent_model = info["model"]
+        runner = self._runner
+        if runner is not None:
+            runner.trace.meta(agent=name, model=info["model"], effort=info["effort"] or None)
 
     def lookup(self, what: str, query: str) -> str | None:
         """外部 agent 查资料(MCP 的 lookup 工具):交给正在跑的这一局;没有对局时返回 None。"""
@@ -260,6 +284,8 @@ class PlayController:
                     with self._lock:
                         self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
                     self._runner = runner      # MCP 的 lookup 工具按这一局的阵容查资料
+                    if external:
+                        self._apply_agent()    # 连打多局时,后面几局沿用同一个 agent
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
                     try:
                         result = run_session(runner, opts, log=self._log)

@@ -1,5 +1,5 @@
 import { Badge } from '@/components/arc/badge/badge';
-import { effortName, type RunSummary } from '@/lib/api';
+import { effortName, EXTERNAL_AGENT, UNNAMED_AGENT, type RunSummary } from '@/lib/api';
 
 import styles from './play.module.css';
 
@@ -18,9 +18,12 @@ export function RunBadge({ run }: { run: RunSummary }) {
   return <Badge size="sm">未完成</Badge>;
 }
 
-/** 模型 · 思考强度 · 难度 */
+/** 模型 · 思考强度 · 难度;外部 agent 显示是哪个 agent 和用户给它填的模型 */
 export function runSetup(run: RunSummary) {
-  return [run.profile, run.effort && `思考强度:${effortName(run.effort)}`, run.difficulty].filter(Boolean).join(' · ');
+  const who = run.profile === EXTERNAL_AGENT
+    ? [run.agent && run.agent !== UNNAMED_AGENT ? run.agent : run.profile, run.model]
+    : [run.profile];
+  return [...who, run.effort && `思考强度:${effortName(run.effort)}`, run.difficulty].filter(Boolean).join(' · ');
 }
 
 export function runProgress(run: RunSummary) {

@@ -73,7 +73,7 @@ export const EFFORTS: { value: Effort; label: string }[] = (['none', 'low', 'med
   (value) => ({ value, label: value }),
 );
 
-export function effortName(effort: Effort | null | undefined): string {
+export function effortName(effort: string | null | undefined): string {
   return effort ?? '';
 }
 
@@ -191,12 +191,23 @@ export interface PlayStatus {
 
 /** 外部 agent(通过 MCP 连上来的 DSH、Claude Code 等)在网页上的模型名,和后端 llm/external.py 一致 */
 export const EXTERNAL_AGENT = '外部 agent';
+/** 连接地址里没带 agent 参数的外部 agent,和后端 llm/external.py 的 UNNAMED 一致 */
+export const UNNAMED_AGENT = '未命名';
+
+/** 连上来过的外部 agent,和用户给它填的模型、思考强度 */
+export interface ExternalAgent {
+  name: string;
+  model: string;
+  effort: string;
+  last_seen: string;
+}
 
 export interface RunSummary {
   id: string;
   profile: string;
   model: string;
-  effort: Effort | null;
+  effort: string | null;   // 外部 agent 的是用户填的,不限于 EFFORTS
+  agent: string | null;    // 外部 agent 的对局:是哪个 agent 在下
   difficulty: string;
   started_at: string;
   ended_at: string | null;

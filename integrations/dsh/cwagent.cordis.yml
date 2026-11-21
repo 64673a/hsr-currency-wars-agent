@@ -7,5 +7,6 @@
         serverName: cwagent
         transport: streamable-http
         # wait:没有需要判断的局面时(战斗、动画),一次工具调用最多等几秒;要小于下面的工具超时
-        url: http://127.0.0.1:8770/mcp?wait=1800
+        # agent:网页对局页按它给这个 agent 填模型和思考强度
+        url: http://127.0.0.1:8770/mcp?wait=1800&agent=dsh
         toolCallTimeoutMs: 1920000

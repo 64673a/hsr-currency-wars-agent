@@ -243,8 +243,12 @@ def render(run: Path) -> str:
     usage = f"交来回答 {calls} 次,token 用量程序看不到" if external else f"模型调用 {calls} 次,输入 {tokens} token"
     ended = outcome(steps)
     result = f"{ended}({meta['result']})" if ended and meta.get("result") else ended or meta.get("result") or "?"
+    model = meta.get("profile") or meta.get("model") or "?"
+    if external:   # 用户在网页上给这个 agent 填的模型和思考强度
+        extra = [meta.get("agent"), meta.get("model"), meta.get("effort") and f"思考强度 {meta['effort']}"]
+        model += f"({' · '.join(x for x in extra if x)})" if any(extra) else ""
     lines = [f"# 对局报表 {run.name}", "",
-             f"- 模型 {meta.get('profile') or meta.get('model') or '?'},难度 {meta.get('difficulty') or '?'},"
+             f"- 模型 {model},难度 {meta.get('difficulty') or '?'},"
              f"结果 {result}",
              f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
              f"{usage}"]

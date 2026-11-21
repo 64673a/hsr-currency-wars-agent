@@ -1,7 +1,7 @@
 {
   "name": "cwagent",
   "displayName": "货币战争 agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "连上装游戏那台电脑上的 cwagent serve,由 Claude 下《崩坏:星穹铁道》货币战争",
   "author": { "name": "64673a" },
   "repository": "https://github.com/64673a/hsr-currency-wars-agent",

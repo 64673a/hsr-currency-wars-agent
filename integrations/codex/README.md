@@ -5,7 +5,7 @@ Windows 上运行 `cwagent serve`,Codex 通过同一个 `/mcp` HTTP 端点接入
 在运行 Codex 的电脑上安装:
 
 ```bash
-uv run python integrations/codex/install.py --url 'http://127.0.0.1:8770/mcp?wait=1800'
+uv run python integrations/codex/install.py --url 'http://127.0.0.1:8770/mcp?wait=1800&agent=codex'
 ```
 
 跨电脑时替换为 Windows 的 IP 地址,或使用 SSH 转发的本地地址。注册使用 Codex CLI 的 `codex mcp add`,保留其余服务器配置;`codex mcp add` 设不了工具超时,脚本随后在 `config.toml` 的 `[mcp_servers.cwagent]` 里写入 `tool_timeout_sec = 1920`(战斗期间 `wait` / `act` 一直等到下一个局面,最长 30 分钟(战斗监视的上限),比默认的 60 秒超时长;每次等待超时回来都是一次模型调用);skill 安装到 `$CODEX_HOME/skills/cwagent-play`。`config.example.toml` 给出可选的项目配置。

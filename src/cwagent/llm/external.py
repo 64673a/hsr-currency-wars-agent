@@ -2,19 +2,84 @@
 
 对局线程照常调用 complete();模型档案是外部 agent 时,complete() 把这一轮的新内容放进信箱,等 agent 用 act 回答。
 MCP 那边用 take() 取局面、answer() 交回答(server/mcp.py)。同一时间只跑一局,所以整个进程只有一个信箱 BRIDGE。
+各个 agent 用连接地址里的 agent 参数区分(各接入的配置里写好),用的模型和思考强度由用户在网页上填(AgentBook)。
 """
 
 from __future__ import annotations
 
+import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .base import ImageInput, LLMError, LLMResponse, Message, ToolCall, ToolSpec
 
 EXTERNAL = "外部 agent"     # 网页上选的模型名,也是对局记录里的档案名
 IDLE_SECONDS = 15 * 60      # 局面交出去后这么久没有任何 MCP 调用,就让对局暂停
+UNNAMED = "未命名"          # 连接地址里没带 agent 参数的(用户自己写的 MCP 配置)
+
+
+def agent_name(raw: str | None) -> str:
+    """连接地址里的 agent 参数 -> agent 名字(只留字母数字和 . - _)。"""
+    name = re.sub(r"[^\w.-]+", "-", (raw or "").strip())[:40].strip("-")
+    return name or UNNAMED
+
+
+class AgentBook:
+    """连上来过的外部 agent,和用户在网页上给每个填的模型、思考强度(存在 data/external_agents.json)。
+    agent 自己的界面里换了模型,由用户回网页改;这里不去读 agent 工具的配置。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._data: dict[str, dict[str, str]] | None = None
+
+    def _load(self) -> dict[str, dict[str, str]]:
+        if self._data is None:
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+            self._data = {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+        return self._data
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._data, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def seen(self, name: str) -> None:
+        """记下 agent 连上来的时间;第一次出现时存盘,之后只在内存里更新(每次工具调用都会来)。"""
+        with self._lock:
+            data = self._load()
+            new = name not in data
+            data.setdefault(name, {"model": "", "effort": ""})["last_seen"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            if new:
+                self._save()
+
+    def get(self, name: str) -> dict[str, str]:
+        with self._lock:
+            info = self._load().get(name) or {}
+            return {"name": name, "model": info.get("model", ""), "effort": info.get("effort", ""),
+                    "last_seen": info.get("last_seen", "")}
+
+    def set(self, name: str, model: str, effort: str) -> dict[str, str]:
+        """没连上来过的 agent 报 KeyError。"""
+        with self._lock:
+            info = self._load()[name]
+            info.update(model=model, effort=effort)
+            self._save()
+        return self.get(name)
+
+    def list(self) -> list[dict[str, str]]:
+        """最近连上来的在前。"""
+        with self._lock:
+            names = list(self._load())
+        return sorted((self.get(n) for n in names), key=lambda a: a["last_seen"], reverse=True)
 
 
 @dataclass
@@ -45,6 +110,8 @@ class ExternalBridge:
         self.system = ""            # 最近一次的系统提示词(rules 工具返回它)
         self.last_seen = 0.0        # 最近一次 MCP 调用的时间
         self.agent_session = ""     # 正在下这一局的 agent 会话(外部 agent 插件的 hook 报上来的),新对局清空
+        self.agent = ""             # 正在下这一局的 agent(连接地址里的 agent 参数),新对局清空
+        self.agent_model = ""       # 用户给它填的模型,写进每一步的记录
         self._cond = threading.Condition()
         self._seq = 0
         self._turn: Turn | None = None
@@ -60,7 +127,7 @@ class ExternalBridge:
     def begin(self, stop: threading.Event) -> None:
         with self._cond:
             self._stop, self._active, self._ended = stop, True, None
-            self.agent_session = ""
+            self.agent_session = self.agent = self.agent_model = ""
             self._turn = self._reply = None
             self._snapshot, self._images = "", []
             self.last_seen = time.time()
@@ -110,7 +177,7 @@ class ExternalBridge:
                 if self._turn is turn:
                     self._turn = self._reply = None
         call = ToolCall(id=f"ext-{turn.seq}", name=tools[0].name if tools else "act", arguments=reply)
-        return LLMResponse(tool_calls=[call], stop_reason="tool_use", model=model or EXTERNAL,
+        return LLMResponse(tool_calls=[call], stop_reason="tool_use", model=model or self.agent_model or EXTERNAL,
                            latency_s=round(time.monotonic() - started, 3))
 
     # ------------------------------------------------------------ MCP 一侧

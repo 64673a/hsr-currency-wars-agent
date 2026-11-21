@@ -32,6 +32,7 @@ from ..config import (
     mask_key,
 )
 from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
+from ..llm.external import AgentBook
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
 from ..stream import LiveStream
 from ..vision.adapters import list_adapters
@@ -84,6 +85,11 @@ class PlayIn(BaseModel):
     rounds: int = Field(1, ge=1, le=50)
 
 
+class ExternalAgentIn(BaseModel):
+    model: str = Field("", max_length=100)
+    effort: str = Field("", max_length=40)
+
+
 class RunsDeleteIn(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=1000)
 
@@ -105,7 +111,7 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
                memory_store: MemoryStore | None = None, templates_dir: Path | None = None,
                web_dist: Path | None = None, sync_fn: Callable[..., Any] | None = None,
                runs_dir: Path | None = None, device_factory: Callable[[], Any] | None | str = "default",
-               live: LiveStream | None = None) -> FastAPI:
+               live: LiveStream | None = None, agents_file: Path | None = None) -> FastAPI:
     store = config_store or ConfigStore()
     kdb = KnowledgeDB(knowledge_path or paths.knowledge_db())
     memories = memory_store or MemoryStore()
@@ -113,11 +119,12 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     dist = web_dist or paths.web_dist()
     sync_job = Job("knowledge-sync")
     runs = RunStore(runs_dir or paths.runs_dir())
-    player = PlayController(store, runs, device_factory)
+    agents = AgentBook(agents_file or paths.data_dir() / "external_agents.json")
+    player = PlayController(store, runs, device_factory, agents=agents)
     if sync_fn is None:
         from ..knowledge.sync import sync as sync_fn  # noqa: PLW0127
 
-    mcp_app, mcp_running = create_mcp(player)
+    mcp_app, mcp_running = create_mcp(player, agents)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -166,6 +173,21 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     @app.post("/api/play/stop")
     def play_stop() -> dict[str, Any]:
         return player.stop()
+
+    # ------------------------------------------------------------ 外部 agent 用的模型和思考强度(用户填)
+
+    @app.get("/api/external-agents")
+    def external_agents() -> list[dict[str, str]]:
+        return agents.list()
+
+    @app.put("/api/external-agents/{name}")
+    def external_agent_update(name: str, body: ExternalAgentIn) -> dict[str, str]:
+        try:
+            out = agents.set(name, body.model.strip(), body.effort.strip())
+        except KeyError:
+            raise HTTPException(404, f"没有连上来过的 agent:{name}") from None
+        player.agent_updated(name)
+        return out
 
     # ------------------------------------------------------------ 实时画面(WebRTC,WHEP 信令转发给本机的 MediaMTX)
 

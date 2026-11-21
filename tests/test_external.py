@@ -12,7 +12,7 @@ import uvicorn
 from cwagent.config import ConfigStore, ModelEndpoint
 from cwagent.llm import LLMError, Message, complete
 from cwagent.llm.base import ToolCall
-from cwagent.llm.external import BRIDGE, EXTERNAL, ExternalBridge, new_content
+from cwagent.llm.external import BRIDGE, EXTERNAL, UNNAMED, AgentBook, ExternalBridge, agent_name, new_content
 from cwagent.memory import MemoryStore
 from cwagent.server import create_app
 from cwagent.brain.screen_agent import ACT_TOOL
@@ -91,7 +91,8 @@ def server(tmp_path):
     BRIDGE.system = ""   # 别的测试留下的
     app = create_app(config_store=ConfigStore(tmp_path / "c.yaml"), knowledge_path=tmp_path / "none.sqlite",
                      templates_dir=tmp_path / "tpl", web_dist=tmp_path / "dist", runs_dir=tmp_path / "runs",
-                     memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"), device_factory=None)
+                     memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"), device_factory=None,
+                     agents_file=tmp_path / "agents.json")
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
@@ -139,6 +140,91 @@ def test_mcp_tools(server):
             assert "对局结束" in (await client.call_tool("wait")).content[0].text
 
     asyncio.run(main())
+
+
+def test_mcp_agent_param_and_settings(server):
+    """连接地址里的 agent 参数区分各个 agent;网页上给它填的模型写进它下的那一局。"""
+    import httpx
+    from mcp import Client
+
+    api = f"http://127.0.0.1:{server}/api/external-agents"
+
+    async def main():
+        async with Client(f"http://127.0.0.1:{server}/mcp?wait=2&agent=codex") as client:
+            await client.list_tools()   # agent 工具启动时就列工具,还没下棋就出现在网页上
+            assert [a["name"] for a in httpx.get(api).json()] == ["codex"]
+            r = httpx.put(f"{api}/codex", json={"model": " gpt-6.1 ", "effort": "xhigh"})
+            assert r.status_code == 200 and r.json()["model"] == "gpt-6.1"
+            assert httpx.put(f"{api}/nobody", json={"model": "x"}).status_code == 404
+
+            BRIDGE.begin(threading.Event())
+            result: list = []
+            worker = threading.Thread(target=lambda: result.append(
+                complete(ModelEndpoint(name=EXTERNAL, format="external"), "规则", "局面", [ACT_TOOL])))
+            worker.start()
+            try:
+                await client.call_tool("wait")
+                assert BRIDGE.agent == "codex"
+                await client.call_tool("act", ACT)
+                worker.join(5)
+                assert result[0].model == "gpt-6.1"   # 每一步的记录里是填的模型,不是「外部 agent」
+            finally:
+                BRIDGE.end("stopped")
+        async with Client(f"http://127.0.0.1:{server}/mcp?wait=1") as client:   # 自己写的配置没带参数
+            await client.call_tool("status")
+        assert {a["name"] for a in httpx.get(api).json()} == {"codex", UNNAMED}
+
+    asyncio.run(main())
+
+
+def test_agent_book(tmp_path):
+    assert agent_name("codex") == "codex"
+    assert agent_name(None) == agent_name("  ") == UNNAMED
+    assert agent_name(" my agent/1 ") == "my-agent-1"
+    book = AgentBook(tmp_path / "agents.json")
+    with pytest.raises(KeyError):
+        book.set("codex", "gpt-6.1", "high")   # 没连上来过
+    book.seen("codex")
+    book.set("codex", "gpt-6.1", "high")
+    again = AgentBook(tmp_path / "agents.json").get("codex")
+    assert (again["model"], again["effort"]) == ("gpt-6.1", "high") and again["last_seen"]
+
+
+def test_bound_agent_settings_go_into_the_run_meta(tmp_path):
+    """正在下的 agent:模型和思考强度写进 meta.json,网页上改了也跟着改;新对局重新认 agent。"""
+    from cwagent.server.runs import PlayController, RunStore
+
+    book = AgentBook(tmp_path / "agents.json")
+    book.seen("claude-code")
+    book.set("claude-code", "claude-opus-5-5", "xhigh")
+    player = PlayController(ConfigStore(tmp_path / "c.yaml"), RunStore(tmp_path / "runs"), None, agents=book)
+
+    class Trace:
+        fields: dict = {}
+
+        def meta(self, **fields):
+            self.fields.update(fields)
+
+    class Runner:
+        trace = Trace()
+
+    player._runner = Runner()
+    player.bind_agent("claude-code")   # 没有对局时不认
+    assert Runner.trace.fields == {}
+    BRIDGE.begin(threading.Event())
+    try:
+        player.bind_agent("claude-code")
+        assert Runner.trace.fields == {"agent": "claude-code", "model": "claude-opus-5-5", "effort": "xhigh"}
+        book.set("claude-code", "claude-opus-5-5", "")
+        player.agent_updated("claude-code")
+        assert Runner.trace.fields["effort"] is None
+    finally:
+        BRIDGE.end("stopped")
+    BRIDGE.begin(threading.Event())
+    try:
+        assert BRIDGE.agent == "" and BRIDGE.agent_model == ""
+    finally:
+        BRIDGE.end("stopped")
 
 
 def test_mcp_rejects_domain_host(server):

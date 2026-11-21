@@ -13,10 +13,11 @@ import sys
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 DEFAULT_URL = "http://127.0.0.1:8770/mcp"
+AGENT = "antigravity"   # 地址里的 agent 参数:网页上按它给这个 agent 填模型和思考强度
 
 
 def normalize_url(raw: str, wait: int | None = None) -> str:
-    """校验并规范化 cwagent MCP 地址;省略 /mcp 路径时自动补齐。"""
+    """校验并规范化 cwagent MCP 地址;省略 /mcp 路径时自动补齐,没带 agent 参数时补上。"""
     parts = urlsplit(raw.strip())
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError("--url 必须是 http:// 或 https:// 开头的 cwagent 地址")
@@ -32,6 +33,8 @@ def normalize_url(raw: str, wait: int | None = None) -> str:
             raise ValueError("--wait 必须在 1 到 3600 秒之间")
         query_items = [(k, v) for k, v in query_items if k != "wait"]
         query_items.append(("wait", str(wait)))
+    if not any(k == "agent" for k, _ in query_items):
+        query_items.append(("agent", AGENT))
     query = urlencode(query_items)
     return urlunsplit((parts.scheme, parts.netloc, path, query, ""))
 

@@ -986,6 +986,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 - **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
 - **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
 - **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
+- **区分 agent、记录模型**(2026-11-21,维护者定):本服务看不到 agent 工具用的是哪个模型(Claude Code 的 hook 只有 SessionStart 带模型,Codex 的 hook 带但要另装,DSH 没有 hook),由用户在网页上填。各接入的连接地址带一个固定的 `agent` 参数(`claude-code` / `codex` / `dsh` / `antigravity`;和 `wait` 一样每次请求都带,无状态也认得出;没带的算「未命名」)。本服务记下连上来过的 agent(列工具、调工具时记,`hook` 不算),对局页选「外部 agent」时给每个填模型和思考强度,存在 `data/external_agents.json`。哪个 agent 取了这一局的局面就算它在下:填的值写进 `meta.json`(`agent`、`model`、`effort`)和每一步记录的 `model`,对局中改了也跟着改。agent 那边换了模型由用户回网页改。不读 agent 工具的配置文件:跨电脑读不到,读到的也只是默认值(会被启动参数和会话里切换覆盖),而且可能和凭据放在一起。
 - **安全**:`/mcp` 只接受 Host 为 IP 地址或 localhost 的请求(防 DNS 重绑定),和网页接口一样不带认证,局域网访问靠防火墙限制。
 - **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code / Antigravity 插件里的 Stop hook,Codex 的 Stop hook)。
 
@@ -993,7 +994,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 
 **Claude Code 接入**(`integrations/claude-code/`,仓库根目录的 `.claude-plugin/marketplace.json` 把它发布成插件市场):做成插件,用户装一次、填一个 serve 地址(插件的 `userConfig`),不用自己写 MCP 和 hook 配置。
 
-- MCP:`.mcp.json` 连 `<地址>/mcp?wait=1800`、`timeout: 1920000`(这个服务的工具调用最长 32 分钟,空闲超时也跟着抬到 32 分钟),`alwaysLoad` 让工具一开始就加载(不走工具搜索)。工具名是 `mcp__plugin_cwagent_cwagent__<工具>`。
+- MCP:`.mcp.json` 连 `<地址>/mcp?wait=1800&agent=claude-code`、`timeout: 1920000`(这个服务的工具调用最长 32 分钟,空闲超时也跟着抬到 32 分钟),`alwaysLoad` 让工具一开始就加载(不走工具搜索)。工具名是 `mcp__plugin_cwagent_cwagent__<工具>`。
 - 后台任务:Claude Code 主对话里超过 2 分钟的 MCP 调用会转成后台任务,模型先拿到任务号,结果作为任务通知送回来(原来因此只等 100 秒)。插件改不了环境变量,README 建议(只给建议,维护者定)用户在 `settings.json` 的 `env` 里设 `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`(Claude Code v2.1.212 起),一场战斗只调一次模型;没设时转到后台,模型结束这一轮、等通知,多一次调用。这时 `hook` 的 Stop 事件看到还有调用在等局面,就放行,不催模型再调 `wait`。【待实测:任务通知里的工具结果是否带图片】
 - `/cwagent:play [难度]`(skill):写明下棋流程;`allowed-tools` 免去 6 个工具的逐次确认(只在这一轮有效,用户插话后要重新确认,或在权限设置里永久允许)。
 - 续行:skill 的 frontmatter 里带两个 `mcp_tool` 类型的 hook,只在调用过这个 skill 的会话里注册,serve 没开时也不会在别的会话里报错。它们通过插件已经连上的 MCP 服务调用 `hook` 工具(只给 hook 用),带上会话 ID:每次调用本服务的工具后(PostToolUse)记下「这一局是哪个会话在下」(新对局清空);想停下时(Stop),对局还在进行、且就是这个会话在下,就返回 `additionalContext` 让模型接着调 `wait`,否则放行。这样换一个会话接手、或者 DSH 在下时,之前下过的 Claude Code 会话不会被拉回来抢着下。连续续行次数由 Claude Code 限制(8 次,调用过工具就重新计数)。
@@ -1014,7 +1015,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 
 `runs/<时间戳>_<档案名>/`:
 
-- `meta.json`:模型档案(不含 key)、配置快照、赛季版本、难度、开始 / 结束时间、结果、跑这局的进程(进程号和进程启动时间);
+- `meta.json`:模型档案(不含 key;外部 agent 的对局另记 agent 名字和用户填的模型、思考强度,11.9)、配置快照、赛季版本、难度、开始 / 结束时间、结果、跑这局的进程(进程号和进程启动时间);
   对局列表的「进行中」= 没有结束时间(打完、停止、出错都会写)且这个进程还在(启动时间对得上,防进程号被重用)。
   不看多久没写记录:一场战斗最长约 30 分钟不写记录(`battle_watch.MAX_SECONDS`),模型也可能想很久(2026-11-18 维护者要求,原来 90 秒没写入就算结束,
   战斗中常被显示成「未完成」)。进程崩溃或被结束时写不进结束时间,靠进程不在了判断;没记进程的旧记录都不算进行中;
@@ -1071,6 +1072,7 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `POST /api/memories/preview` | 给定一组线索(名字、节点、界面、决策层),返回会被想起的记忆,用于调试检索 |
 | `GET /api/providers` `POST` `PUT /api/providers/{name}` `DELETE` | 厂商管理(key 掩码) |
 | `/mcp` | 外部 agent 接入的 MCP 端点(11.9) |
+| `GET /api/external-agents` `PUT /api/external-agents/{name}` | 连上来过的外部 agent,和用户给它们填的模型、思考强度(11.9) |
 | `GET /api/providers/{name}/models` | 从厂商接口拉取可用模型列表 |
 | `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理 |
 | `POST /api/models/{name}/test` | 连通性测试 |

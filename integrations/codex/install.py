@@ -8,10 +8,11 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 
 TOOL_TIMEOUT = 1920  # 秒,比地址里的 wait 长:战斗期间 wait / act 一直等到下一个局面,不回来调用模型
+AGENT = "codex"      # 地址里的 agent 参数:网页上按它给这个 agent 填模型和思考强度
 
 
 def set_tool_timeout(config: Path, name: str, seconds: int) -> None:
@@ -29,12 +30,15 @@ def set_tool_timeout(config: Path, name: str, seconds: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default="http://127.0.0.1:8770/mcp?wait=1800")
+    parser.add_argument("--url", default=f"http://127.0.0.1:8770/mcp?wait=1800&agent={AGENT}")
     parser.add_argument("--skills-dir", type=Path)
     args = parser.parse_args()
     url = urlparse(args.url)
     if url.scheme not in ("http", "https") or not url.hostname or not url.path.endswith("/mcp"):
         parser.error("--url 必须是 cwagent 的 HTTP MCP 地址,路径以 /mcp 结尾")
+    query = parse_qsl(url.query)
+    if not any(k == "agent" for k, _ in query):
+        args.url = url._replace(query=urlencode([*query, ("agent", AGENT)])).geturl()
     codex = shutil.which("codex")
     if codex is None:
         parser.error("没有找到 codex,请先安装 Codex CLI 并加入 PATH")
