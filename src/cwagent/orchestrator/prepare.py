@@ -247,25 +247,34 @@ class PrepareExecutor:
         points = (SHOP_BUTTON,) if want_open else (SHOP_BUTTON, BOARD_BLANK)
         for point in points:
             self._click(out, *point)
-            last, prev = None, None
+            last, prev, closed = None, None, 0
             for i in range(SHOP_TRIES):
                 self.sleep(POLL)
                 boxes = self._glance()
                 image, prev = prev, self.frame.image
                 state = shop_state(boxes)
                 if state is None:
+                    closed = 0
                     continue                     # 一时看不出开合(动画中),再看一眼
                 if state is not want_open:
+                    closed = 0
                     if i >= 4:
                         break                    # 点出了反效果(比如收起时点到了商店),别在同一个点上反复等
                     continue                     # 刚点完画面还没动,前几眼看到的还是原样
+                if not want_open:
+                    closed += 1
+                    # 右下按钮文字会先变成「商店」,顶部商店面板还在滑出动画中途(挡着道具栏第 3 格):等画面静止再返回
+                    if (closed >= 2 and image is not None and frame_diff(image, prev) < STILL) or closed >= 4:
+                        self.shop = False
+                        if self.frame is not None and self.on_shop_closed is not None:
+                            self.on_shop_closed(self.frame.image, boxes)
+                        return boxes
+                    continue
                 cards = read_shop(boxes)
                 # 展开要等卡片读稳:连续两眼一样;五格全空(买空了或卡片还没滑进来)时还要画面静止
-                if not want_open or (cards == last and (any(n for _, n, _ in cards)
-                                                         or image is not None and frame_diff(image, prev) < STILL)):
-                    self.shop = want_open
-                    if not want_open and self.frame is not None and self.on_shop_closed is not None:
-                        self.on_shop_closed(self.frame.image, boxes)
+                if cards == last and (any(n for _, n, _ in cards)
+                                      or image is not None and frame_diff(image, prev) < STILL):
+                    self.shop = True
                     return boxes
                 last = cards
         self.shop_now(boxes)

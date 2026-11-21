@@ -789,16 +789,23 @@ class Runner:
             self.prepare.deployed = hud.deployed
             self._hud_seen = (self._node, hud.hp if hud.hp is not None else self._hud_seen[1])
 
-    def _cache_items(self, image) -> None:
-        """商店收起时完整读一次道具栏并缓存,供商店展开(遮住第 3 格起)时沿用。"""
+    def _cache_items(self, image, *, shrink: bool = True) -> None:
+        """商店收起时完整读一次道具栏并缓存,供商店展开(遮住第 3 格起)时沿用。
+
+        shrink=False 用于不经 settle 的抓帧(例如主动开商店前那一瞬):允许新增第 3 格或更新前 2 格数量,
+        但若商店刚好开始自动展开遮住第 3 格,不把已有缓存的第 3 格裁掉。
+        """
         try:
-            self._items_cache = list(read_items(image, self.ocr))
+            found = list(read_items(image, self.ocr))
+            if not shrink and len(found) == SHOP_VISIBLE_SLOTS:
+                found = merge_items(found, self._items_cache, shop_open=True)
+            self._items_cache = found
         except Exception as e:  # noqa: BLE001 - 缓存失败不影响主流程
             self.log(f"缓存道具栏出错:{type(e).__name__}: {e}")
 
-    def _on_shop_closed(self, image, boxes: list[TextBox]) -> None:
+    def _on_shop_closed(self, image, boxes: list[TextBox], *, shrink: bool = True) -> None:
         self._remember_hud(image, boxes)
-        self._cache_items(image)
+        self._cache_items(image, shrink=shrink)
 
     def _read_items(self, image, *, shop_open: bool) -> list:
         if not shop_open:
@@ -1538,7 +1545,7 @@ class Runner:
                 now = self.screen_of(frame.image, boxes)
                 attempted = now == "prepare" and shop_state(boxes) is False
                 if attempted:
-                    self._on_shop_closed(frame.image, boxes)
+                    self._on_shop_closed(frame.image, boxes, shrink=False)
                     boxes = self.prepare.set_shop(PrepareResult(), boxes, True)
                     frame = self.prepare.frame or frame
                     if not self.prepare.shop:

@@ -243,3 +243,46 @@ def test_runner_caches_hidden_token_on_banner_step_and_uses_it_when_shop_open(tm
     # 用完后无弹窗，on_shop_closed 立即刷新缓存，好运令牌已消失
     assert [it.name for it in r._items_cache] == ["拆装扳手", "冶金炉"]
     assert SHOP_VISIBLE_SLOTS == 2
+
+
+def test_set_shop_close_waits_until_animation_settles_before_caching():
+    """点收起后右下按钮字先变「商店」，但顶部面板还在滑出动画中：要等画面静止才回调 on_shop_closed。"""
+    sliding = Image.new("RGB", (64, 64), (10, 10, 10))
+    sliding2 = Image.new("RGB", (64, 64), (90, 90, 90))
+    settled = Image.new("RGB", (64, 64), (200, 200, 200))
+
+    class AnimatedCloseDevice(ToggleShopDevice):
+        def __init__(self):
+            super().__init__(shop_open=True)
+            self.frames = [sliding, sliding2, settled, settled]
+            self.idx = 0
+
+        def grab(self) -> Frame:
+            im = self.frames[min(self.idx, len(self.frames) - 1)]
+            self.idx += 1
+            return Frame(image=im, timestamp=0)
+
+    dev = AnimatedCloseDevice()
+    captured: list[tuple[int, int, int]] = []
+    ex = PrepareExecutor(dev, dev.ocr, raw=lambda a, b: "", sleep=lambda s: None,
+                         on_shop_closed=lambda im, b: captured.append(im.getpixel((0, 0))))
+    ex.set_shop(prep.PrepareResult(), OPEN_BOXES, False)
+    assert not ex.shop and not dev.shop_open
+    # 不会在动画中途的 sliding / sliding2 上回调，只在静止帧 settled 上回调一次
+    assert captured == [(200, 200, 200)]
+
+
+def test_cache_items_no_shrink_preserves_slot3_on_transient_grab(tmp_path, monkeypatch):
+    """主动开商店前的单帧抓图如果恰好被开始展开的商店挡住第 3 格，不裁掉已有缓存的第 3 格。"""
+    wrench = Consumable(1, 350101, "拆装扳手", 3, 0.961, 0.152, 0.86)
+    furnace = Consumable(2, 350103, "冶金炉", 2, 0.921, 0.152, 0.91)
+    proj = Consumable(3, 350105, "员工投影仪", 2, 0.881, 0.152, 0.94)
+    sim = Sim({"closed": [("商店", 0.845, 0.909)]}, "closed", lambda *_: None)
+    r = loop.Runner(sim, FakeBrain({}), loop.Trace(tmp_path / "run"), ocr=FakeOcr(sim), log=lambda _: None, settle=False)
+    r._items_cache = [wrench, furnace, proj]
+    monkeypatch.setattr(loop, "read_items", lambda img, ocr=None, max_slots=6: [wrench, furnace])
+    r._cache_items(sim.grab().image, shrink=False)
+    assert [it.name for it in r._items_cache] == ["拆装扳手", "冶金炉", "员工投影仪"]
+    # 静止帧全量刷新（shrink=True）则正常更新为 2 格
+    r._cache_items(sim.grab().image, shrink=True)
+    assert [it.name for it in r._items_cache] == ["拆装扳手", "冶金炉"]
