@@ -59,14 +59,17 @@ def score(memory: Memory, cues: Cues, *, include_draft: bool = False) -> Recalle
     return Recalled(memory, round(total, 3), reasons)
 
 
-def recall(memories: list[Memory], cues: Cues, *, limit: int = 6, max_chars: int = 1500,
+def recall(memories: list[Memory], cues: Cues, *, limit: int | None = None, max_chars: int | None = None,
            include_draft: bool = False) -> list[Recalled]:
+    """触发条件对上的全部给出,按分数排序。默认不限条数和字数(2026-11-23 维护者定):原来默认 6 条、1500 字,
+    按名字命中的装备经验(M22、M23 每局出现 16~23 次)把只按界面触发的 M17(连败、血线告急时断利息补战力)挤掉,
+    三局各只出现 1 次;全部 26 条经验加起来才约 4k token,不值得截。limit、max_chars 留给要限量的调用方。"""
     hits = [r for m in memories if (r := score(m, cues, include_draft=include_draft)) is not None]
     hits.sort(key=lambda r: (-r.score, r.memory.created))
     out, used = [], 0
     for r in hits:
         size = len(r.memory.title) + len(r.memory.content)
-        if len(out) >= limit or (out and used + size > max_chars):
+        if (limit is not None and len(out) >= limit) or (max_chars is not None and out and used + size > max_chars):
             break
         out.append(r)
         used += size

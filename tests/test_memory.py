@@ -51,6 +51,8 @@ def test_recall_votes_limit_and_budget():
     assert len(recall(many, Cues(entities={"X"}), limit=3)) == 3
     long = [mem("长" * 900, entities=["X"]), mem("长" * 900, entities=["X"])]
     assert len(recall(long, Cues(entities={"X"}), max_chars=1500)) == 1  # 第一条总会放进去
+    # 默认不限条数和字数:对上的全给
+    assert len(recall(many, Cues(entities={"X"}))) == 10 and len(recall(long, Cues(entities={"X"}))) == 2
 
 
 def test_format_for_prompt():
