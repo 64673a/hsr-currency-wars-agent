@@ -32,6 +32,7 @@ from ..vision.hud import read_gold, read_level
 from ..vision.motion import frame_diff
 from ..vision.ocr import Ocr, TextBox, find
 from ..vision.shop import format_shop, read_prices, read_shop, reread_names, shop_state, two_star
+from .screens import SCREEN_NAMES, classify
 
 SHOP_BUTTON = (0.845, 0.909)      # 右下「商店」/「收起」(同一个位置,1920x1080 实测)
 BOARD_BLANK = (0.500, 0.550)      # 棋盘中间空白:点这里也能关掉商店(trail-cli 的 SHOP_CLOSE_POINT),按钮点不动时用它
@@ -66,6 +67,19 @@ PREP_BANNER = (0.0, 0.0, 0.45, 0.12)   # 左上角「备战阶段」
 # 拖完把指针停到客户区左上角(M7A v2026.11.20 的 POINTER_REST,1920x1080 下 12 像素处,离屏幕角很远,不会触发急停):
 # 指针停在卡上卡面会抬起,换位后核对目标格、读卡都会受影响
 REST = (0.006, 0.011)
+# 备战时会盖在棋盘上的界面:上场、下场凑出或拆掉羁绊时游戏弹出的选择框(梦境交织共舞、骇入效果、奇兽花园、
+# 巡海游侠任命……)、开拓银轨盖上的开拓商店、奇遇伙伴横幅等。它们出来以后,后面的拖动、装备、点击都落在弹窗上:
+# 2026-11-16~21 的对局里 30 多次,装备报「装备栏没有变化」、合成报「没有出现合成确认」、拿武装箱读到的是
+# 骇入效果的选项、出战报了成功其实没出战(弹窗盖住了左上角「备战阶段」)
+POPUPS = {"dance", "hack", "garden", "ranger", "clara_mod", "mentor", "rail_shop", "black_market", "equipment_reward",
+          "privilege_choice", "spotlight_replace", "spotlight_info", "spotlight_choice", "tap_continue", "tap_close",
+          "reward_limit", "empty_front", "quit_dialog"}
+POPUP_NAMES = {"tap_continue": "点击空白处继续(奇遇伙伴横幅等)", "tap_close": "点击空白处关闭的面板",
+               "reward_limit": "助燃券到上限的提示", "empty_front": "前台无角色的提示", "quit_dialog": "是否中断挑战"}
+POPUP_TRIES = 4      # 上场、下场后看几眼有没有弹窗(弹窗有出场动画,一眼约 0.3 秒)
+POPUP_STOP = "画面上弹出了「{name}」,后面的操作先不做:先处理这个界面,回到备战后按新局面再发"
+# 拖人以外的操作:弹窗挡住时不会自己报错(装备、合成报错的原因不对,点击、出战直接点在弹窗上)
+NOT_DRAG = {"move", "sell", "wait"}
 
 
 @dataclass
@@ -129,6 +143,9 @@ class PrepareExecutor:
         self.node: str | None = None                # 当前节点(Runner 每步更新)
         self.understaffed: set[str] = set()         # 已经因为「人数未达上限」拦过一次出战的节点
         self.roster: Callable[[], dict[str, set[int]]] | None = None   # 角色名 → 费用(Runner 给;roll 认牌、算二星)
+        # 模型给编号时看到的装备栏(Runner 每轮识别时给);程序自己合成、装备后跟着改。拿武装箱、卖掉带装备的角色、
+        # 用拆装扳手都会把装备拿进或放回装备栏、整栏重排,模型的编号就不对了(2026-11-21 那局 1-9 把轮滑鞋误装给了花火)
+        self.bag_seen: list[str | None] | None = None
 
     def _look(self) -> list[TextBox]:
         """等画面静止后整屏识别:结果说不准的操作(模型按坐标点的、等待)之后用。"""
@@ -199,14 +216,24 @@ class PrepareExecutor:
             return f":升到 {after} 级" + (f",上场 {self.deployed}" if self.deployed else "")
         return f":现在 {after} 级"
 
+    def _popup(self, boxes: list[TextBox] | None = None, *,
+               tries: int = POPUP_TRIES) -> tuple[list[TextBox] | None, str | None]:
+        """画面上有没有盖着备战的弹窗(POPUPS):给了 boxes 先看它,再看 tries 眼。返回(最后一眼的文字, 界面名或 None)。"""
+        if boxes is not None and classify(boxes) in POPUPS:
+            return boxes, classify(boxes)
+        if tries <= 0:
+            return boxes, None
+        seen, hit = self._until(lambda b: classify(b) in POPUPS, tries=tries)
+        return seen, (classify(seen) if hit else None)
+
     def _wait_ready(self) -> list[TextBox]:
-        """点了出战以后:弹出「人数未达上限」,或者左上角的「备战阶段」连续两眼都不见了(进了战斗或别的界面)就返回。
+        """点了出战以后:弹出「人数未达上限」或别的弹窗,或者左上角的「备战阶段」连续两眼都不见了(进了战斗或别的界面)就返回。
         原来固定等 1 秒再等画面静止;弹窗出来时背景变暗,只看一眼「备战阶段」没了不算数。"""
         gone = 0
 
         def done(boxes) -> bool:
             nonlocal gone
-            if find(boxes, UNDERSTAFFED) is not None:
+            if find(boxes, UNDERSTAFFED) is not None or classify(boxes) in POPUPS:
                 return True
             gone = gone + 1 if find(boxes, "备战阶段", region=PREP_BANNER) is None else 0
             return gone >= 2
@@ -533,9 +560,22 @@ class PrepareExecutor:
         decision_shop = self.shop_now(boxes)
         given = boxes             # 模型决策时的那一帧;执行中还拿着它的话,说明画面已经旧了
         pending = [a.model_copy() for a in actions]
+        watch = False             # 上一步上场 / 下场 / 卖了场上角色 / 装了星徽:可能弹出羁绊的选择框
+        popped: str | None = None  # 已经报告过的弹窗
+        last: str | None = None    # 最后执行(或停下)的是哪类操作
         while pending:
             a = pending.pop(0)
+            last = a.type
             text = action_text(a)
+            if watch and a.type not in NOT_DRAG:
+                # 拖人没拖上会自己报错,别的操作不会:执行前先看几眼有没有弹窗
+                watch = False
+                seen, popped = self._popup()
+                if popped:
+                    boxes = seen
+                    out.results.append(POPUP_STOP.format(name=popup_name(popped)))
+                    out.observe = True
+                    break
             started = time.monotonic()
             try:
                 if a.type == "buy":
@@ -619,6 +659,9 @@ class PrepareExecutor:
                             continue
                         problem, boxes = self._drag_slot(out, src, dst, boxes)
                         if problem:
+                            boxes, popped = self._popup(boxes, tries=1)
+                            if popped:
+                                problem = f"画面上弹出了「{popup_name(popped)}」,先处理这个界面"
                             out.results.append(f"{text}:没成功({problem}),后面的操作先不做")
                             out.observe = failed = True
                             break
@@ -633,6 +676,7 @@ class PrepareExecutor:
                             if there:
                                 occupied[src] = there
                         out.results.append(text)
+                        watch = watch or up or down
                     else:
                         p = layout[src]
                         shop = self.shop_now(boxes)
@@ -666,6 +710,7 @@ class PrepareExecutor:
                         if a.zone != "bench" and self.deployed:
                             self.deployed = shift(self.deployed, -1)
                         out.results.append(text)
+                        watch = watch or a.zone != "bench"
                 elif a.type == "refresh":
                     # 先确认商店开着:2026-11-18 那局梦境交织的弹窗把商店收了,程序还当开着,点的不是刷新
                     boxes = self.set_shop(out, boxes if boxes is not None else self._glance(), True)
@@ -705,6 +750,7 @@ class PrepareExecutor:
                         out.observe = True
                         break
                     _shift(pending, done)
+                    watch = watch or (a.type == "equip" and "星徽" in out.results[-1])   # 星徽让角色加入羁绊
                 elif a.type == "ready":
                     if others and (failed or (unchecked and not final)):
                         why = ("前面有操作没成功" if failed else
@@ -723,7 +769,13 @@ class PrepareExecutor:
                     # ready 和上场一起发时,写进去的是回合开头的站位)
                     out.ready_image = self._grab().image
                     self._click(out, *READY_BUTTON)
-                    blocked = self.answer_understaffed(out, self._wait_ready())
+                    shown = self._wait_ready()
+                    if shown is not None and classify(shown) in POPUPS:
+                        popped = classify(shown)
+                        out.results.append(f"{text}:没有出战。" + POPUP_STOP.format(name=popup_name(popped)))
+                        out.observe = True
+                        break
+                    blocked = self.answer_understaffed(out, shown)
                     if blocked:
                         out.results.append(f"{text}:{blocked}")
                         out.observe = True
@@ -744,6 +796,14 @@ class PrepareExecutor:
                     if a.type != "wait":
                         boxes = self._look()
                         if privilege_panel(boxes):
+                            popped = "privilege_choice"
+                            out.observe = True
+                            break
+                        shown = classify(boxes)
+                        if shown in POPUPS and any(x.type in CHECKED | {"ready", "roll", "refresh"} for x in pending):
+                            # 模型自己点开的面板(开拓商店等)后面跟着点击是在面板上操作;跟着买卖、上场、出战就落在面板上了
+                            popped = shown
+                            out.results.append(POPUP_STOP.format(name=popup_name(shown)))
                             out.observe = True
                             break
                         if (a.type == "drag" and self.frame is not None and self.on_shop_closed is not None
@@ -757,6 +817,16 @@ class PrepareExecutor:
                 break
             finally:
                 out.timings.append([a.type, round(time.monotonic() - started, 2)])
+        stopped = out.observe and last not in (None, "refresh", "roll", "open_crystals")   # 正常停下来看新商店的不算
+        if popped is None and not out.ready and (failed or stopped):
+            # 有操作没成功(弹窗挡住时,装备、合成、出售报的原因不对):看一眼画面上是不是盖着弹窗。
+            # 最后一步上场后才弹出来的不用在这里等:下一步主循环截图时会认出这个界面
+            _, popped = self._popup(tries=1)
+            if popped:
+                name = popup_name(popped)
+                out.results.append(f"画面上弹出了「{name}」,上面没成功的操作多半是被它挡住的:先处理这个界面,"
+                                   "回到备战后按新局面再发" if failed else POPUP_STOP.format(name=name))
+                out.observe = True
         out.occupied = occupied
         return out
 
@@ -858,6 +928,12 @@ class PrepareExecutor:
                 return None, boxes
         boxes = self._close_shop(out, boxes)
         before = self.equipment.read(self._grab().image)
+        if self.bag_seen is not None and bag_moved(self.bag_seen, [i.name for i in before]):
+            out.results.append(f"{text}:装备栏和你给编号时不一样了(前面的操作把装备拿进或放回了装备栏,整栏重排),"
+                               f"这件和后面的合成 / 装备先不做:装备栏现在是 {format_items(before, coords=True)}")
+            out.observe = True
+            self.bag_seen = [i.name for i in before]
+            return None, boxes
         item = next((i for i in before if i.index == a.item), None)
         if item is None:
             out.results.append(f"{text}:装备栏没有第 {a.item} 件(现在有 {len(before)} 件)")
@@ -900,6 +976,7 @@ class PrepareExecutor:
             product = f"{new[0].name or '认不出的装备'}(现在是 {new[0].index} 号)" if len(new) == 1 else "认不出的装备"
             out.results.append(f"{text}({item.name or '认不出'}+{target.name or '认不出'}):合成了 {product};"
                                f"装备栏现在是 {format_items(after)}")
+            self.bag_seen = [i.name for i in after]
             return max(a.item, a.onto), boxes
         # 装备给角色
         src = (a.zone, a.index - 1)
@@ -934,6 +1011,8 @@ class PrepareExecutor:
                            + (",和身上的简易装备合成了(点了确认)" if merged is not None else ""))
         if who and item.name:
             out.equipped.append((who, item.name))
+        if self.bag_seen is not None:
+            self.bag_seen = [i.name for i in after]    # 后面的编号由 _shift 跟着顺移,和这一栏对得上
         return a.item, boxes
 
 
@@ -966,6 +1045,15 @@ def _remap_drag(a: Action, counts: dict[str, int] | None) -> Action:
     if (x, y, x2, y2) == (a.x, a.y, a.x2, a.y2):
         return a
     return a.model_copy(update={"x": x, "y": y, "x2": x2, "y2": y2})
+
+
+def popup_name(screen: str) -> str:
+    return SCREEN_NAMES.get(screen) or POPUP_NAMES.get(screen) or screen
+
+
+def bag_moved(seen: list[str | None], now: list[str | None]) -> bool:
+    """装备栏和模型给编号时看到的对不上:件数变了,或者同一个编号上两边都认得出、名字却不一样。认不出的格子不算。"""
+    return len(seen) != len(now) or any(a and b and a != b for a, b in zip(seen, now))
 
 
 def _lost(before: list[Item], after: list[Item]) -> Counter | None:

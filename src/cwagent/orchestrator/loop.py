@@ -762,6 +762,7 @@ class Runner:
                     lines.append(f"(新道具)【{it.name}】{desc}")
         if self.equipment is not None and self.equipment_reader is not None:
             items = self.equipment_reader.read(image)
+            self.prepare.bag_seen = [i.name for i in items]   # 模型按这一栏给编号;执行时装备栏变了就先停下
             state["equipment"] = [{"index": i.index, "name": i.name, "score": round(i.score, 2)} for i in items]
             text, equip_names = self.equipment.describe(items, names, self.ledger.items)
             lines.append(text)
@@ -1476,6 +1477,7 @@ class Runner:
             if find(boxes, "剩余时间", region=(0.1, 0.0, 0.2, 0.12)):
                 hints += "\n- 这是限时商店(左上角是剩余时间而不是「备战阶段」):时间到了自动关闭,期间可以买;不能出战。"
             try:
+                self.prepare.bag_seen = None      # 这一轮没读到装备栏就不核对编号
                 seen, record["state"], names = self.perceive(frame.image, boxes, self._node)
                 hints += "\n\n## 程序识别的局面\n" + seen
             except Exception as e:  # noqa: BLE001 - 识别出错不影响模型照常决策
