@@ -65,6 +65,7 @@ from .screens import (
     TEA_BREAK_HINT,
     classify,
     match_outcome,
+    node_outcome,
     companion_banner,
     companion_name,
     ENV_REFRESHES,
@@ -129,6 +130,20 @@ class RunOptions:
     approve: Callable[[Decision], bool] | None = None   # 逐步确认(返回 False 则跳过本次操作)
     stop: threading.Event = field(default_factory=threading.Event)
     on_step: Callable[[dict], None] | None = None       # 每一步的记录,给网页实时推送
+
+
+def battle_line(node: str, summary: str, result: str | None, before: int | None, after: int | None) -> str:
+    """本局经历里战斗那一行:先写结算页上的胜负和战前、战后的小队生命,再写战斗中读到的进度、阵亡、提示。
+
+    战斗中最后一次读到的进度常被大招特效挡住(赢了只读到 87%),赢了就按 100% 写,免得和胜负对不上。"""
+    head = [result or "胜负没读到"]
+    if before is not None and after is not None:
+        head.append(f"小队生命 {before} → {after}({after - before:+d})")
+    elif after is not None:
+        head.append(f"战后小队生命 {after}")
+    if result == "胜":
+        summary = re.sub(r"进度 (\d+)% → 最后读到 \d+%", r"进度 \1% → 100%", summary)
+    return f"[{node} 战斗] {','.join(head)};{summary}"
 
 
 ITEM_BAR = (0.74, 0.10, 0.19)   # 右上角道具栏:x 下限(覆盖最多 6 格,第 6 格中心 0.761)、y 范围(拖动前已收起商店)
@@ -319,6 +334,10 @@ class Runner:
         self._macro_detail: dict = {}                          # 固定流程这一步读到的详情(词条、伙伴),写进记录
         self._trial: dict[str, bool] = {}                      # 这局见过的角色 → 是不是试用(卡面标签)
         self._ready_facts = ""                                 # 出战时的客观数字,战斗结束后写进本局经历
+        # 战斗那一行先暂存,读到结算页的胜负和小队生命后一起写进本局经历(经历只追加,写下就不改)
+        self._battle_pending: tuple[str, str, int | None] | None = None   # (节点, 战斗小结, 战前小队生命)
+        self._outcome: tuple[str | None, int | None] = (None, None)       # 结算页读到的(胜负, 小队生命)
+        self._after: tuple[str, str | None, int | None] | None = None     # 最近一场战斗:(节点, 胜负, 战后小队生命)
         # 每一步的耗时统计(记进 steps.jsonl 的 timing,报表按节点汇总程序自己花的时间)
         self._step_started = 0.0
         self._ocr_mark = (0, 0.0)                              # 这一步开始时 OCR 的累计次数和用时
@@ -671,6 +690,9 @@ class Runner:
         nxt_brief = self.ledger.node_brief(nxt)
         lines = [hud.text(node_info=self.ledger.node_brief(node),
                           next_info=f"{nxt}({nxt_brief})" if nxt and nxt_brief else "")]
+        if hud.hp is None and self._after is not None and self._after[2] is not None:
+            # 顶部血量没读出来(2026-11-21 那局 3-2):不能让模型连自己剩几血都不知道
+            lines[0] += f",小队生命 认不出(上一场 {self._after[0]} 结算后是 {self._after[2]})"
         names: list[str] = []
         shop = self.prepare.shop_now(boxes)
         cards: list = []
@@ -1188,6 +1210,7 @@ class Runner:
                     return [Action(type="click", x=float(hint.x), y=float(hint.y), reason="点击空白处继续")]
                 return [Action(type="click", x=0.5, y=0.62, reason="点击空白处继续")]
             case "battle_end":
+                self._note_outcome(boxes, record)
                 return [Action(type="click", x=0.5, y=0.83, reason="点击空白加速")]
             case "run_intro":
                 name = companion_name(boxes)
@@ -1236,6 +1259,8 @@ class Runner:
                     return [Action(type="click", x=0.5, y=0.832, reason="离开启动前的旧局结算页")]
                 return [Action(type="click_text", text="下一步", reason="离开结算界面")] if find(boxes, "^下一步$") else []
             case "node_result":
+                self._note_outcome(boxes, record)
+                self._flush_battle()
                 if find(boxes, "^前往结算$"):
                     return [Action(type="click_text", text="前往结算", reason="最后一场打完或小队生命耗尽,去整局结算")]
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
@@ -1487,6 +1512,9 @@ class Runner:
             last = f"\n\n## 最近一次备战时读到的(不是这个界面上的)\n{self._last_hud.text()}"
             if self._lineup():
                 last += f"\n阵容:{self._lineup()}"
+            after = self._after_text()
+            if after:
+                last += f"\n{after}"
             hints = (hints + last).strip()
         if screen in CHOICE_SCREENS:
             grey = [b.text for b in boxes if b.text in ("确认", "确认选择", "确认更换") and not lit(frame.image, b)]
@@ -1498,6 +1526,7 @@ class Runner:
         return hints.strip(), names
 
     def decide(self, n: int, frame, boxes: list[TextBox], screen: str, record: dict, sig: set[str]) -> str:
+        self._flush_battle()     # 结算页没认出来时,问模型之前也要把上一场写进经历
         key = self._key(screen, sig)
         if self.episode is not None and self.episode.key != key:
             self.close_episode()
@@ -1757,13 +1786,47 @@ class Runner:
         record["battle"] = {"av": av[-1] if av else None, "progress": progress[-1] if progress else None,
                             **report.as_dict()}
         record["battle_summary"] = text
+        self._flush_battle()      # 上一场没等到结算页的,先按没读到写进去
         if node:
             facts, self._ready_facts = self._ready_facts, ""
-            self.ledger.add(f"[{node} 战斗] {text}" + (f";{facts}" if facts else ""))
+            hud = self._last_hud
+            before = (hud.hp if hud is not None and hud.node == node and hud.hp is not None
+                      else self._hud_seen[1] if self._hud_seen[0] == node else None)
+            self._battle_pending = (node, text + (f";{facts}" if facts else ""), before)
+            self._outcome = (None, None)
         self.log(f"[{n}] 战斗{f' {node}' if node else ''}:{text}")
         self._last_sig = sig
         self.trace.write(record)
         return "battle"
+
+    def _note_outcome(self, boxes: list[TextBox], record: dict) -> None:
+        """结算页(battle_end、node_result)上读胜负和小队生命,留给战斗那一行。"""
+        if self._battle_pending is None:
+            return
+        result, hp = node_outcome(boxes)
+        self._outcome = (result or self._outcome[0], hp if hp is not None else self._outcome[1])
+        if result or hp is not None:
+            record["outcome"] = {"result": result, "hp": hp}
+
+    def _after_text(self) -> str:
+        """选择界面上附的「最近一次备战」是战前的数字;那之后打过的一场,把结算页的胜负和小队生命补上。"""
+        if self._after is None or self._last_hud is None or self._last_hud.node != self._after[0]:
+            return ""
+        node, result, hp = self._after
+        parts = [result] if result else []
+        if hp is not None:
+            parts.append(f"小队生命 {hp}")
+        return f"之后打完 {node}:{','.join(parts)}" if parts else ""
+
+    def _flush_battle(self) -> None:
+        """把暂存的战斗那一行写进本局经历:在节点结算页读完时写;没等到结算页就在下一次问模型或下一场战斗前写。"""
+        if self._battle_pending is None:
+            return
+        node, text, before = self._battle_pending
+        result, after = self._outcome
+        self.ledger.add(battle_line(node, text, result, before, after))
+        self._after = (node, result, after)
+        self._battle_pending, self._outcome = None, (None, None)
 
     def _mentor_transition(self, screen: str) -> list[Action] | None:
         """从师光环选完后先等后续页面,过渡备战画面不启动固定流程。"""

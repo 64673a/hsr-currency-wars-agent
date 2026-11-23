@@ -23,6 +23,30 @@ def match_outcome(boxes: list[TextBox]) -> str | None:
     return None
 
 
+def node_outcome(boxes: list[TextBox]) -> tuple[str | None, int | None]:
+    """每场战斗结算页(battle_end、node_result)上的(胜负, 小队生命值)。
+
+    标题在 y≈0.21:「挑战成功」是赢,「挑战结束」是输(2026-11-21 三局实机);结算页上的「挑战失败」也按输。
+    血量只认 node_result 上「小队生命值 N」(已含打完回的 2 点);battle_end 中间的大数字还在跳动,不用。
+    「小队生命值」和数字有时被识别成两个框,这时取同一行右边最近的纯数字。"""
+    result = None
+    if find(boxes, "^挑战成功$", region=RESULT_TITLE) is not None:
+        result = "胜"
+    elif find(boxes, "^挑战(结束|失败)$", region=RESULT_TITLE) is not None:
+        result = "负"
+    hp = None
+    for b in boxes:
+        m = re.fullmatch(r"小队生命值\s*(\d{1,3})", b.text.strip())
+        if m:
+            return result, int(m.group(1))
+        if b.text.strip() == "小队生命值" and hp is None:
+            right = [d for d in boxes if re.fullmatch(r"\d{1,3}", d.text.strip())
+                     and abs(d.y - b.y) < 0.02 and 0 < d.x - b.x < 0.12]
+            if right:
+                hp = int(min(right, key=lambda d: d.x - b.x).text.strip())
+    return result, hp
+
+
 def _top(boxes: list[TextBox], pattern: str, y1: float = 0.12) -> bool:
     """界面标题一带(顶部居中)有没有这段文字。左侧羁绊列表里也有「奇兽花园」「开拓银轨」这类名字,要排除。"""
     return find(boxes, pattern, region=(0.28, 0.0, 0.48, y1)) is not None
