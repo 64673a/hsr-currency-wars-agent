@@ -49,8 +49,10 @@ ITEM_PREFIX = "道具"      # 备战席里带「开启」的武装箱等道具(l
 REFUSED = "不可调整|无法上阵|无法移动"   # 拖动被游戏拒绝时界面中间的提示(2026-11-15 实机:「当前情况下不可调整」)
 BEHIND_SHOP = {"选择主角", "出战"}   # 右下的按钮,商店展开时被挡住(2026-11-16 外部 agent 实测:点了没反应)
 UNDERSTAFFED = "人数未达上限"    # 出战时的「可出战角色人数未达上限,是否确认出战?」(实机文字在 0.498, 0.473)
-UNDERSTAFFED_CANCEL = (0.43, 0.572)     # 读不到「取消」时的位置(trail-cli 的 BATTLE_TEAM_COUNT_CANCEL_POINT)
-UNDERSTAFFED_CONFIRM = (0.57, 0.572)    # 读不到「确认」时的位置(和取消左右对称,待实机核对)
+# 读不到按钮(弹出动画没放完)时点的位置:S2 实机 2026-11-14 到 11-24 共 16 次都在这里。原来用 trail-cli 的
+# (0.43, 0.572)、(0.57, 0.572),是 S1 的位置,点不到按钮:2026-11-24 那局 2-1 取消没点上,框还在
+UNDERSTAFFED_CANCEL = (0.401, 0.621)
+UNDERSTAFFED_CONFIRM = (0.618, 0.621)
 # 操作后看回执(2026-11-20,参考 M7A 的 ACTION_POLL):每隔 POLL 秒截一张看预期的变化出现没有,出现就走;
 # 原来是固定睡 0.5~1.2 秒、再等画面静止(至少两张截图隔 0.3 秒)、再整屏识别,一个上场要 2 秒多、卖一个 4 秒多。
 # 回执一直不来时最多看这么多眼,之后照原来的方式核对和报告
@@ -80,6 +82,13 @@ POPUP_TRIES = 4      # 上场、下场后看几眼有没有弹窗(弹窗有出�
 POPUP_STOP = "画面上弹出了「{name}」,后面的操作先不做:先处理这个界面,回到备战后按新局面再发"
 # 拖人以外的操作:弹窗挡住时不会自己报错(装备、合成报错的原因不对,点击、出战直接点在弹窗上)
 NOT_DRAG = {"move", "sell", "wait"}
+
+
+def understaffed_note(deployed: str | None) -> str:
+    """「人数未达上限」点了取消以后给模型的说明(执行器和主循环共用)。"""
+    seats = f"(上场 {deployed})" if deployed else ""
+    return (f"没有出战:游戏提示「可出战角色人数未达上限」{seats},已点取消。要补人就先上场再出战;"
+            "要少人出战就不改上场人数、再发一次 ready,程序会点确认")
 
 
 @dataclass
@@ -141,7 +150,9 @@ class PrepareExecutor:
         self.counts: dict[str, int] | None = None   # 前台、后台的格子数(Runner 识别阵容时更新)
         self.deployed: str | None = None            # 「已上场/上限」,如 5/6(Runner 读 HUD 时更新)
         self.node: str | None = None                # 当前节点(Runner 每步更新)
-        self.understaffed: set[str] = set()         # 已经因为「人数未达上限」拦过一次出战的节点
+        # 少人出战由模型决定:节点 → 告诉模型「人数未达上限」时的上场人数;模型看着这个人数又发出战才确认
+        self.understaffed: dict[str, str | None] = {}
+        self.short_ok: str | None = None            # 已按模型的决定点了确认的节点(确认没点下去时主循环补点)
         self.roster: Callable[[], dict[str, set[int]]] | None = None   # 角色名 → 费用(Runner 给;roll 认牌、算二星)
         # 模型给编号时看到的装备栏(Runner 每轮识别时给);程序自己合成、装备后跟着改。拿武装箱、卖掉带装备的角色、
         # 用拆装扳手都会把装备拿进或放回装备栏、整栏重排,模型的编号就不对了(2026-11-21 那局 1-9 把轮滑鞋误装给了花火)
@@ -242,25 +253,37 @@ class PrepareExecutor:
         return boxes
 
     def answer_understaffed(self, out: PrepareResult, boxes: list[TextBox]) -> str | None:
-        """点出战后弹出「可出战角色人数未达上限,是否确认出战?」时怎么答(设计文档第 9 节,参考 trail-cli):
-        这个节点第一次弹就点「取消」,返回给模型的说明;模型看过以后又发出战(比如备战席确实没人可上),
-        就照它的决定点「确认」,返回 None。两种情况都不勾「本局不再提示」——原来勾上后,之后少上人游戏就不再提醒。
-        没弹这个框返回 None。"""
+        """点出战后弹出「可出战角色人数未达上限,是否确认出战?」时怎么答(设计文档第 9 节)。少不少人出战由模型决定:
+        这个节点告诉过模型、而且上场人数和告诉它时一样(它看着这个人数又发了出战),才点「确认」,返回 None;
+        第一次弹、或者人数变了(比如模型想补人没补上),点「取消」,返回给模型的说明。点完核对框关了没有。
+        都不勾「本局不再提示」——原来勾上后,之后少上人游戏就不再提醒。没弹这个框返回 None。"""
         if find(boxes, UNDERSTAFFED) is None:
             return None
         node = self.node or ""
-        if node in self.understaffed:
-            ok = find(boxes, "^确认$")
-            self._click(out, *((float(ok.x), float(ok.y)) if ok is not None else UNDERSTAFFED_CONFIRM))
-            self.sleep(1.0)
-            return None
-        self.understaffed.add(node)
-        cancel = find(boxes, "^取消$")
-        self._click(out, *((float(cancel.x), float(cancel.y)) if cancel is not None else UNDERSTAFFED_CANCEL))
-        self.sleep(0.8)
-        seats = f"(上场 {self.deployed})" if self.deployed else ""
-        return (f"没有出战:游戏提示「可出战角色人数未达上限」{seats},已点取消。还有空着的上场名额,"
-                "先把角色放上场再出战;确实没有角色可上就再发一次 ready,会照常出战")
+        if node in self.understaffed and self.understaffed[node] == self.deployed:
+            self.short_ok = node
+            if self._answer_dialog(out, boxes, "确认", UNDERSTAFFED_CONFIRM):
+                return None
+            return "点了「确认」,但「人数未达上限」的提示框还在,没出战成,以截图为准"
+        self.understaffed[node] = self.deployed
+        if not self._answer_dialog(out, boxes, "取消", UNDERSTAFFED_CANCEL):
+            return "没有出战:游戏提示「可出战角色人数未达上限」,点了「取消」但提示框还在,以截图为准"
+        return understaffed_note(self.deployed)
+
+    def _answer_dialog(self, out: PrepareResult, boxes: list[TextBox], word: str,
+                       fallback: tuple[float, float]) -> bool:
+        """点「人数未达上限」框上的按钮,点完看框关了没有,最多点 3 次。按钮字还没读到(弹出动画没放完)
+        先等一等,还读不到就点实测位置。"""
+        pattern = f"^{word}$"
+        for _ in range(3):
+            if find(boxes or [], pattern) is None:
+                boxes, _ = self._until(lambda b: find(b, pattern) is not None, tries=4)
+            button = find(boxes or [], pattern)
+            self._click(out, *((float(button.x), float(button.y)) if button is not None else fallback))
+            boxes, gone = self._until(lambda b: find(b, UNDERSTAFFED) is None, tries=6)
+            if gone:
+                return True
+        return False
 
     def set_shop(self, out: PrepareResult, boxes: list[TextBox], want_open: bool) -> list[TextBox]:
         """打开或收起商店,等动画结束(展开时等卡片名字连续两次读到一样)。

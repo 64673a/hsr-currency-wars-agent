@@ -62,7 +62,15 @@ from ..vision.equipment import (
 )
 from . import situation
 from .pending import PendingDecision
-from .prepare import REST, READY_DEFERRED, PrepareExecutor, PrepareResult
+from .prepare import (
+    REST,
+    READY_DEFERRED,
+    UNDERSTAFFED_CANCEL,
+    UNDERSTAFFED_CONFIRM,
+    PrepareExecutor,
+    PrepareResult,
+    understaffed_note,
+)
 from .screens import (
     CLOSE_CORNER,
     DIFFICULTY_HINT,
@@ -1274,15 +1282,21 @@ class Runner:
                     return [Action(type="click_text", text="前往结算", reason="最后一场打完或小队生命耗尽,去整局结算")]
                 return [Action(type="click_text", text="继续挑战", reason="节点结算")]
             case "deploy_confirm":
-                # 出战时「可出战角色人数未达上限」(设计文档第 9 节):这个节点第一次弹就取消、告诉模型;模型看过以后
-                # 又出战就照它的决定确认。不勾「本局不再提示」——原来勾上后,之后少上人游戏就不再提醒(最近 6 局每局都发生)
+                # 出战时「可出战角色人数未达上限」(设计文档第 9 节)。少不少人出战由模型决定,出战时由执行器按模型的
+                # 决定答;这里单独看到这个框,多半是执行器点的没生效。原来「这个节点提示过」就自动确认:2026-11-24 那局
+                # 2-1 执行器的取消没点上,这里接着点了确认,模型没看到提示就 6/7 出战了。现在只有执行器已经按模型的决定
+                # 点过确认时才补点确认,其余一律取消、告诉模型。不勾「本局不再提示」——勾上后少上人游戏就不再提醒
                 node = self._node or ""
-                if node in self.prepare.understaffed:
-                    return [Action(type="click_text", text="确认", reason="看过人数未满的提示后仍决定出战")]
-                self.prepare.understaffed.add(node)
-                self._notice = ("上次点出战时游戏提示「可出战角色人数未达上限」,已点取消、没有出战。还有空着的上场名额,"
-                                "先把角色放上场再出战;确实没有角色可上就再发一次 ready,会照常出战。")
-                return [Action(type="click_text", text="取消", reason="人数未满,先交回模型")]
+                if self.prepare.short_ok == node:
+                    ok = find(boxes, "^确认$")
+                    self._ready_at = time.monotonic()      # 接下来是出战过场,不问模型
+                    x, y = (float(ok.x), float(ok.y)) if ok is not None else UNDERSTAFFED_CONFIRM
+                    return [Action(type="click", x=x, y=y, reason="模型看过人数未满的提示后仍决定出战")]
+                self.prepare.understaffed[node] = self.prepare.deployed
+                self._notice = "上次点出战时" + understaffed_note(self.prepare.deployed).removeprefix("没有出战:") + "。"
+                cancel = find(boxes, "^取消$")
+                x, y = (float(cancel.x), float(cancel.y)) if cancel is not None else UNDERSTAFFED_CANCEL
+                return [Action(type="click", x=x, y=y, reason="人数未满,先交回模型")]
             case "previous_run":
                 page = result_page(boxes)
                 self._result_tries = self._result_tries + 1 if page == self._result_page else 1

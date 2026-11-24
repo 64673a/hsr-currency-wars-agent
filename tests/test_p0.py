@@ -126,23 +126,27 @@ def box(text, x=0.5, y=0.5):
 
 
 class Game:
-    """只认几下操作的假游戏:点出战(人数没满时)弹确认框;按 F 加经验到下一级。"""
+    """只认几下操作的假游戏:点出战(人数没满时)弹确认框;按 F 加经验到下一级。
+    按钮位置是 S2 实机的;hidden_buttons 模拟弹出动画:框弹出后前几眼只读到提示文字、读不到按钮。"""
 
-    def __init__(self, *, seats_full: bool, level: int = 5):
+    def __init__(self, *, seats_full: bool, level: int = 5, hidden_buttons: int = 0):
         self.seats_full = seats_full
         self.level = level
         self.dialog = False
         self.started = False
         self.clicks: list[tuple[float, float]] = []
+        self.hidden_buttons = hidden_buttons
+        self.hidden = 0
 
     def click(self, x, y):
         self.clicks.append((round(x, 3), round(y, 3)))
         if (round(x, 3), round(y, 3)) == (0.946, 0.694):
             self.dialog = not self.seats_full
             self.started = self.seats_full
-        elif self.dialog and (round(x, 3), round(y, 3)) == (0.43, 0.572):    # 取消
+            self.hidden = self.hidden_buttons
+        elif self.dialog and (round(x, 3), round(y, 3)) == (0.401, 0.621):    # 取消
             self.dialog = False
-        elif self.dialog and (round(x, 3), round(y, 3)) == (0.57, 0.572):    # 确认
+        elif self.dialog and (round(x, 3), round(y, 3)) == (0.618, 0.621):    # 确认
             self.dialog, self.started = False, True
 
     def key(self, k):
@@ -155,8 +159,11 @@ class Game:
     def ocr(self, image, *a, **k):
         out = [box(f"Lv.{self.level}", 0.15, 0.84), box("商店", 0.845, 0.909)]
         if self.dialog:
-            out += [box("可出战角色人数未达上限，是否确认出战？", 0.498, 0.473), box("取消", 0.43, 0.572),
-                    box("确认", 0.57, 0.572)]
+            out.append(box("可出战角色人数未达上限，是否确认出战？", 0.498, 0.473))
+            if self.hidden:
+                self.hidden -= 1
+            else:
+                out += [box("取消", 0.401, 0.621), box("确认", 0.618, 0.621)]
         return out
 
 
@@ -177,6 +184,30 @@ def test_understaffed_ready_is_cancelled_then_respected():
     r = ex.run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
     assert r.ready and game.started
     assert all("本局不再提示" not in str(c) for c in game.clicks)
+
+
+def test_understaffed_cancel_when_buttons_not_read_yet():
+    """2026-11-24 那局 2-1:框刚弹出时读不到按钮,点了 S1 的位置 (0.43, 0.572),取消没点上、却报「已点取消」。
+    现在等按钮出来;一直读不到就点 S2 实测位置,并核对框关了。"""
+    for hidden in (2, 99):
+        game = Game(seats_full=False, hidden_buttons=hidden)
+        ex = executor(game)
+        ex.deployed = "6/7"
+        r = ex.run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
+        assert not r.ready and not game.started and not game.dialog and "已点取消" in r.results[-1]
+
+
+def test_understaffed_recheck_when_model_changed_lineup():
+    """模型看过「上场 6/7」的提示后想补人,补完还是没满(人数变了):再取消、再告诉它;人数没变再发出战才确认。"""
+    game = Game(seats_full=False)
+    ex = executor(game)
+    ex.deployed = "6/7"
+    ex.run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
+    ex.deployed = "5/7"
+    r = ex.run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
+    assert not r.ready and not game.started and "上场 5/7" in r.results[-1]
+    r = ex.run([Action(type="ready")], [box("商店", 0.845, 0.909)], None)
+    assert r.ready and game.started
 
 
 def test_ready_with_full_seats_is_unchanged():
@@ -263,17 +294,22 @@ def test_boss_preparation_waits_for_controls_before_opening_crystals(tmp_path):
     assert sim.state == "spot"
 
 
-def test_deploy_confirm_reflex_cancels_first(tmp_path):
-    pages = {"dlg": [("可出战角色人数未达上限，是否确认出战？", 0.498, 0.473), ("取消", 0.43, 0.572),
-                     ("确认", 0.57, 0.572), ("本局不再提示", 0.45, 0.53)]}
+def test_deploy_confirm_reflex_never_decides_for_the_model(tmp_path):
+    """主循环单独看到「人数未达上限」框时一律取消、告诉模型(2026-11-24 那局 2-1:原来第二次看到就自动确认,
+    模型没看到提示就 6/7 出战了);只有执行器已经按模型的决定点过确认、没点下去时才补点确认。"""
+    pages = {"dlg": [("可出战角色人数未达上限，是否确认出战？", 0.498, 0.473), ("取消", 0.401, 0.621),
+                     ("确认", 0.618, 0.621), ("本局不再提示", 0.513, 0.558)]}
     sim = Sim(pages, "dlg", lambda s, a: None)
     r = runner_for(sim, tmp_path)
     r._node = "1-4"
+    r.prepare.deployed = "6/7"
     boxes = FakeOcr(sim)(sim.grab().image)
-    first = r.reflex("deploy_confirm", None, boxes, {}, set())
-    assert [a.text for a in first] == ["取消"] and "人数未达上限" in r._notice
-    second = r.reflex("deploy_confirm", None, boxes, {}, set())
-    assert [a.text for a in second] == ["确认"]
+    for _ in range(2):
+        acts = r.reflex("deploy_confirm", None, boxes, {}, set())
+        assert [(a.x, a.y) for a in acts] == [(0.401, 0.621)] and "上场 6/7" in r._notice
+    r.prepare.short_ok = "1-4"
+    acts = r.reflex("deploy_confirm", None, boxes, {}, set())
+    assert [(a.x, a.y) for a in acts] == [(0.618, 0.621)] and r._ready_at > 0
 
 
 # ---------------------------------------------------------------- 界面错判
