@@ -63,6 +63,26 @@ def test_close_episode_keeps_summary_with_long_ops(tmp_path):
     assert len(line) <= MAX_LINE and line.endswith("小结:这一回合补前台,下回合升 5 级") and "操作:…" in line
 
 
+def test_hack_replace_takes_old_mod_off(tmp_path):
+    """改选骇入效果(「确认更换」)时银狼身上原来的骇客改件被换下,新的进装备栏(2026-11-19 那局 1-8、3-2)。"""
+    from cwagent.brain.screen_agent import Episode
+    from cwagent.orchestrator.loop import Runner, Trace
+
+    from .test_loop import FakeBrain
+
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False)
+    for item in ("骇客改件", "折叠小刀"):
+        r.ledger.equip("银狼LV.999", item)
+    r.episode = Episode(id=1, key=("hack", "1-1"), screen="hack", node="1-1", role="chooser", max_turns=4)
+    r.episode.done = ["点击「数据拷贝仪LV.1」", "点击「确认选择」"]
+    r.close_episode()
+    assert r.ledger.equipped["银狼LV.999"] == ["骇客改件", "折叠小刀"]      # 首次选择不动
+    r.episode = Episode(id=2, key=("hack", "1-8"), screen="hack", node="1-8", role="chooser", max_turns=4)
+    r.episode.done = ["点击「数据拷贝仪LV.2」", "点击「确认更换」"]
+    r.close_episode()
+    assert r.ledger.equipped["银狼LV.999"] == ["折叠小刀"]
+
+
 def test_drag_item_clears_target_equipment(tmp_path):
     from cwagent.brain.screen_agent import Action
     from cwagent.orchestrator.loop import Runner, Trace

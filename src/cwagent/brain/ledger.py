@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ..vision.equipment import HACK_MOD
+
 MAX_LINE = 600       # 本局经历每条最长
 MAX_DIRECTION = 800
 LESSONS_TITLE = "## 相关经验(程序按经验的触发条件和当前局面挑的原文;可能不完整或有错,结合局面判断)"
@@ -151,15 +153,21 @@ class RunLedger:
 
     def equip(self, role: str, item: str, combine=None) -> None:
         """程序执行 equip 成功后记一笔。一个角色最多穿 3 件(规则卡),多出来的说明前面的记录已经过期,只留最近 3 件。
-        combine(a, b) 给出两件简易装备合成的进阶装备:角色身上已有一件简易装备时,再装一件会直接合成(维护者 2026-11-18)。"""
+        combine(a, b) 给出两件简易装备合成的进阶装备:角色身上已有一件简易装备时,再装一件会直接合成(维护者 2026-11-18)。
+        骇客改件穿上后显示在银狼头像左上角,不占这 3 件,身上只有一件。"""
         items = self.equipped.setdefault(role, [])
+        if item == HACK_MOD:
+            if item not in items:
+                items.append(item)
+            return
         for i, have in enumerate(items):
             product = combine(have, item) if combine else None
             if product:
                 items[i] = product
                 return
         items.append(item)
-        del items[:-3]
+        while sum(i != HACK_MOD for i in items) > 3:
+            items.remove(next(i for i in items if i != HACK_MOD))
 
     def unequip(self, role: str | None = None, *, item: str | None = None) -> None:
         """删除指定的穿戴记录；拆装目标不明时清空全部记录。"""

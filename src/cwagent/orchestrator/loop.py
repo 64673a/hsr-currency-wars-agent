@@ -51,7 +51,15 @@ from .entry import EntryNavigator
 from .battle_watch import BattleWatcher
 from .macros import companion_of_bubble, find_orbs, open_crystals, read_companions, survey_plane
 from ..vision.boxes import item_slots
-from ..vision.equipment import cancel_point, family, find_compose_confirm, privilege_confirm, privilege_options, privilege_panel
+from ..vision.equipment import (
+    HACK_MOD,
+    cancel_point,
+    family,
+    find_compose_confirm,
+    privilege_confirm,
+    privilege_options,
+    privilege_panel,
+)
 from . import situation
 from .pending import PendingDecision
 from .prepare import REST, READY_DEFERRED, PrepareExecutor, PrepareResult
@@ -1400,6 +1408,10 @@ class Runner:
                 self.ledger.add_fact(f"主角光环 {picked[0]}{role}({ep.node or '节点未知'} 选择):{picked[1]}")
         if ep.screen == "mentor":
             self._mentor_until = 0.0
+        if ep.screen == "hack" and any("确认更换" in d for d in ep.done):
+            # 改选骇入效果:银狼身上原来的骇客改件被换下,新的进装备栏,要重新穿(2026-11-19 那局 1-8、3-2 实机)
+            for role in list(self.ledger.equipped):
+                self.ledger.unequip(role, item=HACK_MOD)
         if ep.screen == "difficulty":
             return
         # 本局经历里留一行:程序记录的做了什么 + 模型自己写的回合小结(没写就用它最后的判断开头)

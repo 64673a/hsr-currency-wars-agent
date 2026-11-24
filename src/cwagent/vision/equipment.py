@@ -11,6 +11,10 @@
 格子里有没有东西和认出是什么分开判断(2026-11-19):原来认不出就当空格、读到这里为止,开出星核猎手后
 发放的剧本装备(右下角带羁绊角标)排到第 1 格时,整个装备栏被读成「空」,合成也被误报成没成功(2026-11-18 那局)。
 现在有没有东西看格子的方框边线,认不出的照样占一格、报「认不出」;比图标时右下角的角标不参与比较。
+
+骇客改件(2026-11-24):银狼LV.999 的骇入效果选完是一件「骇客改件」,先进装备栏,拖给银狼才生效。官方装备数据里
+没有它,原来一直报「认不出」,模型不知道是什么,常常整局没穿(2026-11-16、11-24 两局)。它们右下角都有同一个白色
+「C」形银狼徽标(LV.3 是橙底),按这个角标认,名字统一报「骇客改件」;具体是哪一件,本局经历里骇入效果那一行有。
 """
 
 from __future__ import annotations
@@ -45,6 +49,10 @@ SCRIPT_BADGE_SCORE = 0.75
 # 欢愉的【阿哈装备】右下角是粉色面具角标(2026-11-19 那局 2-5、3-2 的以太钻头、轮滑鞋,原来被当成特权的 V)。
 # 样本只有两张:两张互相 0.89~1.00,剧本装备和普通装备最高 0.59
 AHA_BADGE = CONFIRM.with_name("aha-badge.png")
+# 骇客改件右下角的银狼徽标,取自 2026-11-19 那局 1-8 的数据拷贝仪LV.2。数据拷贝仪、病毒防火墙、炫酷墨镜(含 LV.3 橙底)、
+# 破解芯片共 24 格 0.86~0.98,其他装备(含剧本装备、阿哈装备)最高 0.44
+HACK_BADGE = CONFIRM.with_name("hack-badge.png")
+HACK_MOD = "骇客改件"
 PRIVILEGE = "·特权"
 # 特权版和普通版的官方图标是同一张图,区别只在格子外面套的那层边框(维护者 2026-11-16 从活动页的
 # card-border-*.svg 看出来):特权边框的右下角多一个白色 V,普通边框没有。样张存在 assets/borders/,
@@ -73,6 +81,7 @@ class Item:
     privileged: bool = False   # 右下角有 V:特权版,效果翻倍
     scripted: bool = False    # 右下角有星核猎手角标
     aha: bool = False         # 右下角有欢愉的面具角标:阿哈装备
+    hacked: bool = False      # 右下角有银狼徽标:骇客改件,拖给银狼LV.999 才生效
 
 
 def cell_center(index: int) -> tuple[float, float]:
@@ -110,6 +119,7 @@ class EquipmentReader:
         self.categories = categories or {}
         self.script_badge = cv2.imread(str(SCRIPT_BADGE), cv2.IMREAD_GRAYSCALE)
         self.aha_badge = cv2.imread(str(AHA_BADGE), cv2.IMREAD_GRAYSCALE)
+        self.hack_badge = cv2.imread(str(HACK_BADGE), cv2.IMREAD_GRAYSCALE)
         self.templates: dict[str, list[np.ndarray]] = {}
         for p in sorted(Path(templates_dir).glob("*.png")):
             t = cv2.imread(str(p), cv2.IMREAD_UNCHANGED)
@@ -165,6 +175,10 @@ class EquipmentReader:
         """在格子右下角匹配阿哈装备的面具角标。"""
         return self._badge(cell, self.aha_badge)
 
+    def has_hack_badge(self, cell: np.ndarray) -> bool:
+        """在格子右下角匹配骇客改件的银狼徽标。"""
+        return self._badge(cell, self.hack_badge)
+
     @staticmethod
     def _badge(cell: np.ndarray, template: np.ndarray | None) -> bool:
         if template is None:
@@ -211,6 +225,9 @@ class EquipmentReader:
             if not occupied(img, cx, cy):
                 break
             cell = img[cy - HALF:cy + HALF, cx - HALF:cx + HALF]
+            if self.has_hack_badge(cell):      # 官方装备里没有骇客改件,不用比图标
+                items.append(Item(index, x, y, None, HACK_MOD, hacked=True))
+                continue
             key, score, _ = self.identify(cell)
             scripted = self.has_script_badge(cell)
             aha = not scripted and self.has_aha_badge(cell)
@@ -291,7 +308,8 @@ def format_items(items: list[Item], coords: bool = False) -> str:
         text = f"{i.index}号 {i.name or '认不出'}"
         if i.privileged:
             text += "·特权(效果翻倍)"
-        category = "星核猎手剧本装备" if i.scripted else "阿哈装备" if i.aha else i.category
+        category = ("拖给银狼LV.999才生效" if i.hacked else "星核猎手剧本装备" if i.scripted
+                    else "阿哈装备" if i.aha else i.category)
         if category:
             text += f"({category})"
         return text + (f" ({i.x:.3f},{i.y:.3f})" if coords else "")

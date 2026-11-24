@@ -401,19 +401,21 @@ def real_bar(name: str) -> Image.Image:
 @pytest.mark.parametrize("name, count", [("scripted-5.jpg", 5), ("scripted-first.jpg", 3), ("emblem-1.jpg", 1),
                                          ("empty-curtain.jpg", 0), ("empty-stars.jpg", 0)])
 def test_real_bar_occupancy(tmp_path, name, count):
-    """有没有东西看方框,和认不认得出无关:没有模板时照样数对件数,空格(幕布、星空背景)不算。"""
+    """有没有东西看方框,和认不认得出无关:没有模板时照样数对件数,空格(幕布、星空背景)不算。
+    骇客改件按角标认,不靠模板。"""
     items = EquipmentReader(tmp_path, {}).read(real_bar(name))
-    assert [i.index for i in items] == list(range(1, count + 1)) and all(i.name is None for i in items)
+    assert [i.index for i in items] == list(range(1, count + 1)) and all(i.name is None or i.hacked for i in items)
 
 
 def test_scripted_equipment_in_first_slot():
     """2026-11-18 那局 1-9:开出星核猎手发的剧本装备(武器大师,右下角带羁绊角标)排到第 1 格,
-    原来读到它就停,整个装备栏成了「空」、合成被误报没成功。第 3 格是知识库里没有的东西,报认不出。"""
+    原来读到它就停,整个装备栏成了「空」、合成被误报没成功。第 3 格是骇客改件(破解芯片LV.1)。"""
     r = EquipmentReader(REAL / "templates", REAL_NAMES)
-    assert [i.name for i in r.read(real_bar("scripted-first.jpg"))] == ["武器大师", "斩首行动", None]
+    assert [i.name for i in r.read(real_bar("scripted-first.jpg"))] == ["武器大师", "斩首行动", "骇客改件"]
     items = r.read(real_bar("scripted-5.jpg"))
-    assert [i.name for i in items] == ["光能电池", "和平手枪", "折叠小刀", "杀红眼", None]
+    assert [i.name for i in items] == ["光能电池", "和平手枪", "折叠小刀", "杀红眼", "骇客改件"]   # 第 5 格炫酷墨镜LV.1
     assert [i.scripted for i in items] == [False, False, False, True, False]
+    assert [i.hacked for i in items] == [False, False, False, False, True]
     assert [i.name for i in r.read(real_bar("emblem-1.jpg"))] == ["持续伤害星徽"]    # 星徽图标铺满整格
 
 
@@ -438,3 +440,36 @@ def test_aha_equipment_is_not_privileged():
     img = Image.new("RGB", (960, 540))
     img.paste(Image.open(REAL / "scripted-boots.png"), (860, 85))
     assert [(i.aha, i.scripted) for i in r.read(img)] == [(False, True)]       # 剧本装备的角标不算阿哈
+
+
+def small_bar(name: str) -> Image.Image:
+    img = Image.new("RGB", (960, 540))
+    img.paste(Image.open(REAL / name), (860, 85))
+    return img
+
+
+def test_hack_mods():
+    """银狼骇入效果选出来的骇客改件:官方装备数据里没有,按右下角的银狼徽标认(2026-11-24 那局病毒防火墙LV.1
+    一直报认不出、整局没穿)。数据拷贝仪LV.2、病毒防火墙LV.1、炫酷墨镜LV.3(橙底徽标)都取自实机。"""
+    r = EquipmentReader(REAL / "templates", REAL_NAMES, {"350201": "简易装备", "350208": "简易装备"})
+    items = r.read(real_bar("hack-copier.jpg"))
+    assert [(i.name, i.hacked, i.privileged) for i in items] == [("骇客改件", True, False)]
+    assert format_items(items) == "1号 骇客改件(拖给银狼LV.999才生效)"
+    items = r.read(small_bar("hack-firewall.png"))
+    assert [i.name for i in items] == ["轮滑鞋", "轮滑鞋", "光能电池", "骇客改件"]
+    assert [i.hacked for i in items] == [False, False, False, True]
+    assert [(i.name, i.hacked) for i in r.read(small_bar("hack-shades-lv3.png"))] == [("骇客改件", True)]
+    for fixture in ("aha-drill.png", "aha-skates.png", "scripted-boots.png"):   # 别的角标不算
+        assert not any(i.hacked for i in r.read(small_bar(fixture)))
+
+
+def test_ledger_hack_mod_outside_three_slots():
+    """骇客改件显示在银狼头像左上角,不占 3 件装备的位置;身上只有一件(2026-11-19 那局 1-8、3-2 截图)。"""
+    from cwagent.brain.ledger import RunLedger
+
+    ledger = RunLedger()
+    for item in ("骇客改件", "折叠小刀", "斩首行动", "武器大师", "骇客改件"):
+        ledger.equip("银狼LV.999", item)
+    assert ledger.equipped["银狼LV.999"] == ["骇客改件", "折叠小刀", "斩首行动", "武器大师"]
+    ledger.equip("银狼LV.999", "杀红眼")
+    assert ledger.equipped["银狼LV.999"] == ["骇客改件", "斩首行动", "武器大师", "杀红眼"]
