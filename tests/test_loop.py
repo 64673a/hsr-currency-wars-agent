@@ -554,9 +554,14 @@ def test_every_step_records_its_timing(tmp_path):
     runner.run(RunOptions(max_steps=5))
     steps = [json.loads(x) for x in (tmp_path / "run" / "steps.jsonl").read_text(encoding="utf-8").splitlines()]
     timings = [s["timing"] for s in steps]
-    assert all(set(t) == {"total", "model", "battle", "program", "ocr", "settle", "actions"} for t in timings)
+    assert all({"total", "model", "battle", "program", "ocr", "settle", "actions", "start"} <= set(t) for t in timings)
     assert timings[0]["ocr"][0] >= 1 and timings[0]["actions"][0][0] == "click"
     assert [a[0] for a in timings[1]["actions"]] == ["click_text"]
+    # 和录像对齐用:开始时刻带日期、毫秒和时区;问模型、每个操作记距这一步开始的秒数(2026-11-24)
+    from datetime import datetime
+    assert datetime.fromisoformat(timings[0]["start"]).tzinfo is not None and "." in timings[0]["start"]
+    assert "model_at" not in timings[0] and timings[1]["model_at"] >= 0
+    assert all(len(a) == 3 and a[2] >= 0 for t in timings for a in t["actions"])
     text = report.render(tmp_path / "run")
     assert "程序秒" in text and "- 用时 " in text
     # 模型时间按这一轮全部请求算(查资料、重问的几次),不只是最后一次的 latency_s

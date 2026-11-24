@@ -18,6 +18,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
@@ -358,7 +359,9 @@ class Runner:
         self._step_started = 0.0
         self._ocr_mark = (0, 0.0)                              # 这一步开始时 OCR 的累计次数和用时
         self._settle_stats = [0, 0.0]                          # 这一步等画面静止的次数和用时
-        self._action_times: list[list] = []                    # 这一步每个操作的用时 [类型, 秒]
+        self._step_wall = 0.0                                  # 这一步开始的墙上时间(time.time())
+        self._model_at: float | None = None                    # 这一步开始问模型的时刻(距这一步开始的秒数)
+        self._action_times: list[list] = []                    # 这一步每个操作 [类型, 用时秒, 开始时刻(距这一步开始的秒数)]
         trace.stamp = self._stamp_timing
 
     # ---------------------------------------------------------------- 截图
@@ -395,13 +398,21 @@ class Runner:
 
     def _begin_timing(self) -> None:
         self._step_started = time.monotonic()
+        self._step_wall = time.time()
+        self._model_at = None
         self._ocr_mark = (self.ocr.calls, self.ocr.seconds)
         self._settle_stats = [0, 0.0]
         self._action_times = []
 
+    def _since_step(self) -> float:
+        """距这一步开始的秒数(墙上时钟,和录像对齐用)。"""
+        return round(time.time() - self._step_wall, 2)
+
     def _stamp_timing(self, record: dict) -> None:
         """写记录前补上这一步的耗时:整步、模型、战斗,剩下的算程序自己的;另记识别、等画面静止的次数和用时,
-        以及每个操作的用时。提速前后对比用(2026-11-20:一局 108 分钟里备战回合的程序部分占了 25 分钟)。"""
+        以及每个操作的用时。提速前后对比用(2026-11-20:一局 108 分钟里备战回合的程序部分占了 25 分钟)。
+        另记这一步开始的本地时间(带日期、毫秒、时区)、开始问模型和每个操作开始的时刻(距这一步开始的秒数):
+        录像是手动开的,按 OBS 日志里「Recording Start」的时刻换算到录像里的位置(2026-11-24)。"""
         if not self._step_started or "timing" in record or "step" not in record:
             return
         total = time.monotonic() - self._step_started
@@ -416,7 +427,10 @@ class Runner:
             "ocr": [self.ocr.calls - self._ocr_mark[0], round(self.ocr.seconds - self._ocr_mark[1], 2)],
             "settle": [self._settle_stats[0], round(self._settle_stats[1], 2)],
             "actions": self._action_times,
+            "start": datetime.fromtimestamp(self._step_wall).astimezone().isoformat(timespec="milliseconds"),
         }
+        if self._model_at is not None:
+            record["timing"]["model_at"] = self._model_at
 
     def _earlier(self, image) -> Image.Image | None:
         """settle 返回 image 时,比它早 STABLE_GAP 截的那一帧(核对星级用)。"""
@@ -668,6 +682,7 @@ class Runner:
         results = []
         for a in actions:
             started = time.monotonic()
+            at = self._since_step()
             try:
                 results.append(self._raw(a, boxes))
             except UserInterrupt:
@@ -675,7 +690,7 @@ class Runner:
             except Exception as e:  # noqa: BLE001 - 单个操作失败记录下来,交给下一步重新判断
                 results.append(f"{action_text(a)}:失败({e})")
             finally:
-                self._action_times.append([a.type, round(time.monotonic() - started, 2)])
+                self._action_times.append([a.type, round(time.monotonic() - started, 2), at])
         return results
 
     # ---------------------------------------------------------------- 局面识别
@@ -1663,6 +1678,8 @@ class Runner:
                                      episode=ep.id, turn=ep.turns + 1, shot=record.get("shot"),
                                      vision=record.get("vision"), model=profile.name if profile else "",
                                      external=bool(profile and profile.format == "external"))
+        if self._model_at is None:
+            self._model_at = self._since_step()
         try:
             decision = self.brain.decide(ep, text, recalled, on_delta=pending.feed)
         finally:
