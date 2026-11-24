@@ -67,6 +67,32 @@ def test_lookup_and_pin(tmp_path, advisor):
     assert "攻略没有开启" in off.lookup("guides", "刃")
 
 
+def test_assigned_guide(tmp_path, advisor):
+    """开局指定的攻略(维护者 2026-11-24):一开始就挂着、标成用户指定,模型在 guide 字段换不了也取消不了;
+    关掉查攻略时也能指定(查别的攻略照样不行)。系统提示词里挂攻略那句换成「按它打」。"""
+    from cwagent.brain.screen_agent import PIN_FREE, system_prompt
+
+    g = advisor.find("G3")
+    r = Runner(None, FakeBrain({}), Trace(tmp_path / "run"), ocr=object(), log=lambda m: None, settle=False,
+               guides=None, guide=g)
+    assert r._guide is g and "用户指定的攻略(这局按它打)" in r.ledger.render() and "G3「刃攻略」" in r.ledger.render()
+    r.choose_guide("G1", 1)
+    r.choose_guide("无", 2)
+    assert r._guide is g and "用户指定的攻略" in r.ledger.render()
+    assert "攻略没有开启" in r.lookup("guides", "景元")
+
+    free, _ = system_prompt("", [], advisor)
+    pinned, _ = system_prompt("", [], advisor, g)
+    assert PIN_FREE in free and "{pin}" not in free
+    assert PIN_FREE not in pinned and "这局用户指定按攻略 G3「刃攻略」打" in pinned
+
+    from cwagent.config import ConfigError
+    from cwagent.orchestrator.session import find_guide
+    assert find_guide("刃攻略", advisor) is g
+    with pytest.raises(ConfigError):
+        find_guide("G9", advisor)
+
+
 def test_lookup_is_its_own_tool(monkeypatch):
     """查资料是和 act 并列的工具(放在 act 里时模型一次都没用过):查完结果直接交回,模型接着回答,
     这几轮不算无效输出;一轮最多查 LOOKUPS 次,查满了还在查就按一次无效输出算。"""

@@ -91,7 +91,7 @@ class RunStore:
         live = self._live(meta) and not info["outcome"]
         profile = meta.get("profile") or (d.name.split("_", 1)[1] if "_" in d.name else "")
         return {"id": d.name, "profile": profile, "model": meta.get("model", ""), "effort": meta.get("effort"),
-                "agent": meta.get("agent"),
+                "agent": meta.get("agent"), "guide": meta.get("guide"),
                 "difficulty": meta.get("difficulty", ""), "started_at": meta.get("started_at") or _started(d.name),
                 "ended_at": meta.get("ended_at"), "result": meta.get("result"), "live": live, **info}
 
@@ -232,10 +232,10 @@ class PlayController:
                 "stopping": self.running and self._stop.is_set(), "agent": BRIDGE.status(), **state}
 
     def start(self, *, model: str | None = None, effort: str | None = None, difficulty: str | None = None,
-              max_steps: int = 700, rounds: int = 1) -> dict[str, Any]:
+              max_steps: int = 700, rounds: int = 1, guide: str | None = None) -> dict[str, Any]:
         """连续打 rounds 局(每局一个记录目录),中途可以停止。"""
         from ..orchestrator.loop import RunOptions
-        from ..orchestrator.session import build_runner, run_session
+        from ..orchestrator.session import build_runner, find_guide, run_session
 
         if self.device_factory is None:
             raise RuntimeError("只能在装有游戏的 Windows 上开始对局")
@@ -249,6 +249,8 @@ class PlayController:
         external = model == EXTERNAL
         if not external:
             cfg.endpoint(model) if model else cfg.role_endpoint("tactical")   # 模型配置有误时在这里就报错
+        if guide:
+            find_guide(guide)   # 攻略找不到时在这里就报错
         device = self.device_factory()
         if self._hotkey is None and sys.platform == "win32":
             from ..capture import windows as win
@@ -280,7 +282,7 @@ class PlayController:
                     break
                 runner = None
                 try:
-                    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, log=self._log)
+                    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, guide=guide, log=self._log)
                     with self._lock:
                         self._state.update(run_id=run_dir.name, profile=runner.brain.endpoint("default").name, round=i)
                     self._runner = runner      # MCP 的 lookup 工具按这一局的阵容查资料

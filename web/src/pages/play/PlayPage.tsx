@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
+import { Combobox } from '@/components/arc/combobox/combobox';
 import { CopyButton } from '@/components/arc/copy-button/copy-button';
 import { Input } from '@/components/arc/input/input';
 import { NumberField } from '@/components/arc/number-field/number-field';
@@ -9,7 +10,7 @@ import { Select } from '@/components/arc/select/select';
 import { Skeleton } from '@/components/arc/skeleton/skeleton';
 import {
   api, EFFORTS, effortName, enc, errorText, EXTERNAL_AGENT,
-  type ExternalAgent, type ModelProfile, type PlayStatus, type RunSummary,
+  type ExternalAgent, type GuideOption, type ModelProfile, type PlayStatus, type RunSummary,
 } from '@/lib/api';
 import page from '@/lib/page.module.css';
 import { useToast } from '@/lib/toast';
@@ -26,7 +27,7 @@ const PROFILE_EFFORT = 'profile';
 
 /** 开局表单上次改过的值,存在这个浏览器里(和主题一样),刷新或打完一局后照旧;只记用户改过的项,没改的跟着配置走 */
 const START_KEY = 'cw-start';
-type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number };
+type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number; guide?: string };
 
 function loadPrefs(): StartPrefs {
   try {
@@ -106,6 +107,8 @@ function StartForm({ onChange }: { onChange: () => void }) {
   const [effort, setEffort] = useState(PROFILE_EFFORT);
   const [difficulty, setDifficulty] = useState('');
   const [rounds, setRounds] = useState(1);
+  const [guides, setGuides] = useState<GuideOption[]>([]);
+  const [guide, setGuide] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -123,6 +126,14 @@ function StartForm({ onChange }: { onChange: () => void }) {
         setRounds(Number.isInteger(saved.rounds) && saved.rounds! >= 1 && saved.rounds! <= 50 ? saved.rounds! : 1);
       })
       .catch((e) => setError(errorText(e)));
+    // 知识库没同步时没有攻略,不显示这一项;存下的攻略重新同步后没了就不指定
+    api<GuideOption[]>('/api/guides')
+      .then((gs) => {
+        setGuides(gs);
+        const saved = loadPrefs().guide;
+        setGuide(saved && gs.some((g) => g.id === saved) ? saved : '');
+      })
+      .catch(() => {});
   }, []);
 
   const pickModel = (v: string) => {
@@ -141,6 +152,10 @@ function StartForm({ onChange }: { onChange: () => void }) {
     setRounds(v);
     savePrefs({ rounds: v });
   };
+  const pickGuide = (v: string) => {
+    setGuide(v);
+    savePrefs({ guide: v });
+  };
 
   const profileEffort = effortName(models.find((m) => m.name === model)?.reasoning_effort);
   const mcp = `${window.location.origin}/mcp`;
@@ -150,7 +165,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
     setError('');
     try {
       const override = model !== EXTERNAL_AGENT && effort !== PROFILE_EFFORT ? effort : null;
-      await api('/api/play/start', { method: 'POST', body: { model: model || null, effort: override, difficulty: difficulty.trim() || null, rounds } });
+      await api('/api/play/start', { method: 'POST', body: { model: model || null, effort: override, difficulty: difficulty.trim() || null, rounds, guide: guide || null } });
       onChange();
     } catch (e) {
       setError(errorText(e));
@@ -177,6 +192,10 @@ function StartForm({ onChange }: { onChange: () => void }) {
         <Select label="思考强度"
           options={[{ value: PROFILE_EFFORT, label: profileEffort ? `档案设置(${profileEffort})` : '档案设置' }, ...EFFORTS]}
           value={effort} onValueChange={pickEffort} />
+      )}
+      {guides.length > 0 && (
+        <Combobox label="攻略" placeholder="不指定" emptyMessage="没有对上的攻略" value={guide} onValueChange={pickGuide}
+          options={guides.map((g) => ({ value: g.id, label: `${g.code} ${g.title}`, keywords: [...g.carries, ...g.traits] }))} />
       )}
       <div className={page.fields2}>
         <Input label="难度" placeholder="A8-1" value={difficulty} onChange={(e) => pickDifficulty(e.target.value)} />

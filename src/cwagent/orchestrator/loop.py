@@ -268,7 +268,7 @@ class Runner:
                  on_companion: Callable[[str, str], None] | None = None, log: Callable[[str], None] = print,
                  difficulty: str = "A8-1", portraits: Portraits | None = None, prepare_turns: int = 3,
                  settle: bool = True, equipment: EquipmentBook | None = None, guides: GuideAdvisor | None = None,
-                 trailblazer: str = ""):
+                 trailblazer: str = "", guide: Guide | None = None):
         self.device = device
         self.difficulty = difficulty
         self.brain = brain
@@ -297,6 +297,10 @@ class Runner:
         self.prepare.roster = self._role_costs
         self.guides = guides
         self._guide: Guide | None = None                       # 模型挂上的攻略(guide 字段)
+        self._assigned = guide                                 # 用户开局指定的攻略:一直挂着,模型换不了
+        if guide is not None:
+            self._guide = guide
+            self.ledger.guide, self.ledger.guide_fixed = card(guide), True
         self._lookups: list[dict] = []                         # 模型查过、还没写进决策记录的资料
         if hasattr(brain, "lookup_handler"):
             brain.lookup_handler = self.lookup
@@ -920,8 +924,13 @@ class Runner:
                                                           if g else "取消了挂着的攻略"))
 
     def choose_guide(self, key: str, n: int) -> None:
-        """模型在 guide 字段填的攻略编号(或标题):挂上,全文一直显示在当前状态里;填「无」取消。"""
+        """模型在 guide 字段填的攻略编号(或标题):挂上,全文一直显示在当前状态里;填「无」取消。
+        用户开局指定了攻略时不换。"""
         key = key.strip()
+        if self._assigned is not None:
+            if key.upper() != self._assigned.code:
+                self.log(f"[{n}] 这局按指定的攻略 {self._assigned.code} 打,不换成「{key}」")
+            return
         if key in ("无", "none", "None", ""):
             if self._guide is not None:
                 self.log(f"[{n}] 模型取消了挂着的攻略")

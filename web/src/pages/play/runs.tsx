@@ -23,7 +23,8 @@ export function runSetup(run: RunSummary) {
   const who = run.profile === EXTERNAL_AGENT
     ? [run.agent && run.agent !== UNNAMED_AGENT ? run.agent : run.profile, run.model]
     : [run.profile];
-  return [...who, run.effort && `思考强度:${effortName(run.effort)}`, run.difficulty].filter(Boolean).join(' · ');
+  return [...who, run.effort && `思考强度:${effortName(run.effort)}`, run.difficulty, run.guide && `攻略 ${run.guide}`]
+    .filter(Boolean).join(' · ');
 }
 
 export function runProgress(run: RunSummary) {

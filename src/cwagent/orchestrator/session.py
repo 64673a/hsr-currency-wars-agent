@@ -9,10 +9,10 @@ from pathlib import Path
 
 from .. import paths, proc
 from ..brain.screen_agent import ScreenAgent, load_rules
-from ..config import AppConfig, Effort, ModelEndpoint
+from ..config import AppConfig, ConfigError, Effort, ModelEndpoint
 from ..knowledge.companions import CompanionBook
 from ..knowledge.equipment import EquipmentBook
-from ..knowledge.guides import GuideAdvisor
+from ..knowledge.guides import Guide, GuideAdvisor
 from ..knowledge.index import NameIndex
 from ..llm.external import EXTERNAL
 from ..memory import MemoryStore
@@ -70,14 +70,24 @@ def load_guides() -> GuideAdvisor | None:
     return GuideAdvisor(paths.knowledge_db())
 
 
+def find_guide(key: str, guides: GuideAdvisor | None = None) -> Guide:
+    """开局指定的攻略(id、编号或标题)。和「允许查攻略」无关:关掉查攻略也能指定一篇照着打。"""
+    book = guides or load_guides()
+    g = book.find(key) if book else None
+    if g is None:
+        raise ConfigError(f"找不到攻略 {key}:知识库还没同步,或者重新同步后没有这篇了")
+    return g
+
+
 def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Effort | None = None,
-                 log=print) -> tuple[Runner, Path]:
+                 guide: str | None = None, log=print) -> tuple[Runner, Path]:
     eps = endpoints(cfg, model, effort)
     endpoint = eps["default"]
     memories = [m for m, _ in MemoryStore().all()]
     guides = load_guides() if cfg.agent.use_guides else None
+    assigned = find_guide(guide, guides) if guide else None
     index = NameIndex(paths.knowledge_db(), guide_stats=cfg.agent.use_guides)
-    brain = ScreenAgent(eps, index, memories, load_rules(paths.root() / "knowledge" / "rules.md"), guides)
+    brain = ScreenAgent(eps, index, memories, load_rules(paths.root() / "knowledge" / "rules.md"), guides, assigned)
     # 目录名只留字母数字和 . - _(档案名可能带空格,对局记录接口不认)
     run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{re.sub(r'[^\w.-]+', '-', endpoint.name)}"
     trace = Trace(run_dir)
@@ -87,10 +97,11 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     runner = Runner(device, brain, trace, ocr=ocr, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),
                     on_companion=lambda name, desc: book.record(name, desc=desc, screenshot=str(run_dir / "shots")),
                     prepare_turns=cfg.agent.max_tactical_calls_per_stage, equipment=load_equipment(),
-                    guides=guides, trailblazer=cfg.agent.trailblazer_name)
+                    guides=guides, trailblazer=cfg.agent.trailblazer_name, guide=assigned)
     trace.meta(profile=endpoint.name, model=endpoint.model, effort=endpoint.reasoning_effort,
                session_id=endpoint.session_id, ocr=ocr.backend,
                difficulty=cfg.agent.difficulty, roles={k: v.name for k, v in eps.items() if k != "default"},
+               guide=f"{assigned.code} {assigned.title}" if assigned else None,
                started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                # 跑这局的进程:网页据此判断对局还在不在跑(崩溃、被结束时写不进结束时间)
                pid=os.getpid(), pid_started=proc.started(os.getpid()))
@@ -116,8 +127,8 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
 
 
 def play(cfg: AppConfig, device, *, model: str | None = None, effort: Effort | None = None, max_steps: int = 600,
-         log=print, stop=None) -> str:
-    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, log=log)
+         guide: str | None = None, log=print, stop=None) -> str:
+    runner, run_dir = build_runner(cfg, device, model=model, effort=effort, guide=guide, log=log)
     log(f"对局记录:{run_dir}")
     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes)
     if stop is not None:

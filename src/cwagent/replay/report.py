@@ -249,7 +249,8 @@ def render(run: Path) -> str:
         model += f"({' · '.join(x for x in extra if x)})" if any(extra) else ""
     lines = [f"# 对局报表 {run.name}", "",
              f"- 模型 {model},难度 {meta.get('difficulty') or '?'},"
-             f"结果 {result}",
+             + (f"指定攻略 {meta['guide']}," if meta.get("guide") else "")
+             + f"结果 {result}",
              f"- 走到 {rows[-1].node if rows else '?'},战斗 {len(fights)} 场,胜 {sum(r.result.startswith('胜') for r in fights)} 场;"
              f"{usage}"]
     timed = [r["timing"] for r in steps if r.get("timing")]

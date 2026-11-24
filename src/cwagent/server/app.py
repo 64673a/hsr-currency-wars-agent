@@ -32,6 +32,7 @@ from ..config import (
     mask_key,
 )
 from ..knowledge import KIND_NAMES, KINDS, KnowledgeDB
+from ..knowledge.guides import GuideAdvisor
 from ..llm.external import AgentBook
 from ..memory import Cues, Memory, MemoryError, MemoryStore, format_for_prompt, recall
 from ..stream import LiveStream
@@ -83,6 +84,7 @@ class PlayIn(BaseModel):
     difficulty: str | None = None
     max_steps: int = 700
     rounds: int = Field(1, ge=1, le=50)
+    guide: str | None = Field(None, max_length=200)   # 按这篇攻略打(id);不填由模型自己查
 
 
 class ExternalAgentIn(BaseModel):
@@ -166,9 +168,17 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     def play_start(body: PlayIn) -> dict[str, Any]:
         try:
             return player.start(model=body.model, effort=body.effort, difficulty=body.difficulty,
-                                max_steps=body.max_steps, rounds=body.rounds)
+                                max_steps=body.max_steps, rounds=body.rounds, guide=body.guide)
         except (RuntimeError, ConfigError) as e:
             raise _bad(e, 409) from None
+
+    @app.get("/api/guides")
+    def guide_options() -> list[dict[str, Any]]:
+        """开局可以指定的攻略,编号和模型看到的一致。"""
+        if not kdb.exists():
+            return []
+        return [{"id": g.id, "code": g.code, "title": g.title, "carries": g.carries, "traits": g.traits}
+                for g in GuideAdvisor(kdb.path).guides]
 
     @app.post("/api/play/stop")
     def play_stop() -> dict[str, Any]:

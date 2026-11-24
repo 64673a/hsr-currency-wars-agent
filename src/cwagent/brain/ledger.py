@@ -77,6 +77,7 @@ class RunLedger:
     items: dict[int, tuple[str, list[str]]] = field(default_factory=dict)   # 备战席几号的道具:(名字, 看过的选项)
     environment: str = ""                                    # 这局选的投资环境(给攻略打分用)
     guide: str = ""                                          # 当前参考的攻略(卡片文字)
+    guide_fixed: bool = False                                # 攻略是用户开局指定的(模型换不了)
     nodes: dict[str, NodeRecord] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)         # 本局经历,只追加
     facts: list[str] = field(default_factory=list)           # 整局已知事实:程序从界面读到的(开局、位面节点与词条、拿到的投资)
@@ -203,7 +204,8 @@ class RunLedger:
         """当前状态的各小节:(标题, 内容)。"""
         out = []
         if self.guide:
-            out.append(("你挂上的攻略(在 guide 字段改,填「无」取消)", self.guide))
+            out.append(("用户指定的攻略(这局按它打)" if self.guide_fixed else "你挂上的攻略(在 guide 字段改,填「无」取消)",
+                        self.guide))
         if self.equipped:
             out.append(("程序给角色穿上的装备(只记程序执行的 equip;用拆装道具、卖掉角色后会清掉,其他变化以截图为准)",
                         "\n".join(f"- {r}:{'、'.join(items)}" for r, items in self.equipped.items())))

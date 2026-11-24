@@ -204,12 +204,22 @@ export interface ExternalAgent {
   last_seen: string;
 }
 
+/** 开局可以指定的攻略,编号和模型看到的一致 */
+export interface GuideOption {
+  id: string;
+  code: string;
+  title: string;
+  carries: string[];
+  traits: string[];
+}
+
 export interface RunSummary {
   id: string;
   profile: string;
   model: string;
   effort: string | null;   // 外部 agent 的是用户填的,不限于 EFFORTS
   agent: string | null;    // 外部 agent 的对局:是哪个 agent 在下
+  guide: string | null;    // 开局指定的攻略(编号和标题)
   difficulty: string;
   started_at: string;
   ended_at: string | null;

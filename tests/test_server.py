@@ -52,6 +52,8 @@ def test_status_and_knowledge(env):
     assert client.get("/api/knowledge/nope").status_code == 404
     assert client.get("/api/knowledge/roles/9999").status_code == 404
     assert client.get("/templates/roles/1001.png").content == b"png"
+    guides = client.get("/api/guides").json()   # 开局可指定的攻略,编号和模型看到的一致
+    assert guides and guides[0]["code"] == "G1" and {"id", "title", "carries", "traits"} <= set(guides[0])
 
 
 def test_sync_job(env):
@@ -158,6 +160,7 @@ def test_without_knowledge(tmp_path):
                      memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"))
     client = TestClient(app)
     assert client.get("/api/knowledge/roles").json() == {"total": 0, "items": [], "synced": False}
+    assert client.get("/api/guides").json() == []
     assert client.get("/api/status").json()["knowledge"] == {}
     assert "前端还没有构建" in client.get("/").json()["message"]
 

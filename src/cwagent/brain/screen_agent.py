@@ -303,7 +303,18 @@ class Decision:
     requests: int = 0
 
 
-def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str, dict[str, Memory]]:
+PIN_FREE = "可以把一篇攻略挂上:act 的 guide 字段填攻略编号,这篇的全文会一直显示在当前状态里,之后不用再查;换一篇填新的编号,填「无」取消。"
+
+
+def pin_text(assigned=None) -> str:
+    """查资料一节里挂攻略的说明。用户开局指定了攻略(2026-11-24 维护者要求)时这局按它打,模型换不了。"""
+    if assigned is None:
+        return PIN_FREE
+    return (f"这局用户指定按攻略 {assigned.code}「{assigned.title}」打,全文一直显示在当前状态里:前期、中期、最终阵容,"
+            "站位,装备和推荐投资策略以它为准;商店没刷到它要的角色时先用手上的角色过渡,往它的阵容靠。这局 guide 字段不起作用。")
+
+
+def system_prompt(rules: str, memories: list[Memory], guides=None, assigned=None) -> tuple[str, dict[str, Memory]]:
     """系统提示词和经验编号。这里只放目录(编号、类型和标题;来源、置信度留在记忆库,2026-11-20 维护者),全量、整局不变;攻略全文由模型用 lookup 取(2026-11-18),
     经验原文在触发条件对上时由程序附上(2026-11-19 维护者:经验可以主动推),其余也能用 lookup 查。"""
     codes = {f"M{i}": m for i, m in enumerate((m for m in memories if m.status == "approved"), start=1)}
@@ -311,17 +322,18 @@ def system_prompt(rules: str, memories: list[Memory], guides=None) -> tuple[str,
     guide_list = "\n".join(f"- {g.code} {g.title[:30]} 主 C {'、'.join(g.carries) or '?'}" for g in guides.guides) \
         if guides is not None and guides.guides else "(攻略没有开启)"
     text = ((PROMPTS / "system.md").read_text(encoding="utf-8").replace("{memories}", catalog)
-            .replace("{guides}", guide_list).replace("{lookups}", str(LOOKUPS)).replace("{rules}", rules))
+            .replace("{guides}", guide_list).replace("{pin}", pin_text(assigned)).replace("{lookups}", str(LOOKUPS))
+            .replace("{rules}", rules))
     return text, codes
 
 
 class ScreenAgent:
     def __init__(self, endpoints: ModelEndpoint | dict[str, ModelEndpoint], index: NameIndex,
-                 memories: list[Memory], rules: str, guides=None):
+                 memories: list[Memory], rules: str, guides=None, assigned=None):
         self.endpoints = endpoints if isinstance(endpoints, dict) else {"default": endpoints}
         self.index = index
         self.memories = memories
-        self.system, self.memory_codes = system_prompt(rules, memories, guides)
+        self.system, self.memory_codes = system_prompt(rules, memories, guides, assigned)
         self.memory_by_id = {m.id: code for code, m in self.memory_codes.items()}
         # 查资料:Runner 接上(what, query) -> 结果文字;没接时 lookup 工具返回「没有可查的资料」
         self.lookup_handler: Callable[[str, str], str] | None = None
