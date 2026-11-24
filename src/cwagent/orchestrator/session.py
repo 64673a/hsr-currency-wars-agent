@@ -81,7 +81,7 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     # 目录名只留字母数字和 . - _(档案名可能带空格,对局记录接口不认)
     run_dir = paths.runs_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}_{re.sub(r'[^\w.-]+', '-', endpoint.name)}"
     trace = Trace(run_dir)
-    (run_dir / "system.md").write_text(brain.system, encoding="utf-8")
+    (run_dir / "system.md").write_text(endpoint.with_prompt(brain.system), encoding="utf-8")
     book = CompanionBook()
     ocr = Ocr(device=cfg.ocr.device, adapter=cfg.ocr.adapter)
     runner = Runner(device, brain, trace, ocr=ocr, log=log, difficulty=cfg.agent.difficulty, portraits=load_portraits(),

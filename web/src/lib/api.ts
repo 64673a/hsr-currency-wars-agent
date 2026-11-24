@@ -87,6 +87,8 @@ export interface ModelProfile {
   extra_headers: Record<string, string>;
   tool_mode: 'native' | 'json';
   timeout_seconds: number;
+  /** 接在系统提示词末尾 */
+  extra_prompt: string;
 }
 
 export interface ModelInfo {

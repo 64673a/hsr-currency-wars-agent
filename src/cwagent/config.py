@@ -72,6 +72,7 @@ class ModelProfile(BaseModel):
     reasoning_effort: Effort | None = None
     tool_mode: Literal["native", "json"] = "native"
     timeout_seconds: float = Field(default=300, gt=0)
+    extra_prompt: str = Field(default="", max_length=4000)   # 接在系统提示词末尾(如要 DeepSeek 用中文思考)
 
     _name = field_validator("name")(classmethod(lambda cls, v: _check_name(v)))
 
@@ -117,6 +118,7 @@ class ModelEndpoint(BaseModel):
     tool_mode: Literal["native", "json"] = "native"
     timeout_seconds: float = 300
     anthropic_version: str = DEFAULT_ANTHROPIC_VERSION
+    extra_prompt: str = ""
     session_id: str = Field(default_factory=lambda: str(uuid4()), exclude=True)
 
     @classmethod
@@ -129,8 +131,13 @@ class ModelEndpoint(BaseModel):
             extra_headers={**provider.extra_headers, **profile.extra_headers},
             reasoning_effort=profile.reasoning_effort,
             tool_mode=profile.tool_mode, timeout_seconds=profile.timeout_seconds,
-            anthropic_version=provider.anthropic_version,
+            anthropic_version=provider.anthropic_version, extra_prompt=profile.extra_prompt,
         )
+
+    def with_prompt(self, system: str) -> str:
+        """系统提示词接上档案追加的提示词。追加的内容整局不变,接在末尾不影响前面的缓存。"""
+        extra = self.extra_prompt.strip()
+        return f"{system}\n\n{extra}" if extra else system
 
 
 class Roles(BaseModel):

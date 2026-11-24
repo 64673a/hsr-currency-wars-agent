@@ -866,12 +866,17 @@ models:
     extra_headers: {}               # 与厂商的 extra_headers 合并
     tool_mode: native               # native | json
     timeout_seconds: 300
+    extra_prompt: ""                # 接在系统提示词末尾,只对这个档案生效
 
 roles:                              # 各决策层用哪个模型档案;留空则用第一个
   tactical: my-model
 ```
 
 调用时把厂商和模型档案合并成一个完整的调用参数(`ModelEndpoint`),LLM 接入层只认这个。
+
+**追加提示词**(2026-11-24 维护者要求):档案的 `extra_prompt` 接在系统提示词末尾(空一行),用于纠正某个模型自己的习惯,
+例如 DeepSeek 常用英文思考,追加「思考过程全部用中文」。在 `complete()` 里统一接上,所有决策层、连通性测试都带;
+对局目录的 `system.md` 写的是主档案接上后的全文,`requests/` 里存的是没接的(回放时接回放用的档案自己的)。
 
 **思考强度**(2026-11-17):各家写法已经比较统一(2026-11-17 查 DeepSeek、Claude 文档):OpenAI 格式发 `reasoning_effort`,
 Anthropic 格式发 `output_config.effort`,`none` 在 Anthropic 格式下发 `thinking: {type: disabled}`。档位由厂商解释:

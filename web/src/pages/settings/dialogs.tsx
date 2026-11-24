@@ -140,7 +140,7 @@ export function ModelPicker({ provider, existing, onClose, onSaved }: { provider
       try {
         await api('/api/models', {
           method: 'POST',
-          body: { name, provider: provider.name, model: id, max_tokens: null, reasoning_effort: null, extra_body: {}, extra_headers: {}, tool_mode: 'native', timeout_seconds: 300 },
+          body: { name, provider: provider.name, model: id, max_tokens: null, reasoning_effort: null, extra_body: {}, extra_headers: {}, tool_mode: 'native', timeout_seconds: 300, extra_prompt: '' },
         });
         names.add(name);
       } catch (e) {
@@ -205,6 +205,7 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
   const [timeoutS, setTimeoutS] = useState(model?.timeout_seconds ?? 300);
   const [extraBody, setExtraBody] = useState(pretty(model?.extra_body));
   const [extraHeaders, setExtraHeaders] = useState(pretty(model?.extra_headers));
+  const [extraPrompt, setExtraPrompt] = useState(model?.extra_prompt ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const available = useProviderModels(provider || null);
@@ -223,6 +224,7 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
         extra_headers: parseJsonObject(extraHeaders, '额外请求头'),
         tool_mode: toolMode,
         timeout_seconds: timeoutS,
+        extra_prompt: extraPrompt.trim(),
       };
       if (model) await api(`/api/models/${enc(model.name)}`, { method: 'PUT', body });
       else await api('/api/models', { method: 'POST', body });
@@ -266,6 +268,7 @@ export function ModelDialog({ model, providers, onClose, onSaved }: { model: Mod
             <NumberField label="max_tokens(0 为不限)" min={0} max={200000} step={1000} locale="zh-CN" formatOptions={{ useGrouping: false }} value={maxTokens} onValueChange={setMaxTokens} />
             <NumberField label="超时" suffix=" 秒" min={10} max={3600} step={30} value={timeoutS} onValueChange={setTimeoutS} />
           </div>
+          <Textarea label="追加提示词" placeholder="思考过程全部用中文。" rows={3} maxLength={4000} value={extraPrompt} onChange={(e) => setExtraPrompt(e.target.value)} />
           <Textarea label="额外请求参数" placeholder='{"thinking": {"type": "enabled"}}' rows={4} value={extraBody} onChange={(e) => setExtraBody(e.target.value)} />
           <Textarea label="额外请求头" placeholder='{"X-Header": "value"}' rows={2} value={extraHeaders} onChange={(e) => setExtraHeaders(e.target.value)} />
           {error && <Alert tone="danger" title="没有保存">{error}</Alert>}

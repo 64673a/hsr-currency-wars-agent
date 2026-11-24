@@ -37,6 +37,7 @@ models:
     #   thinking: {type: enabled}
     tool_mode: native                  # native | json(不支持工具调用的模型用 json)
     timeout_seconds: 300
+    # extra_prompt: 思考过程全部用中文。  # 接在系统提示词末尾,只对这个档案生效
 
 # 各决策层使用的模型档案名;留空则用第一个模型档案。
 roles:

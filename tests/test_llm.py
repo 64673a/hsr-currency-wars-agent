@@ -62,6 +62,21 @@ def test_openai_request_and_parse():
     assert resp.stop_reason == "tool_calls" and resp.model == "m-2026"
 
 
+def test_extra_prompt_appended_to_system():
+    """模型档案追加的提示词接在系统提示词末尾,两种格式都一样;没填时不动系统提示词。"""
+    ok = {"choices": [{"finish_reason": "stop", "message": {"content": "好"}}]}
+    http, seen = mock(lambda req, n: httpx.Response(200, json=ok))
+    complete(profile("openai", extra_prompt="  思考过程用中文。\n"), "系统", "用户", http=http)
+    complete(profile("openai"), "系统", "用户", http=http)
+    assert json.loads(seen[0].content)["messages"][0] == {"role": "system", "content": "系统\n\n思考过程用中文。"}
+    assert json.loads(seen[1].content)["messages"][0] == {"role": "system", "content": "系统"}
+
+    reply = {"content": [{"type": "text", "text": "好"}], "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}}
+    http, seen = mock(lambda req, n: httpx.Response(200, json=reply))
+    complete(profile("anthropic", extra_prompt="思考过程用中文。"), "系统", "用户", http=http)
+    assert json.loads(seen[0].content)["system"][0]["text"] == "系统\n\n思考过程用中文。"
+
+
 def test_openai_think_tag_and_bad_arguments():
     reply = {"usage": {"prompt_tokens": 9, "prompt_cache_hit_tokens": 8},
              "choices": [{"finish_reason": "tool_calls", "message": {

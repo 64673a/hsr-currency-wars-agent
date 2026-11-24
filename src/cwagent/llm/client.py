@@ -109,6 +109,7 @@ def complete(profile: ModelEndpoint, system: str, messages: str | list[Message],
     tools = tools or []
     if isinstance(messages, str):
         messages = [Message(role="user", content=messages)]
+    system = profile.with_prompt(system)
     if profile.format == "external":
         return BRIDGE.complete(system, messages, tools, model=profile.model)
     adapter = _ADAPTERS[profile.format]
