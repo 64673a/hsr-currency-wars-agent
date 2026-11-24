@@ -1,6 +1,6 @@
 [project]
 name = "cwagent"
-version = "0.1.0"
+version = "0.2.0"
 description = "LLM agent that plays Honkai: Star Rail's Currency Wars mode"
 readme = "README.md"
 requires-python = ">=3.11"
