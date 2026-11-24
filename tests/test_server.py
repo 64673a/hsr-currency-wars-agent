@@ -231,7 +231,15 @@ def test_ocr_settings_and_speed_test(env, monkeypatch):
     assert r.status_code == 200 and r.json()["ocr"]["device"] == "cpu" and store.load().ocr.device == "cpu"
     assert ocr._SETTINGS["device"] == "cpu"
     assert client.put("/api/config", json={"ocr": {"device": "npu"}}).status_code == 422
-    info = client.get("/api/ocr").json()
-    assert info == {"adapters": [], "auto": None}          # 不是 Windows:没有可选的显卡
+    # 可选的显卡跟运行的机器有关(CI 的 Windows 虚拟机也能列出一块),这里换成固定的
+    from cwagent.server import app as server_app
+    from cwagent.vision.adapters import Adapter
+
+    monkeypatch.setattr(server_app, "directml_available", lambda: False)
+    assert client.get("/api/ocr").json() == {"adapters": [], "auto": None}
+    monkeypatch.setattr(server_app, "directml_available", lambda: True)
+    monkeypatch.setattr(server_app, "list_adapters", lambda: [Adapter(0, "核显", 512), Adapter(1, "独显", 16000)])
+    assert client.get("/api/ocr").json() == {"adapters": [{"name": "核显", "memory_mb": 512},
+                                                          {"name": "独显", "memory_mb": 16000}], "auto": "独显"}
     test = client.post("/api/ocr/test", json={"device": "cpu"}).json()
     assert test["backend"] == "CPU" and test["ms"] > 0
