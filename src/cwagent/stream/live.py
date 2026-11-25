@@ -80,11 +80,11 @@ def mediamtx_config(s: StreamSettings, encoder: str, ffmpeg: Path) -> dict:
     }
 
 
-def pick_encoder(ffmpeg: Path, preferred: str) -> str:
-    """auto 时依次试 NVIDIA、AMD 的硬件编码器,都不行用 CPU 编码。"""
+def pick_encoder(ffmpeg: Path, preferred: str, candidates: tuple[str, ...] = ("h264_nvenc", "h264_amf")) -> str:
+    """auto 时依次试 NVIDIA、AMD 的硬件编码器(录像用 HEVC 的),都不行用 CPU 编码。"""
     if preferred != "auto":
         return preferred
-    for encoder in ("h264_nvenc", "h264_amf"):
+    for encoder in candidates:
         try:
             r = subprocess.run([str(ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
                                 "-i", "color=black:s=640x360:r=30", "-frames:v", "5", "-c:v", encoder, "-f", "null", "-"],

@@ -120,6 +120,13 @@ def _process_name(hwnd) -> str:
         _CloseHandle(handle)
 
 
+def window_pid(hwnd) -> int:
+    """窗口所属进程的进程号(录游戏声音用)。"""
+    pid = wt.DWORD()
+    _GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
 @dataclass
 class WindowInfo:
     hwnd: int

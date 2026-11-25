@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Alert } from '@/components/arc/alert/alert';
 import { Button } from '@/components/arc/button/button';
+import { Checkbox } from '@/components/arc/checkbox/checkbox';
 import { Combobox } from '@/components/arc/combobox/combobox';
 import { CopyButton } from '@/components/arc/copy-button/copy-button';
 import { Input } from '@/components/arc/input/input';
@@ -27,7 +28,7 @@ const PROFILE_EFFORT = 'profile';
 
 /** 开局表单上次改过的值,存在这个浏览器里(和主题一样),刷新或打完一局后照旧;只记用户改过的项,没改的跟着配置走 */
 const START_KEY = 'cw-start';
-type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number; guide?: string };
+type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number; guide?: string; record?: boolean };
 
 function loadPrefs(): StartPrefs {
   try {
@@ -109,6 +110,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
   const [rounds, setRounds] = useState(1);
   const [guides, setGuides] = useState<GuideOption[]>([]);
   const [guide, setGuide] = useState('');
+  const [record, setRecord] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -124,6 +126,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
         setEffort(saved.effort && efforts.includes(saved.effort) ? saved.effort : PROFILE_EFFORT);
         setDifficulty(typeof saved.difficulty === 'string' ? saved.difficulty : cfg.agent.difficulty);
         setRounds(Number.isInteger(saved.rounds) && saved.rounds! >= 1 && saved.rounds! <= 50 ? saved.rounds! : 1);
+        setRecord(saved.record === true);
       })
       .catch((e) => setError(errorText(e)));
     // 知识库没同步时没有攻略,不显示这一项;存下的攻略重新同步后没了就不指定
@@ -156,6 +159,10 @@ function StartForm({ onChange }: { onChange: () => void }) {
     setGuide(v);
     savePrefs({ guide: v });
   };
+  const pickRecord = (v: boolean) => {
+    setRecord(v);
+    savePrefs({ record: v });
+  };
 
   const profileEffort = effortName(models.find((m) => m.name === model)?.reasoning_effort);
   const mcp = `${window.location.origin}/mcp`;
@@ -165,7 +172,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
     setError('');
     try {
       const override = model !== EXTERNAL_AGENT && effort !== PROFILE_EFFORT ? effort : null;
-      await api('/api/play/start', { method: 'POST', body: { model: model || null, effort: override, difficulty: difficulty.trim() || null, rounds, guide: guide || null } });
+      await api('/api/play/start', { method: 'POST', body: { model: model || null, effort: override, difficulty: difficulty.trim() || null, rounds, guide: guide || null, record } });
       onChange();
     } catch (e) {
       setError(errorText(e));
@@ -201,6 +208,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
         <Input label="难度" placeholder="A8-1" value={difficulty} onChange={(e) => pickDifficulty(e.target.value)} />
         <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={pickRounds} />
       </div>
+      <Checkbox label="录像" checked={record} onCheckedChange={(v) => pickRecord(v === true)} />
       {error && <Alert tone="danger" title="没有开始">{error}</Alert>}
       <Button className={styles.startButton} onClick={start} loading={busy} disabled={!model}>开始对局</Button>
     </div>

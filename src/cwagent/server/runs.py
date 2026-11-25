@@ -232,8 +232,8 @@ class PlayController:
                 "stopping": self.running and self._stop.is_set(), "agent": BRIDGE.status(), **state}
 
     def start(self, *, model: str | None = None, effort: str | None = None, difficulty: str | None = None,
-              max_steps: int = 700, rounds: int = 1, guide: str | None = None) -> dict[str, Any]:
-        """连续打 rounds 局(每局一个记录目录),中途可以停止。"""
+              max_steps: int = 700, rounds: int = 1, guide: str | None = None, record: bool = False) -> dict[str, Any]:
+        """连续打 rounds 局(每局一个记录目录),中途可以停止。record 时每局各录一个 video.mp4。"""
         from ..orchestrator.loop import RunOptions
         from ..orchestrator.session import build_runner, find_guide, run_session
 
@@ -290,7 +290,7 @@ class PlayController:
                         self._apply_agent()    # 连打多局时,后面几局沿用同一个 agent
                     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes, stop=stop)
                     try:
-                        result = run_session(runner, opts, log=self._log)
+                        result = run_session(runner, opts, record=record, log=self._log)
                     finally:
                         self._runner = None
                     outcome, runner = runner.outcome, None

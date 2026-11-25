@@ -1052,8 +1052,10 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 - `report.md`(2026-11-16,第 20.9 节):整局结束时生成的逐节点报表,`cwagent runs report <对局>` 也能对旧对局重算。
 - 和录像对齐(2026-11-24):`steps.jsonl` 每步的 `timing.start` 是这一步开始的本地时间(带日期、毫秒和时区),
   `timing.model_at` 是开始问模型、`timing.actions` 每项第三个数是这个操作开始的时刻(都是距这一步开始的秒数)。
-  录像用 OBS 手动开,OBS 日志(`%APPDATA%\obs-studio\logs\`)里每次「Recording Start」都记了毫秒级本地时间和录像文件名,
+  开局勾选录像时(13.2),`meta.json` 的 `video.started_at` 是录像第 0 帧的时刻(同一格式),相减就是录像里的位置。
+  用 OBS 手动录时,OBS 日志(`%APPDATA%\obs-studio\logs\`)里每次「Recording Start」都记了毫秒级本地时间和录像文件名,
   两边同在游戏机上、时钟一致,相减就是录像里的位置;录像中途不要暂停。
+- `video.mp4`(2026-11-25,13.2):开局勾选录像时的整局录像,带游戏声音;`video.log` 是录像 ffmpeg 的报错。
 
 反射层的步骤也记录(`decision` 为空),这样回放是完整的。
 
@@ -1114,6 +1116,29 @@ ffmpeg gfxcapture(Windows Graphics Capture,按 StarRail.exe 抓窗口;窗口被�
 - **进程**:MediaMTX 绑在 Windows 作业对象上(`KILL_ON_JOB_CLOSE`),serve 被强制结束时它和 ffmpeg 一起退出。
 - **编码参数**:不用 B 帧(WebRTC 不支持),关键帧间隔 2 秒,CBR 20 Mbps(`config.yaml` 的 `stream` 段可调帧率、码率、编码器)。NVENC 收 RGB 输入时自行转 YUV 并在码流里标 BT.601 有限范围,浏览器显示颜色正确;`scale_d3d11` 在这台机器上建纹理失败,不用。
 - **实测**(RTX 5060 Ti,Windows 和 Mac 都走 Wi-Fi):经后端转发的完整链路收到 1920x1080、约 60fps,丢包 0,首帧 1.5–2.5 秒(含拉起 ffmpeg)。端到端延迟没有测。AMF 和 libx264 两条路径没有实机验证。
+
+### 13.2 对局录像(2026-11-25,录像本身已在 Windows 实机验证,整局联调待验证)
+
+做视频用(维护者要求;参考 currency-wars-agent 的工作台录像)。开局表单勾「录像」或 `cwagent play --record`,
+`run_session` 开局前开始录、结束时停,一局一个 `runs/<对局>/video.mp4`,连打多局时每局各一个。录不了时照常开局,原因写进 `meta.json` 的 `video.error`。
+
+```
+画面:ffmpeg gfxcapture(按窗口句柄抓客户区)→ setparams 改颜色标记 → hevc_nvenc(固定质量 cq 24,60fps 恒定帧率,关键帧 2 秒)
+      → 分片 mp4(进程被强制结束也能播已录部分)
+声音:进程回环(ActivateAudioInterfaceAsync「VAD\Process_Loopback」,只录 StarRail.exe 及其子进程)→ 48kHz 16bit PCM
+      → 结束时 ffmpeg 合进 mp4(AAC 192k,按两边开始的时刻差对齐),合成失败时 PCM 留在 video.pcm
+```
+
+- **和实时画面分开**:实时画面按需拉起、码率为直播调的,录像另起一个 ffmpeg;Windows Graphics Capture 允许同一窗口有多个抓取。
+- **对时**:ffmpeg 每 0.1 秒输出一次进度,「墙钟 − 已输出时长」取前 20 次的最小值,就是第 0 帧的时刻,写进 `meta.json` 的
+  `video.started_at`(和 `timing.start` 同一格式),开录时就写,对局中途崩了也对得上。误差来自编码延迟,几十毫秒。
+- **没声音的时段**:系统不送数据,落后墙钟 200 毫秒以上就补静音,PCM 的长度一直跟着真实时间,和视频不会越录越偏。
+- **颜色标记**:抓到的是 RGB 帧,NVENC 按 BT.601 有限范围转 YUV 并在码流里这么标,但 mp4 的 `colr` 盒子默认照抄帧上的
+  RGB 矩阵、全范围;按容器解码的剪辑软件会偏色。输出端的 `-colorspace` 对显存里的帧不起作用,改在滤镜里用 `setparams` 标记(实测码流和容器一致)。
+- **COM 用 ctypes 直接按虚表调用**,不引入 comtypes / pywin32;激活回调对象要同时声明 IAgileObject,否则激活失败。
+- **实测**(2026-11-25,RTX 5060 Ti,游戏在「列车补给」画面,在用户桌面会话里录 12 秒):开录 3 秒内拿到第 0 帧的时刻;
+  HEVC 1920x1080 60fps、静态画面约 1 Mbps;声音录到并合入(平均 −33 dB);停止加合成约 0.5 秒。
+  AMF 和 libx264 两条路径没有实机验证;两小时整局的文件大小、合成耗时、音画同步待第一次整局录像后核对。
 
 ---
 

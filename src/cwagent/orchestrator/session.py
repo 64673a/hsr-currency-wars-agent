@@ -108,12 +108,28 @@ def build_runner(cfg: AppConfig, device, *, model: str | None = None, effort: Ef
     return runner, run_dir
 
 
-def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
-    """跑完一局并把结果写进 meta.json。"""
+def run_session(runner: Runner, opts: RunOptions, *, record: bool = False, log=print) -> str:
+    """跑完一局并把结果写进 meta.json。record 时整局录像,存成对局目录里的 video.mp4(录不了不影响对局)。"""
     result = "error"
+    recorder = None
+    if record:
+        from ..stream.record import Recorder
+
+        recorder = Recorder(runner.trace.root, log=log)
+        reason = recorder.start()
+        if reason:
+            log(f"录像:没有开始({reason})")
+            runner.trace.meta(video={"error": reason})
+            recorder = None
+        else:
+            runner.trace.meta(video=recorder.stop_info())
     try:
         result = runner.run(opts)
     finally:
+        if recorder is not None:
+            info = recorder.stop()
+            log(f"录像:{runner.trace.root / info['file']}(声音 {info.get('audio')})")
+            runner.trace.meta(video=info)
         runner.trace.meta(result=result, outcome=runner.outcome, ended_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         runner.trace.close()
         try:
@@ -127,10 +143,10 @@ def run_session(runner: Runner, opts: RunOptions, *, log=print) -> str:
 
 
 def play(cfg: AppConfig, device, *, model: str | None = None, effort: Effort | None = None, max_steps: int = 600,
-         guide: str | None = None, log=print, stop=None) -> str:
+         guide: str | None = None, record: bool = False, log=print, stop=None) -> str:
     runner, run_dir = build_runner(cfg, device, model=model, effort=effort, guide=guide, log=log)
     log(f"对局记录:{run_dir}")
     opts = RunOptions(max_steps=max_steps, max_minutes=cfg.agent.max_run_minutes)
     if stop is not None:
         opts.stop = stop
-    return run_session(runner, opts, log=log)
+    return run_session(runner, opts, record=record, log=log)

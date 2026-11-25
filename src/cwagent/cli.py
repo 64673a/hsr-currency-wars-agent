@@ -714,6 +714,7 @@ def play_cmd(
         help="这一局的思考强度(" + " / ".join(EFFORTS) + "),默认用档案的设置")] = None,
     max_steps: Annotated[int, typer.Option(help="最多执行多少步")] = 600,
     guide: Annotated[str | None, typer.Option(help="按这篇攻略打(编号如 G12、id 或标题),默认不指定")] = None,
+    record: Annotated[bool, typer.Option("--record", help="整局录像(画面和游戏声音),存成对局目录里的 video.mp4")] = False,
 ) -> None:
     """在本机直接操作游戏,自动打一局(需在 Windows 上以管理员身份运行,游戏处于货币战争界面)。"""
     import sys
@@ -734,7 +735,7 @@ def play_cmd(
     hotkey = win.register_hotkey(["ctrl+alt+f10", "ctrl+alt+f9", "ctrl+shift+f10"], device.stop.set)
     typer.echo(f"停止:{hotkey.title() if hotkey else '快捷键注册失败,'}" + ("" if hotkey else "把鼠标甩到屏幕角落急停"))
     try:
-        play(ConfigStore().load(), device, model=model, effort=effort, max_steps=max_steps, guide=guide, stop=device.stop,
-             log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
+        play(ConfigStore().load(), device, model=model, effort=effort, max_steps=max_steps, guide=guide, record=record,
+             stop=device.stop, log=lambda m: typer.echo(time.strftime("[%H:%M:%S] ") + m))
     finally:
         device.close()

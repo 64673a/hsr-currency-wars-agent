@@ -85,6 +85,7 @@ class PlayIn(BaseModel):
     max_steps: int = 700
     rounds: int = Field(1, ge=1, le=50)
     guide: str | None = Field(None, max_length=200)   # 按这篇攻略打(id);不填由模型自己查
+    record: bool = False   # 每局录像,存在对局目录的 video.mp4
 
 
 class ExternalAgentIn(BaseModel):
@@ -168,7 +169,7 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     def play_start(body: PlayIn) -> dict[str, Any]:
         try:
             return player.start(model=body.model, effort=body.effort, difficulty=body.difficulty,
-                                max_steps=body.max_steps, rounds=body.rounds, guide=body.guide)
+                                max_steps=body.max_steps, rounds=body.rounds, guide=body.guide, record=body.record)
         except (RuntimeError, ConfigError) as e:
             raise _bad(e, 409) from None
 
