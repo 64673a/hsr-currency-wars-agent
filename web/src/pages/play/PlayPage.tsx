@@ -26,24 +26,57 @@ const POLL_MS = 2000;
 /** 开局时不改思考强度,用模型档案里的设置 */
 const PROFILE_EFFORT = 'profile';
 
-/** 开局表单上次改过的值,存在这个浏览器里(和主题一样),刷新或打完一局后照旧;只记用户改过的项,没改的跟着配置走 */
-const START_KEY = 'cw-start';
+/** 开局表单上次改过的值,存在后端:刷新、换浏览器、打完一局后照旧,外部 agent 用 start_run 开局时也按其中的录像和攻略;
+ *  只记用户改过的项,没改的跟着配置走 */
+const PREFS = '/api/play/prefs';
 type StartPrefs = { model?: string; effort?: string; difficulty?: string; rounds?: number; guide?: string; record?: boolean };
 
-function loadPrefs(): StartPrefs {
+/** 以前存在浏览器里的开局选项:后端还没有时搬过去 */
+const LEGACY_KEY = 'cw-start';
+
+function legacyPrefs(): StartPrefs {
   try {
-    const v = JSON.parse(localStorage.getItem(START_KEY) ?? '{}');
-    return v && typeof v === 'object' ? v : {};
+    const v = JSON.parse(localStorage.getItem(LEGACY_KEY) ?? '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
   } catch {
     return {};
   }
 }
 
-function savePrefs(patch: StartPrefs) {
+function dropLegacy() {
   try {
-    localStorage.setItem(START_KEY, JSON.stringify({ ...loadPrefs(), ...patch }));
+    localStorage.removeItem(LEGACY_KEY);
   } catch {
-    // 隐私模式下存不了,只影响下次打开
+    // 读不了 localStorage 时也没有旧值
+  }
+}
+
+/** 依次保存,连着改几次时后发的不会被先发的盖掉;返回存好的全部选项 */
+let saving: Promise<unknown> = Promise.resolve();
+function savePrefs(patch: StartPrefs): Promise<StartPrefs> {
+  const next = saving.then(() => api<StartPrefs>(PREFS, { method: 'PATCH', body: patch }));
+  saving = next.catch(() => {});
+  return next;
+}
+
+async function loadPrefs(): Promise<StartPrefs> {
+  const legacy = legacyPrefs();
+  let saved: StartPrefs;
+  try {
+    saved = await api<StartPrefs>(PREFS);
+  } catch {
+    return legacy;
+  }
+  if (Object.keys(saved).length || !Object.keys(legacy).length) {
+    dropLegacy();
+    return saved;
+  }
+  try {
+    const moved = await savePrefs(legacy);
+    dropLegacy();
+    return moved;
+  } catch {
+    return legacy;   // 后端不收时这次先用本地的,下次打开再搬
   }
 }
 
@@ -113,13 +146,14 @@ function StartForm({ onChange }: { onChange: () => void }) {
   const [record, setRecord] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
-    Promise.all([api<ModelProfile[]>('/api/models'), api<{ roles: Record<string, string | null>; agent: { difficulty: string } }>('/api/config')])
-      .then(([ms, cfg]) => {
+    const prefs = loadPrefs();
+    Promise.all([api<ModelProfile[]>('/api/models'), api<{ roles: Record<string, string | null>; agent: { difficulty: string } }>('/api/config'), prefs])
+      .then(([ms, cfg, saved]) => {
         setModels(ms);
         // 存下的值不再有效(档案删了、档位改了)就用配置里的默认
-        const saved = loadPrefs();
         const names = [...ms.map((m) => m.name), EXTERNAL_AGENT];
         const efforts: string[] = [PROFILE_EFFORT, ...EFFORTS.map((e) => e.value)];
         setModel(saved.model && names.includes(saved.model) ? saved.model : (cfg.roles.tactical ?? cfg.roles.default ?? ms[0]?.name ?? EXTERNAL_AGENT));
@@ -130,38 +164,40 @@ function StartForm({ onChange }: { onChange: () => void }) {
       })
       .catch((e) => setError(errorText(e)));
     // 知识库没同步时没有攻略,不显示这一项;存下的攻略重新同步后没了就不指定
-    api<GuideOption[]>('/api/guides')
-      .then((gs) => {
+    Promise.all([api<GuideOption[]>('/api/guides'), prefs])
+      .then(([gs, { guide: saved }]) => {
         setGuides(gs);
-        const saved = loadPrefs().guide;
         setGuide(saved && gs.some((g) => g.id === saved) ? saved : '');
       })
       .catch(() => {});
   }, []);
 
+  const save = (patch: StartPrefs) => {
+    savePrefs(patch).then(() => setSaveError(''), (e) => setSaveError(errorText(e)));
+  };
   const pickModel = (v: string) => {
     setModel(v);
-    savePrefs({ model: v });
+    save({ model: v });
   };
   const pickEffort = (v: string) => {
     setEffort(v);
-    savePrefs({ effort: v });
+    save({ effort: v });
   };
   const pickDifficulty = (v: string) => {
     setDifficulty(v);
-    savePrefs({ difficulty: v });
+    save({ difficulty: v });
   };
   const pickRounds = (v: number) => {
     setRounds(v);
-    savePrefs({ rounds: v });
+    save({ rounds: v });
   };
   const pickGuide = (v: string) => {
     setGuide(v);
-    savePrefs({ guide: v });
+    save({ guide: v });
   };
   const pickRecord = (v: boolean) => {
     setRecord(v);
-    savePrefs({ record: v });
+    save({ record: v });
   };
 
   const profileEffort = effortName(models.find((m) => m.name === model)?.reasoning_effort);
@@ -209,6 +245,7 @@ function StartForm({ onChange }: { onChange: () => void }) {
         <NumberField label="局数" min={1} max={50} value={rounds} onValueChange={pickRounds} />
       </div>
       <Checkbox label="录像" checked={record} onCheckedChange={(v) => pickRecord(v === true)} />
+      {saveError && <Alert tone="danger" title="选项没有保存">{saveError}</Alert>}
       {error && <Alert tone="danger" title="没有开始">{error}</Alert>}
       <Button className={styles.startButton} onClick={start} loading={busy} disabled={!model}>开始对局</Button>
     </div>

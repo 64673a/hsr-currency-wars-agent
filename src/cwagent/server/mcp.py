@@ -36,7 +36,7 @@ from ..llm.base import ImageInput
 from pydantic import ValidationError
 from ..config import ConfigError
 from ..llm.external import BRIDGE, EXTERNAL, AgentBook, Turn, agent_name
-from .runs import PlayController
+from .runs import PlayController, StartPrefs
 
 DEFAULT_WAIT = 50     # 低于常见客户端 60 秒的默认工具超时;地址上带 ?wait=秒数 可以调大
 MAX_WAIT = 3600
@@ -153,9 +153,25 @@ def _rules_text() -> str:
 
 
 class Tools:
-    def __init__(self, player: PlayController):
+    def __init__(self, player: PlayController, prefs: StartPrefs | None = None):
         self.player = player
+        self.prefs = prefs
         self.waiting = 0      # 正在等局面的 wait / act / start_run 调用数
+
+    def _saved_options(self) -> dict[str, Any]:
+        """网页开局表单上存的录像和攻略。录不录、按不按攻略由维护者在网页上定,不交给 agent 的模型,所以 start_run 没有这两个参数。
+        网页上给 API 模型选的模型、思考强度不套用(这局固定是外部 agent);局数不用(外部 agent 的局只打一局);
+        难度照旧:start_run 的参数优先,不填用设置里的。"""
+        saved = self.prefs.get() if self.prefs is not None else {}
+        guide = saved.get("guide") if isinstance(saved.get("guide"), str) else None
+        if guide:
+            from ..orchestrator.session import find_guide
+
+            try:
+                find_guide(guide)
+            except ConfigError:
+                guide = None   # 重新同步后没有这篇了:网页上这时也显示「不指定」,不因此开不了局
+        return {"record": saved.get("record") is True, "guide": guide or None}
 
     def _idle(self) -> str:
         st = self.player.status()
@@ -212,7 +228,8 @@ class Tools:
             return Observation("对局已经在进行。\n\n" + result, getattr(result, "images", []))
         difficulty = args.get("difficulty") or None
         try:
-            await anyio.to_thread.run_sync(lambda: self.player.start(model=EXTERNAL, difficulty=difficulty))
+            await anyio.to_thread.run_sync(
+                lambda: self.player.start(model=EXTERNAL, difficulty=difficulty, **self._saved_options()))
         except (RuntimeError, ConfigError) as e:
             raise ToolError(f"没能开始对局:{e}") from None
         result = await self._take(wait)
@@ -296,11 +313,11 @@ class Tools:
         return "已请求停止,当前操作做完后停下。"
 
 
-def create_mcp(player: PlayController,
-               agents: AgentBook | None = None) -> tuple[ASGIApp, Callable[[], AbstractAsyncContextManager[None]]]:
+def create_mcp(player: PlayController, agents: AgentBook | None = None,
+               prefs: StartPrefs | None = None) -> tuple[ASGIApp, Callable[[], AbstractAsyncContextManager[None]]]:
     """返回 /mcp 的 ASGI 应用,以及要在宿主应用 lifespan 里进入的上下文。
-    agents 记下连上来过的 agent,网页上给它们填模型和思考强度。"""
-    tools = Tools(player)
+    agents 记下连上来过的 agent,网页上给它们填模型和思考强度;prefs 是网页开局表单存下的选项,start_run 沿用其中的录像和攻略。"""
+    tools = Tools(player, prefs)
     handlers: dict[str, Callable[[dict[str, Any], float], Awaitable[str]]] = {
         t.name: getattr(tools, t.name) for t in TOOLS}
 

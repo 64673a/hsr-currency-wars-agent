@@ -92,7 +92,7 @@ def server(tmp_path):
     app = create_app(config_store=ConfigStore(tmp_path / "c.yaml"), knowledge_path=tmp_path / "none.sqlite",
                      templates_dir=tmp_path / "tpl", web_dist=tmp_path / "dist", runs_dir=tmp_path / "runs",
                      memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"), device_factory=None,
-                     agents_file=tmp_path / "agents.json")
+                     agents_file=tmp_path / "agents.json", prefs_file=tmp_path / "start_prefs.json")
     port = _free_port()
     srv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
@@ -175,6 +175,50 @@ def test_mcp_agent_param_and_settings(server):
         assert {a["name"] for a in httpx.get(api).json()} == {"codex", UNNAMED}
 
     asyncio.run(main())
+
+
+def test_start_run_uses_saved_record_and_guide(server, monkeypatch):
+    """外部 agent 用 start_run 开局时,录像和攻略按网页开局表单存下的来(漏洞:网页勾了录像,Claude Code 开的局没录);
+    网页给 API 模型选的模型、思考强度和局数不套用,难度照旧是参数优先。"""
+    import httpx
+    from mcp import Client
+
+    from cwagent.config import ConfigError
+    from cwagent.orchestrator import session
+    from cwagent.server.runs import PlayController
+
+    started: list[dict] = []
+
+    def fake_start(self, **kw):
+        started.append(kw)
+        return {}
+
+    def fake_find_guide(key, guides=None):
+        if key != "g1":
+            raise ConfigError(f"找不到攻略 {key}")
+
+    monkeypatch.setattr(PlayController, "start", fake_start)
+    monkeypatch.setattr(session, "find_guide", fake_find_guide)
+    api = f"http://127.0.0.1:{server}/api/play/prefs"
+
+    async def main():
+        async with Client(f"http://127.0.0.1:{server}/mcp?wait=1") as client:
+            await client.call_tool("start_run")   # 网页上什么都没选过:不录像、不指定攻略
+            prefs = {"model": "deepseek-flash", "effort": "max", "difficulty": "A8-20", "rounds": 3, "guide": "g1",
+                     "record": True}
+            assert httpx.patch(api, json=prefs).status_code == 200
+            await client.call_tool("start_run", {"difficulty": "A8-5"})
+            await client.call_tool("start_run")
+            httpx.patch(api, json={"guide": "gone"})   # 重新同步后没有这篇了:不指定,照常开局
+            await client.call_tool("start_run")
+
+    asyncio.run(main())
+    assert started == [
+        {"model": EXTERNAL, "difficulty": None, "record": False, "guide": None},
+        {"model": EXTERNAL, "difficulty": "A8-5", "record": True, "guide": "g1"},
+        {"model": EXTERNAL, "difficulty": None, "record": True, "guide": "g1"},
+        {"model": EXTERNAL, "difficulty": None, "record": True, "guide": None},
+    ]
 
 
 def test_agent_book(tmp_path):

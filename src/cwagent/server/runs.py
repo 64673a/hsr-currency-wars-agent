@@ -1,4 +1,4 @@
-"""对局记录(runs/ 目录)的读取,以及从网页启动 / 停止对局。"""
+"""对局记录(runs/ 目录)的读取,开局选项的保存,以及从网页启动 / 停止对局。"""
 
 from __future__ import annotations
 
@@ -157,6 +157,41 @@ class RunStore:
         if (d / folder).resolve() not in target.parents or not target.is_file():
             raise KeyError(name)
         return target
+
+
+class StartPrefs:
+    """网页开局表单上选的值(存在 data/start_prefs.json):网页点「开始」照着它填表,外部 agent 调 start_run 开局时
+    沿用其中的录像和攻略(11.9)。只记用户改过的项,没改的跟着配置走。文件很小,每次都重新读,手改了也马上生效。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            return self._load()
+
+    def update(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """只改给出的项;值为 None 的删掉(回到跟着配置走)。返回改完的全部选项。"""
+        with self._lock:
+            data = self._load()
+            for key, value in patch.items():
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            tmp.replace(self.path)
+            return data
 
 
 def default_device_factory() -> Callable[[], Any] | None:

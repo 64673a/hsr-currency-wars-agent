@@ -42,7 +42,7 @@ from ..vision.ocr import Ocr, directml_available, sample_frame
 from ..vision.ocr import configure as ocr_configure
 from .jobs import Job
 from .mcp import create_mcp
-from .runs import PlayController, RunStore
+from .runs import PlayController, RunStore, StartPrefs
 
 # 知识库类别 -> 模板图标目录
 ICON_DIRS = {"roles": "roles", "traits": "traits", "equipment": "equipment", "augments": "augments",
@@ -88,6 +88,16 @@ class PlayIn(BaseModel):
     record: bool = False   # 每局录像,存在对局目录的 video.mp4
 
 
+class StartPrefsIn(BaseModel):
+    """开局表单的值(网页上的取值,如思考强度 profile 表示用档案的设置);只改给出的项,给 null 的删掉。"""
+    model: str | None = Field(None, max_length=100)
+    effort: str | None = Field(None, max_length=40)
+    difficulty: str | None = Field(None, max_length=40)
+    rounds: int | None = Field(None, ge=1, le=50)
+    guide: str | None = Field(None, max_length=200)   # 空字符串表示不指定
+    record: bool | None = None
+
+
 class ExternalAgentIn(BaseModel):
     model: str = Field("", max_length=100)
     effort: str = Field("", max_length=40)
@@ -114,7 +124,8 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
                memory_store: MemoryStore | None = None, templates_dir: Path | None = None,
                web_dist: Path | None = None, sync_fn: Callable[..., Any] | None = None,
                runs_dir: Path | None = None, device_factory: Callable[[], Any] | None | str = "default",
-               live: LiveStream | None = None, agents_file: Path | None = None) -> FastAPI:
+               live: LiveStream | None = None, agents_file: Path | None = None,
+               prefs_file: Path | None = None) -> FastAPI:
     store = config_store or ConfigStore()
     kdb = KnowledgeDB(knowledge_path or paths.knowledge_db())
     memories = memory_store or MemoryStore()
@@ -124,10 +135,11 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
     runs = RunStore(runs_dir or paths.runs_dir())
     agents = AgentBook(agents_file or paths.data_dir() / "external_agents.json")
     player = PlayController(store, runs, device_factory, agents=agents)
+    prefs = StartPrefs(prefs_file or paths.data_dir() / "start_prefs.json")
     if sync_fn is None:
         from ..knowledge.sync import sync as sync_fn  # noqa: PLW0127
 
-    mcp_app, mcp_running = create_mcp(player, agents)
+    mcp_app, mcp_running = create_mcp(player, agents, prefs)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -172,6 +184,15 @@ def create_app(*, config_store: ConfigStore | None = None, knowledge_path: Path 
                                 max_steps=body.max_steps, rounds=body.rounds, guide=body.guide, record=body.record)
         except (RuntimeError, ConfigError) as e:
             raise _bad(e, 409) from None
+
+    @app.get("/api/play/prefs")
+    def play_prefs() -> dict[str, Any]:
+        """开局表单上次改过的值;外部 agent 用 start_run 开局时也按其中的录像和攻略(11.9)。"""
+        return prefs.get()
+
+    @app.patch("/api/play/prefs")
+    def play_prefs_update(body: StartPrefsIn) -> dict[str, Any]:
+        return prefs.update(body.model_dump(exclude_unset=True))
 
     @app.get("/api/guides")
     def guide_options() -> list[dict[str, Any]]:

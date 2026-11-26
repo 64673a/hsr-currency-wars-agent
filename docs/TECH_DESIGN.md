@@ -988,7 +988,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 | 工具 | 作用 |
 |---|---|
 | `rules` | 玩法和规则(即 8.5 的系统提示词);上下文被压缩后可以重读 |
-| `start_run` | 开始对局(难度可选),等到第一个需要判断的局面后返回 |
+| `start_run` | 开始对局(难度可选),等到第一个需要判断的局面后返回;录像和攻略按网页开局表单存下的(见下文「开局选项」) |
 | `wait` | 等下一个需要判断的局面 |
 | `act` | 提交判断和操作(参数同 API 模式的 act 工具),执行后返回结果和下一个局面 |
 | `status` / `stop_run` | 查状态、停止对局 |
@@ -998,6 +998,7 @@ JSON 模式与 OpenAI 格式相同。连通性测试改成发一张写着随机�
 - **回合**:每个回合的第一条消息自带本局档案,agent 不需要记住之前的回合;回合内的后续消息是执行结果 + 新界面。和 API 模式的区别是对话留在 agent 工具里一直累积,靠它自己压缩上下文。
 - **超时**:局面交出去后 15 分钟没有任何 MCP 调用,就当作模型要求暂停(pause),对局停下等人处理。
 - **网页**:对局记录里照常有每轮交给模型的内容和模型在 act 里写的分析、操作。模型在两次工具调用之间写的文字和思考内容不经过本服务(agent 工具自己的界面里能看到,以后可以用 hook 或插件转发);token 用量记为 0。
+- **开局选项**(2026-11-26,维护者要求):录不录像(13.2)、按不按指定的攻略打(1.6)是维护者的决定,不交给 agent 的模型,所以 `start_run` 没有这两个参数。网页开局表单上改过的值存在后端(`data/start_prefs.json`,`GET` / `PATCH /api/play/prefs`;原来只存在浏览器的 localStorage 里,外部 agent 开局时后端不知道,网页勾了录像、Claude Code 开的局却没录),`start_run` 开局时沿用其中的 `record` 和 `guide`;存下的攻略重新同步后没有了就不指定,和网页上显示的一致。表单上给 API 模型选的模型、思考强度不套用(这局固定是外部 agent),局数不用(只打一局);难度照旧,参数优先,不填用设置里的。所以维护者先在网页上勾好录像、选好攻略,再让 agent 调 `start_run`。前端第一次打开时,后端还没有存过而浏览器里有旧值,就把旧值搬到后端。
 - **区分 agent、记录模型**(2026-11-21,维护者定):本服务看不到 agent 工具用的是哪个模型(Claude Code 的 hook 只有 SessionStart 带模型,Codex 的 hook 带但要另装,DSH 没有 hook),由用户在网页上填。各接入的连接地址带一个固定的 `agent` 参数(`claude-code` / `codex` / `dsh` / `antigravity`;和 `wait` 一样每次请求都带,无状态也认得出;没带的算「未命名」)。本服务记下连上来过的 agent(列工具、调工具时记,`hook` 不算),对局页选「外部 agent」时给每个填模型和思考强度,存在 `data/external_agents.json`。哪个 agent 取了这一局的局面就算它在下:填的值写进 `meta.json`(`agent`、`model`、`effort`)和每一步记录的 `model`,对局中改了也跟着改。agent 那边换了模型由用户回网页改。不读 agent 工具的配置文件:跨电脑读不到,读到的也只是默认值(会被启动参数和会话里切换覆盖),而且可能和凭据放在一起。
 - **安全**:`/mcp` 只接受 Host 为 IP 地址或 localhost 的请求(防 DNS 重绑定),和网页接口一样不带认证,局域网访问靠防火墙限制。
 - **持续游玩**:agent 中途停下来时,用 agent 工具自己的续行机制(DSH 的 `/goal`,Claude Code / Antigravity 插件里的 Stop hook,Codex 的 Stop hook)。
@@ -1091,6 +1092,7 @@ FastAPI。默认监听 `127.0.0.1`;配置 `server.host: 0.0.0.0` 后局域网可
 | `GET /api/providers` `POST` `PUT /api/providers/{name}` `DELETE` | 厂商管理(key 掩码) |
 | `/mcp` | 外部 agent 接入的 MCP 端点(11.9) |
 | `GET /api/external-agents` `PUT /api/external-agents/{name}` | 连上来过的外部 agent,和用户给它们填的模型、思考强度(11.9) |
+| `GET /api/play/prefs` `PATCH /api/play/prefs` | 开局表单上次改过的值(模型、思考强度、难度、局数、攻略、录像),存在 `data/start_prefs.json`;`PATCH` 只改给出的项,给 `null` 的删掉。外部 agent 的 `start_run` 沿用其中的录像和攻略(11.9) |
 | `GET /api/providers/{name}/models` | 从厂商接口拉取可用模型列表 |
 | `GET /api/models` `POST` `PUT /api/models/{name}` `DELETE` | 模型档案管理 |
 | `POST /api/models/{name}/test` | 连通性测试 |
@@ -1121,6 +1123,7 @@ ffmpeg gfxcapture(Windows Graphics Capture,按 StarRail.exe 抓窗口;窗口被�
 
 做视频用(维护者要求;参考 currency-wars-agent 的工作台录像)。开局表单勾「录像」或 `cwagent play --record`,
 `run_session` 开局前开始录、结束时停,一局一个 `runs/<对局>/video.mp4`,连打多局时每局各一个。录不了时照常开局,原因写进 `meta.json` 的 `video.error`。
+勾选存在后端(2026-11-26),外部 agent 用 MCP 的 `start_run` 开局时也按它录(11.9「开局选项」)。
 
 ```
 画面:ffmpeg gfxcapture(按窗口句柄抓客户区)→ setparams 改颜色标记 → hevc_nvenc(固定质量 cq 24,60fps 恒定帧率,关键帧 2 秒)

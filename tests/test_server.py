@@ -223,6 +223,29 @@ def test_runs_and_play(tmp_path):
     assert client.post("/api/runs/delete", json={"ids": []}).status_code == 422
 
 
+def test_start_prefs(tmp_path):
+    """开局表单的值存在后端:只改给出的项,null 删掉,不合法的不收;换一个服务实例(重启)还在。"""
+    prefs_file = tmp_path / "start_prefs.json"
+
+    def client():
+        return TestClient(create_app(config_store=ConfigStore(tmp_path / "c.yaml"), knowledge_path=tmp_path / "none.sqlite",
+                                     templates_dir=tmp_path / "tpl", web_dist=tmp_path / "dist", runs_dir=tmp_path / "runs",
+                                     memory_store=MemoryStore(tmp_path / "m.yaml", tmp_path / "m.sqlite"),
+                                     device_factory=None, prefs_file=prefs_file))
+
+    c = client()
+    assert c.get("/api/play/prefs").json() == {}
+    r = c.patch("/api/play/prefs", json={"record": True, "guide": "g1", "effort": "profile"})
+    assert r.status_code == 200 and r.json() == {"record": True, "guide": "g1", "effort": "profile"}
+    assert c.patch("/api/play/prefs", json={"rounds": 3, "guide": None}).json() == {
+        "record": True, "effort": "profile", "rounds": 3}
+    assert c.patch("/api/play/prefs", json={"rounds": 0}).status_code == 422
+    assert c.patch("/api/play/prefs", json={"guide": "x" * 201}).status_code == 422
+    assert client().get("/api/play/prefs").json() == {"record": True, "effort": "profile", "rounds": 3}
+    prefs_file.write_text("not json", encoding="utf-8")   # 文件坏了当作没选过
+    assert c.get("/api/play/prefs").json() == {}
+
+
 def test_ocr_settings_and_speed_test(env, monkeypatch):
     """文字识别的设置随配置一起读写,保存后新建的识别按它选设备;测速按表单里的设置跑一张测试画面(2026-11-20)。"""
     from cwagent.vision import ocr
